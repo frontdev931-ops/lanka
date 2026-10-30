@@ -1,6 +1,9 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
+import { api } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { LANDING } from '../lib/landing-text';
 import LanguageSwitcher from './LanguageSwitcher';
@@ -53,6 +56,14 @@ function MockRules({ rules }: { rules: string[] }) {
 
 export default function Landing() {
   const { locale } = useI18n();
+  const router = useRouter();
+  // An installed app (the home-screen icon) opens the workspace for a signed-in user; a visitor without a session stays on
+  // the landing. The session cookie is httpOnly, so the check is a request to /auth/me.
+  useEffect(() => {
+    const installed = window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    if (!installed) return;
+    api('/auth/me').then(() => router.replace('/dashboard')).catch(() => undefined);
+  }, [router]);
   const L = LANDING[locale];
   const mocks: Record<string, React.ReactNode> = {
     reports: <MockReport title={L.mock.report} rows={L.mock.rows} />,

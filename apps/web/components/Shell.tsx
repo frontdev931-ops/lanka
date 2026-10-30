@@ -51,6 +51,8 @@ const TABS: NavItem[] = [
 
 interface Me {
   name: string;
+  email?: string;
+  pendingEmail?: string | null;
   role: string;
   clinicName: string;
   clinicLogo?: string | null;

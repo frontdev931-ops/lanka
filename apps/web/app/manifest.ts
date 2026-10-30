@@ -7,7 +7,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: 'LANKA — кабінет клініки',
     short_name: 'LANKA',
     description: 'Звіти, переписка з пацієнтами та автоматизації для стоматологічної клініки',
-    start_url: '/dashboard',
+    start_url: '/',
     scope: '/',
     display: 'standalone',
     orientation: 'portrait',

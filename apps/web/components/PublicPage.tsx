@@ -18,7 +18,7 @@ export function PublicPage({ title, children }: { title: string; children: React
           <Link href="/login" className="btn btn-sm">{t('landing.login')}</Link>
         </div>
       </header>
-      <main className="land-section" style={{ maxWidth: 820, margin: '0 auto' }}>
+      <main className="land-section" style={{ maxWidth: 820, margin: '0 auto', padding: '44px 16px' }}>
         <h1 style={{ marginBottom: 16 }}>{title}</h1>
         <div className="public-text">{children}</div>
       </main>

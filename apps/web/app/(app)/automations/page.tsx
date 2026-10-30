@@ -174,6 +174,76 @@ export default function AutomationsPage() {
       {error && <Alert tone="error">{error}</Alert>}
       {info && <Alert tone="success">{info}</Alert>}
 
+      {/* Подключение Telegram */}
+      <Card title={t('au.tgTitle')}>
+        {data.telegram.connected ? (
+          <>
+            <p className="rule">
+              <Badge tone="green">{t('au.tgConnected')}</Badge> @{data.telegram.username} · {t('au.tgLinked', { n: data.telegram.linkedPatients })}
+            </p>
+            <p className="rule">{t('au.tgHowPatients')}</p>
+            {link && (
+              <div className="toolbar" style={{ alignItems: 'flex-start', gap: 20 }}>
+                <QrCode value={link} label={t('au.tgQr')} />
+                <div style={{ minWidth: 0 }}>
+                  <p className="rule" style={{ marginTop: 0 }}>{t('au.tgQrHint')}</p>
+                  <input className="input" style={{ width: '100%', maxWidth: 420 }} readOnly value={link} onFocus={(e) => e.currentTarget.select()} aria-label={t('au.tgQr')} />
+                </div>
+              </div>
+            )}
+            <section className="rule-card" style={{ marginTop: 12 }}>
+              <b>{t('au.staffTitle')}</b>
+              <p className="rule" style={{ margin: '4px 0 8px' }}>{t('au.staffIntro')}</p>
+              {data.telegram.staffChat ? (
+                <>
+                  <p className="rule"><Badge tone="green">{t('au.staffOn')}</Badge> {data.telegram.staffChat}</p>
+                  <div className="toolbar">
+                    <button className="btn btn-sm" disabled={busy} onClick={() => act(async () => { const r = await api<{ sent: boolean }>('/automations/telegram/staff-chat/test', { method: 'POST' }); if (!r.sent) throw new Error(t('au.staffTestFail')); }, t('au.staffTestOk'))}>{t('au.staffTest')}</button>
+                    <button className="btn btn-sm" disabled={busy} onClick={async () => (await ask(t('au.staffOffConfirm'), { danger: true, confirmLabel: t('au.staffOff') })) && act(async () => { await api('/automations/telegram/staff-chat', { method: 'DELETE' }); setStaffCode(null); })}>{t('au.staffOff')}</button>
+                  </div>
+                </>
+              ) : staffCode ? (
+                <>
+                  <ol className="terms-list">
+                    <li>{t('au.staffStep1', { bot: data.telegram.username ?? '' })}</li>
+                    <li>{t('au.staffStep2')}</li>
+                  </ol>
+                  <input className="input" style={{ width: '100%', maxWidth: 320 }} readOnly value={`/chat ${staffCode}`} onFocus={(e) => e.currentTarget.select()} aria-label={t('au.staffCmd')} />
+                  <p className="muted" style={{ fontSize: 13 }}>{t('au.staffCodeHint')}</p>
+                  <div className="toolbar">
+                    <button className="btn btn-sm" disabled={busy} onClick={() => { setStaffCode(null); loadAll(); }}>{t('au.staffCheck')}</button>
+                  </div>
+                </>
+              ) : (
+                <div className="toolbar">
+                  <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act(async () => { const r = await api<{ code: string }>('/automations/telegram/staff-chat', { method: 'POST' }); setStaffCode(r.code); })}>{t('au.staffOn2')}</button>
+                </div>
+              )}
+            </section>
+            <div className="toolbar" style={{ marginTop: 12 }}>
+              <button className="btn" disabled={busy} onClick={async () => (await ask(t('au.tgDisconnectConfirm'), { danger: true, confirmLabel: t('au.tgDisconnect') })) && act(() => api('/automations/telegram', { method: 'DELETE' }))}>
+                {t('au.tgDisconnect')}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="rule">{t('au.tgIntro')}</p>
+            <ol className="terms-list">
+              <li>{t('au.tgStep1')}</li>
+              <li>{t('au.tgStep2')}</li>
+              <li>{t('au.tgStep3')}</li>
+            </ol>
+            <div className="toolbar">
+              <input className="input grow" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={t('au.tgToken')} autoComplete="off" />
+              <button className="btn btn-primary" disabled={busy || token.trim().length < 20} onClick={() => act(async () => { await api('/automations/telegram', { method: 'POST', body: JSON.stringify({ token }) }); setToken(''); }, t('au.tgDone'))}>
+                {t('au.tgConnect')}
+              </button>
+            </div>
+          </>
+        )}
+      </Card>
+
       {/* Режим работы: один выбор вместо отдельных переключателей */}
       {ai && (
         <Card title={t('mode.title')}>
@@ -282,76 +352,6 @@ export default function AutomationsPage() {
             <span className="muted">{t('cons.hint')}</span>
           </span>
         </label>
-      </Card>
-
-      {/* Подключение Telegram */}
-      <Card title={t('au.tgTitle')}>
-        {data.telegram.connected ? (
-          <>
-            <p className="rule">
-              <Badge tone="green">{t('au.tgConnected')}</Badge> @{data.telegram.username} · {t('au.tgLinked', { n: data.telegram.linkedPatients })}
-            </p>
-            <p className="rule">{t('au.tgHowPatients')}</p>
-            {link && (
-              <div className="toolbar" style={{ alignItems: 'flex-start', gap: 20 }}>
-                <QrCode value={link} label={t('au.tgQr')} />
-                <div style={{ minWidth: 0 }}>
-                  <p className="rule" style={{ marginTop: 0 }}>{t('au.tgQrHint')}</p>
-                  <input className="input" style={{ width: '100%', maxWidth: 420 }} readOnly value={link} onFocus={(e) => e.currentTarget.select()} aria-label={t('au.tgQr')} />
-                </div>
-              </div>
-            )}
-            <section className="rule-card" style={{ marginTop: 12 }}>
-              <b>{t('au.staffTitle')}</b>
-              <p className="rule" style={{ margin: '4px 0 8px' }}>{t('au.staffIntro')}</p>
-              {data.telegram.staffChat ? (
-                <>
-                  <p className="rule"><Badge tone="green">{t('au.staffOn')}</Badge> {data.telegram.staffChat}</p>
-                  <div className="toolbar">
-                    <button className="btn btn-sm" disabled={busy} onClick={() => act(async () => { const r = await api<{ sent: boolean }>('/automations/telegram/staff-chat/test', { method: 'POST' }); if (!r.sent) throw new Error(t('au.staffTestFail')); }, t('au.staffTestOk'))}>{t('au.staffTest')}</button>
-                    <button className="btn btn-sm" disabled={busy} onClick={async () => (await ask(t('au.staffOffConfirm'), { danger: true, confirmLabel: t('au.staffOff') })) && act(async () => { await api('/automations/telegram/staff-chat', { method: 'DELETE' }); setStaffCode(null); })}>{t('au.staffOff')}</button>
-                  </div>
-                </>
-              ) : staffCode ? (
-                <>
-                  <ol className="terms-list">
-                    <li>{t('au.staffStep1', { bot: data.telegram.username ?? '' })}</li>
-                    <li>{t('au.staffStep2')}</li>
-                  </ol>
-                  <input className="input" style={{ width: '100%', maxWidth: 320 }} readOnly value={`/chat ${staffCode}`} onFocus={(e) => e.currentTarget.select()} aria-label={t('au.staffCmd')} />
-                  <p className="muted" style={{ fontSize: 13 }}>{t('au.staffCodeHint')}</p>
-                  <div className="toolbar">
-                    <button className="btn btn-sm" disabled={busy} onClick={() => { setStaffCode(null); loadAll(); }}>{t('au.staffCheck')}</button>
-                  </div>
-                </>
-              ) : (
-                <div className="toolbar">
-                  <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act(async () => { const r = await api<{ code: string }>('/automations/telegram/staff-chat', { method: 'POST' }); setStaffCode(r.code); })}>{t('au.staffOn2')}</button>
-                </div>
-              )}
-            </section>
-            <div className="toolbar" style={{ marginTop: 12 }}>
-              <button className="btn" disabled={busy} onClick={async () => (await ask(t('au.tgDisconnectConfirm'), { danger: true, confirmLabel: t('au.tgDisconnect') })) && act(() => api('/automations/telegram', { method: 'DELETE' }))}>
-                {t('au.tgDisconnect')}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="rule">{t('au.tgIntro')}</p>
-            <ol className="terms-list">
-              <li>{t('au.tgStep1')}</li>
-              <li>{t('au.tgStep2')}</li>
-              <li>{t('au.tgStep3')}</li>
-            </ol>
-            <div className="toolbar">
-              <input className="input grow" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={t('au.tgToken')} autoComplete="off" />
-              <button className="btn btn-primary" disabled={busy || token.trim().length < 20} onClick={() => act(async () => { await api('/automations/telegram', { method: 'POST', body: JSON.stringify({ token }) }); setToken(''); }, t('au.tgDone'))}>
-                {t('au.tgConnect')}
-              </button>
-            </div>
-          </>
-        )}
       </Card>
 
       <MetaLoginCard ready={data.instagram.facebookLoginReady} connected={data.instagram.connected} via={data.instagram.via} account={data.instagram.username} tokenProblem={data.instagram.tokenProblem} onChanged={loadAll} />

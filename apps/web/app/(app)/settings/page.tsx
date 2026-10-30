@@ -6,6 +6,7 @@ import { api, download } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
 import { fmtDateTime, initials } from '../../../lib/ui';
 import { SecurityCard } from '../../../components/SecurityCard';
+import { ProfileCard } from '../../../components/ProfileCard';
 import { PlanCard } from '../../../components/PlanCard';
 import { PushCard } from '../../../components/PushCard';
 import { useConfirm } from '../../../components/ConfirmDialog';
@@ -124,6 +125,7 @@ export default function SettingsPage() {
 
       {dialog}
       {info && <Alert tone="success">{info}</Alert>}
+      <ProfileCard />
       <SecurityCard />
       <PushCard />
       {canAudit && <PlanCard isOwner={isOwner} />}
