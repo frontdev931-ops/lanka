@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 export interface LlmResult {
   text: string;
@@ -12,6 +12,8 @@ export class LlmError extends Error {}
 // в сообщения об ошибках он не попадает. Класс подменяется в тестах.
 @Injectable()
 export class LlmClient {
+  private readonly log = new Logger('Llm');
+
   get configured() {
     return !!process.env.AI_API_KEY;
   }
@@ -29,7 +31,11 @@ export class LlmClient {
       throw new LlmError('ИИ-сервис недоступен');
     }
     const json = (await res.json().catch(() => null)) as { content?: { type: string; text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number }; error?: { message?: string } } | null;
-    if (!res.ok || !json?.content) throw new LlmError(`Ошибка ИИ-сервиса (${res.status})`);
+    if (!res.ok || !json?.content) {
+      // The provider's error type and status go to the server log (never the key, the prompt or the answer): this is how a wrong key or model is found
+      this.log.warn(`AI request failed: status ${res.status}, ${(json as { error?: { type?: string } } | null)?.error?.type ?? 'no error type'}`);
+      throw new LlmError(`Ошибка ИИ-сервиса (${res.status})`);
+    }
     return {
       text: json.content.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('').trim(),
       inputTokens: json.usage?.input_tokens ?? 0,

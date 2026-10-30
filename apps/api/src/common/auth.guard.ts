@@ -38,7 +38,7 @@ export function readCookie(header: string | undefined, name: string): string | u
 }
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-const DEMO_BLOCKED = ['/integrations', '/automations/telegram', '/automations/instagram', '/automations/messenger', '/automations/whatsapp', '/automations/viber', '/automations/webchat', '/automations/leads', '/automations/meta', '/billing', '/team', '/imports', '/service/security', '/platform', '/auth/2fa', '/push'];
+const DEMO_BLOCKED = ['/integrations', '/automations/telegram', '/automations/instagram', '/automations/messenger', '/automations/whatsapp', '/automations/viber', '/automations/webchat', '/automations/leads', '/automations/meta', '/billing', '/team', '/imports', '/service/security', '/platform', '/auth/2fa', '/auth/profile', '/auth/change-password', '/auth/change-email', '/push'];
 
 @Injectable()
 export class AuthGuard implements CanActivate {

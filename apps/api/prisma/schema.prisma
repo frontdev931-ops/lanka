@@ -471,6 +471,8 @@ model User {
   createdAt          DateTime     @default(now())
   // Почта подтверждена переходом по ссылке из письма
   emailVerifiedAt    DateTime?
+  // A new address waiting for confirmation by the link sent to it; the sign-in email changes only after the link is opened
+  pendingEmail       String?
   // Сессии (токены), выданные до этого момента, недействительны: меняется при сбросе пароля
   sessionsValidAfter DateTime?
   // Двухфакторный вход (TOTP). Секрет хранится зашифрованным; включён, когда задан totpEnabledAt
@@ -491,7 +493,7 @@ model User {
 model AuthToken {
   id        String    @id @default(cuid())
   userId    String
-  // RESET или VERIFY
+  // RESET, VERIFY or EMAIL_CHANGE
   type      String
   tokenHash String    @unique
   expiresAt DateTime

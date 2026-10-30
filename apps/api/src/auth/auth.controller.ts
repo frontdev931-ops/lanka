@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Patch, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Equals, IsBoolean, IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { AuthGuard, AuthUser, CurrentUser, SESSION_COOKIE, SESSION_MAX_AGE_MS } from '../common/auth.guard';
@@ -28,6 +28,20 @@ class CodeDto {
 }
 
 class DisableDto extends CodeDto {
+  @IsString() @MaxLength(200) password: string;
+}
+
+class ProfileDto {
+  @IsString() @MinLength(2) @MaxLength(120) name: string;
+}
+
+class ChangePasswordDto {
+  @IsString() @MaxLength(200) currentPassword: string;
+  @IsString() @MinLength(MIN_PASSWORD) @MaxLength(200) newPassword: string;
+}
+
+class ChangeEmailDto {
+  @IsEmail() @MaxLength(200) email: string;
   @IsString() @MaxLength(200) password: string;
 }
 
@@ -108,6 +122,36 @@ export class AuthController {
   @UseGuards(AuthGuard)
   twoFactorStatus(@CurrentUser() u: AuthUser) {
     return this.twofa.status(u.userId);
+  }
+
+  // The person's own data: name, password, sign-in email
+  @Patch('profile')
+  @UseGuards(AuthGuard)
+  updateProfile(@CurrentUser() u: AuthUser, @Body() dto: ProfileDto) {
+    return this.auth.updateProfile(u.userId, dto.name);
+  }
+
+  @Post('change-password')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async changePassword(@CurrentUser() u: AuthUser, @Body() dto: ChangePasswordDto, @Res({ passthrough: true }) res: Response) {
+    const r = await this.auth.changePassword(u.userId, u.clinicId, u.role, dto.currentPassword, dto.newPassword);
+    setSessionCookie(res, r.accessToken);
+    return { ok: true };
+  }
+
+  @Post('change-email')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  changeEmail(@CurrentUser() u: AuthUser, @Body() dto: ChangeEmailDto, @Req() req: Request) {
+    return this.auth.requestEmailChange(u.userId, dto.email, dto.password, langOf(req));
+  }
+
+  @Post('change-email/cancel')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  cancelEmailChange(@CurrentUser() u: AuthUser) {
+    return this.auth.cancelEmailChange(u.userId);
   }
 
   @Post('2fa/setup')

@@ -146,12 +146,13 @@ export class AuthService {
   async me(userId: string, clinicId: string) {
     const m = await this.prisma.membership.findUnique({
       where: { userId_clinicId: { userId, clinicId } },
-      include: { user: { select: { name: true, email: true, emailVerifiedAt: true, totpEnabledAt: true } }, clinic: { select: { name: true, logo: true, termsVersion: true, suspendedAt: true, require2fa: true, billingStatus: true, paidUntil: true, isDemo: true, plan: true } } },
+      include: { user: { select: { name: true, email: true, pendingEmail: true, emailVerifiedAt: true, totpEnabledAt: true } }, clinic: { select: { name: true, logo: true, termsVersion: true, suspendedAt: true, require2fa: true, billingStatus: true, paidUntil: true, isDemo: true, plan: true } } },
     });
     if (!m) throw new UnauthorizedException();
     return {
       name: m.user.name,
       email: m.user.email,
+      pendingEmail: m.user.pendingEmail,
       emailVerified: !!m.user.emailVerifiedAt,
       twoFactorEnabled: !!m.user.totpEnabledAt,
       // The clinic owner requires two-factor and this user has not set it up yet: the app sends them to settings
@@ -202,11 +203,68 @@ export class AuthService {
 
   async verifyEmail(token: string) {
     const row = await this.prisma.authToken.findUnique({ where: { tokenHash: hashToken(token) } });
-    if (!row || row.type !== 'VERIFY' || row.expiresAt < new Date()) throw new BadRequestException('bad_token');
+    if (!row || (row.type !== 'VERIFY' && row.type !== 'EMAIL_CHANGE') || row.expiresAt < new Date()) throw new BadRequestException('bad_token');
+    if (row.type === 'EMAIL_CHANGE') {
+      if (row.usedAt) throw new BadRequestException('bad_token');
+      const user = await this.prisma.user.findUniqueOrThrow({ where: { id: row.userId } });
+      // The request was replaced or cancelled: the pending address is gone
+      if (!user.pendingEmail) throw new BadRequestException('bad_token');
+      // Someone else may have taken the address while the link waited
+      if (await this.prisma.user.findUnique({ where: { email: user.pendingEmail } })) throw new ConflictException('email_taken');
+      await this.prisma.$transaction([
+        this.prisma.user.update({ where: { id: user.id }, data: { email: user.pendingEmail, pendingEmail: null, emailVerifiedAt: new Date() } }),
+        this.prisma.authToken.update({ where: { id: row.id }, data: { usedAt: new Date() } }),
+      ]);
+      const memberships = await this.prisma.membership.findMany({ where: { userId: user.id }, select: { clinicId: true } });
+      for (const m of memberships) await this.audit(m.clinicId, user.id, 'auth.email_changed');
+      return { ok: true };
+    }
     // Повторное открытие ссылки не ошибка: почта уже подтверждена
     await this.prisma.$transaction([
       this.prisma.user.updateMany({ where: { id: row.userId, emailVerifiedAt: null }, data: { emailVerifiedAt: new Date() } }),
       this.prisma.authToken.update({ where: { id: row.id }, data: { usedAt: row.usedAt ?? new Date() } }),
+    ]);
+    return { ok: true };
+  }
+
+  // The person's own profile: the name shown in the team list and in the audit log
+  async updateProfile(userId: string, name: string) {
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { name: name.trim() }, select: { name: true } });
+    return user;
+  }
+
+  // Password change from the settings: the current password is required (a stolen session alone is not enough), the other
+  // sessions are closed and the current browser gets a fresh one
+  async changePassword(userId: string, clinicId: string, role: Role, current: string, next: string) {
+    await this.limits.consume(`pwchange:user:${userId}`, 10, HOUR);
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    if (!(await bcrypt.compare(current, user.passwordHash))) throw new BadRequestException('wrong_current_password');
+    if (current === next) throw new BadRequestException('same_password');
+    assertPasswordOk(next, user.email);
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(next, 12), sessionsValidAfter: new Date() } });
+    const memberships = await this.prisma.membership.findMany({ where: { userId }, select: { clinicId: true } });
+    for (const m of memberships) await this.audit(m.clinicId, userId, 'auth.password_changed');
+    return this.token(userId, clinicId, role);
+  }
+
+  // Email change: the password is required, the new address gets a link and the sign-in email changes only when it is opened
+  async requestEmailChange(userId: string, newEmail: string, password: string, lang: Lang) {
+    await this.limits.consume(`emailchange:user:${userId}`, 5, HOUR);
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    if (!(await bcrypt.compare(password, user.passwordHash))) throw new BadRequestException('wrong_current_password');
+    const email = newEmail.toLowerCase();
+    if (email === user.email) throw new BadRequestException('same_email');
+    if (await this.prisma.user.findUnique({ where: { email } })) throw new ConflictException('email_taken');
+    await this.prisma.user.update({ where: { id: userId }, data: { pendingEmail: email } });
+    const token = await this.issueToken(userId, 'EMAIL_CHANGE', VERIFY_TTL);
+    await this.mail.send({ to: email, ...mailText('emailChange', lang, `${this.webOrigin()}/verify/${token}`) });
+    return { pendingEmail: email };
+  }
+
+  async cancelEmailChange(userId: string) {
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: userId }, data: { pendingEmail: null } }),
+      this.prisma.authToken.updateMany({ where: { userId, type: 'EMAIL_CHANGE', usedAt: null }, data: { usedAt: new Date() } }),
     ]);
     return { ok: true };
   }
@@ -238,7 +296,7 @@ export class AuthService {
   }
 
   // Новая ссылка отзывает старые неиспользованные того же типа
-  private async issueToken(userId: string, type: 'RESET' | 'VERIFY', ttlMs: number) {
+  private async issueToken(userId: string, type: 'RESET' | 'VERIFY' | 'EMAIL_CHANGE', ttlMs: number) {
     const token = newToken();
     await this.prisma.$transaction([
       this.prisma.authToken.updateMany({ where: { userId, type, usedAt: null }, data: { usedAt: new Date() } }),

@@ -495,6 +495,21 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Неизвестный переход воронки',
     en: 'Unknown funnel step',
   },
+  wrong_current_password: {
+    uk: 'Поточний пароль введено невірно',
+    ru: 'Текущий пароль введён неверно',
+    en: 'The current password is incorrect',
+  },
+  same_password: {
+    uk: 'Новий пароль збігається з поточним',
+    ru: 'Новый пароль совпадает с текущим',
+    en: 'The new password is the same as the current one',
+  },
+  same_email: {
+    uk: 'Це вже ваша пошта',
+    ru: 'Это уже ваша почта',
+    en: 'This is already your email',
+  },
   weak_password: {
     uk: 'Пароль занадто простий: потрібно щонайменше 10 символів, і він не має збігатися з поштою',
     ru: 'Пароль слишком простой: нужно не меньше 10 символов, и он не должен совпадать с почтой',
