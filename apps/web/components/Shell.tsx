@@ -100,7 +100,6 @@ export default function Shell({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [open, setOpen] = useState(false);
   const [newRequests, setNewRequests] = useState(0);
-  const [clinics, setClinics] = useState<{ id: string; name: string }[]>([]);
   useStackedTables();
 
   // Сессия хранится в httpOnly-cookie: единственный способ узнать, вошёл ли пользователь, — спросить сервер
@@ -134,10 +133,9 @@ export default function Shell({ children }: { children: ReactNode }) {
     };
   }, [me]);
 
-  // Several clinics: a switcher in the menu. The owner's "require two-factor" rule sends users without it to settings.
+  // The owner's "require two-factor" rule sends users without it to settings.
   useEffect(() => {
     if (!me) return;
-    api<{ id: string; name: string }[]>('/auth/clinics').then(setClinics).catch(() => undefined);
     if (me.twoFactorRequired && !path.startsWith('/settings')) router.replace('/settings');
     // Real data opens after payment: until then the only page is the payment page
     else if (me.billing?.blocked && !path.startsWith('/billing')) router.replace('/billing');
@@ -184,21 +182,6 @@ export default function Shell({ children }: { children: ReactNode }) {
         <div className="user-box">
           <LanguageSwitcher />
           <InstallApp />
-          {clinics.length > 1 && me && (
-            <select
-              className="select clinic-switch"
-              aria-label={t('nav.clinic')}
-              value={clinics.find((c) => c.name === me.clinicName)?.id ?? ''}
-              onChange={async (e) => {
-                await api('/auth/switch', { method: 'POST', body: JSON.stringify({ clinicId: e.target.value }) });
-                window.location.href = '/dashboard';
-              }}
-            >
-              {clinics.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          )}
           <div className="user-line">
             {me?.clinicLogo ? (
               <img className="avatar avatar-logo" src={me.clinicLogo} alt="" />

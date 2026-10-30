@@ -4,9 +4,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { api } from '../lib/api';
-import { useI18n } from '../lib/i18n';
+import { LOCALES, Locale, useI18n } from '../lib/i18n';
+import { LANDING_PATH } from '../lib/site';
 import { LANDING } from '../lib/landing-text';
-import LanguageSwitcher from './LanguageSwitcher';
 import { Brand } from './Brand';
 
 // Small drawings of the interface (not screenshots): they use made-up data and need no image files
@@ -54,9 +54,24 @@ function MockRules({ rules }: { rules: string[] }) {
   );
 }
 
-export default function Landing() {
-  const { locale } = useI18n();
+// Real links, one address per language, so crawlers can follow them
+function LandingLangs({ lang }: { lang: Locale }) {
+  return (
+    <div className="lang compact" role="group" aria-label="Language">
+      {LOCALES.map((l) => (
+        <Link key={l.code} href={LANDING_PATH[l.code]} hrefLang={l.code} lang={l.code} className={`lang-btn${lang === l.code ? ' active' : ''}`} title={l.label} aria-current={lang === l.code ? 'page' : undefined}>
+          {l.code.toUpperCase()}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+export default function Landing({ lang }: { lang: Locale }) {
+  const { setLocale } = useI18n();
   const router = useRouter();
+  // The cabinet opens in the language of the page the visitor chose
+  useEffect(() => setLocale(lang), [lang, setLocale]);
   // An installed app (the home-screen icon) opens the workspace for a signed-in user; a visitor without a session stays on
   // the landing. The session cookie is httpOnly, so the check is a request to /auth/me.
   useEffect(() => {
@@ -64,7 +79,7 @@ export default function Landing() {
     if (!installed) return;
     api('/auth/me').then(() => router.replace('/dashboard')).catch(() => undefined);
   }, [router]);
-  const L = LANDING[locale];
+  const L = LANDING[lang];
   const mocks: Record<string, React.ReactNode> = {
     reports: <MockReport title={L.mock.report} rows={L.mock.rows} />,
     ai: <MockChat a={L.mock.chatIn} b={L.mock.chatOut} slots={L.mock.slots} />,
@@ -87,11 +102,12 @@ export default function Landing() {
           <a href="#faq">{L.nav.faq}</a>
         </nav>
         <div className="land-head-right">
-          <LanguageSwitcher compact />
+          <LandingLangs lang={lang} />
           <Link href="/login" className="btn btn-sm">{L.nav.login}</Link>
         </div>
       </header>
 
+      <main>
       <section className="land-hero">
         <div className="land-hero-text">
           <h1>{L.hero.title}</h1>
@@ -210,6 +226,8 @@ export default function Landing() {
           <Link href="/login?register=1" className="btn btn-lg">{L.hero.connect}</Link>
         </div>
       </section>
+
+      </main>
 
       <footer className="land-foot">{L.footer} <a href="mailto:hello@lankaclinic.app">hello@lankaclinic.app</a> · <Link href="/terms">{L.nav.terms}</Link> · <Link href="/privacy">{L.nav.privacy}</Link></footer>
     </div>

@@ -160,6 +160,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 /* ---------- переключатель языка ---------- */
 .lang { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--surface); }
 .lang-btn { border: none; background: transparent; padding: 6px 10px; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted); cursor: pointer; }
+.lang a.lang-btn { display: inline-flex; align-items: center; text-decoration: none; }
 .lang-btn:hover { background: var(--gray-soft); color: var(--text); }
 .lang-btn.active { background: var(--primary-soft); color: var(--primary-dark); }
 .lang.block { display: flex; }

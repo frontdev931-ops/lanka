@@ -1,12 +1,16 @@
 import type { Metadata } from 'next';
 import Landing from '../components/Landing';
+import LandingJsonLd from '../components/LandingJsonLd';
+import { landingMetadata } from '../lib/site';
 
-export const metadata: Metadata = {
-  title: 'LANKA: звіти, ШІ-адміністратор і автоматизація для клінік на Cliniccards',
-  description: 'LANKA бере дані з Cliniccards: звіти з Excel і PDF, ШІ відповідає пацієнтам і готує запис, нагадування та воронка пацієнта. Демо без реєстрації.',
-  openGraph: { title: 'LANKA для клінік на Cliniccards', description: 'Звіти, ШІ-адміністратор, автоматизація й воронка пацієнта. Демо без реєстрації.', type: 'website' },
-};
+// Ukrainian is the main language and lives at the root; /ru and /en are the other versions (see lib/site.ts)
+export const metadata: Metadata = landingMetadata('uk');
 
 export default function Home() {
-  return <Landing />;
+  return (
+    <>
+      <LandingJsonLd lang="uk" />
+      <Landing lang="uk" />
+    </>
+  );
 }
