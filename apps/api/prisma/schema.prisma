@@ -1,0 +1,1118 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Каждая сущность с данными клиники несёт clinicId: изоляция данных по клиникам с первого дня.
+
+enum Role {
+  OWNER
+  MANAGER
+  ADMIN
+  DOCTOR
+  ANALYST
+}
+
+enum Provider {
+  CLINICCARDS
+  TELEGRAM
+  INSTAGRAM
+  MESSENGER
+  WHATSAPP
+  VIBER
+}
+
+enum TaskStatus {
+  OPEN
+  DONE
+  CANCELLED
+}
+
+// Результат контакта с пациентом по задаче
+enum TaskResult {
+  BOOKED
+  CALL_LATER
+  NO_ANSWER
+  DECLINED
+}
+
+// Согласие пациента на коммуникацию: хранится только у нас, в Cliniccards его нет
+enum ContactConsent {
+  UNKNOWN
+  GIVEN
+  WITHDRAWN
+}
+
+enum SyncStatus {
+  RUNNING
+  OK
+  FAILED
+}
+
+model Clinic {
+  id                  String               @id @default(cuid())
+  name                String
+  // Логотип из профиля клиники в Cliniccards (data-URI изображения, проверяется при загрузке)
+  logo                String?
+  // Соглашение об обработке данных, принятое владельцем от имени клиники
+  termsVersion        String?
+  termsAcceptedAt     DateTime?
+  termsAcceptedById   String?
+  // Рабочие часы клиники по дням недели: { "1": {"from":"09:00","to":"20:00"}, ..., "7": null }.
+  // 1 — понедельник, null — выходной. Нужны для свободных окон, когда в Cliniccards нет смен врачей.
+  workHours           Json?
+  createdAt           DateTime             @default(now())
+  memberships         Membership[]
+  integrations        Integration[]
+  patients            Patient[]
+  visits              Visit[]
+  syncRuns            SyncRun[]
+  auditLogs           AuditLog[]
+  tasks               Task[]
+  planItems           PlanItem[]
+  payments            Payment[]
+  bookingAttempts     BookingAttempt[]
+  kbItems             KbItem[]
+  metaSessions        MetaConnectSession[]
+  automations         Automation[]
+  automationRuns      AutomationRun[]
+  waitlistEntries     WaitlistEntry[]
+  slotOffers          SlotOffer[]
+  scheduledReports    ScheduledReport[]
+  alertRules          AlertRule[]
+  invoices            Invoice[]
+  shifts              Shift[]
+  blocks              ReservedBlock[]
+  invitations         Invitation[]
+  contactLogs         ContactLog[]
+  imports             ImportBatch[]
+  reminders           Reminder[]
+  treatmentPlans      TreatmentPlan[]
+  cabinets            Cabinet[]
+  inquiries           Inquiry[]
+  // Служебные сообщения (напоминания о записи, неявка) уходят без подтверждения сотрудника. Маркетинг всегда через подтверждение.
+  autoSendService     Boolean              @default(false)
+  // Главный предохранитель: пока выключен, ни одно сообщение пациенту не уходит (настройка, очередь и подтверждение работают)
+  sendingEnabled      Boolean              @default(false)
+  // ИИ-помощник: ключ один на весь сервис (AI_API_KEY на сервере), клиника только включает и получает месячный лимит ответов
+  aiEnabled           Boolean              @default(false)
+  aiMonthlyLimit      Int                  @default(500)
+  // Разрешить ИИ самому создавать запись на приём. Выключено всегда по умолчанию; включить нельзя, пока коннектор не умеет записывать в систему клиники
+  aiAutoBooking       Boolean              @default(false)
+  // ШІ сам отвечает пациентам на безопасные темы (запись, перенос, отмена, история); остальное передаёт человеку. По умолчанию выключено
+  aiAutoReply         Boolean              @default(false)
+  // Владелец подтверждает: стандартное согласие пациентов клиники охватывает информационные и рекламные сообщения. Тогда «Невідомо» считается согласием; «Відкликано» блокирует всегда
+  assumeConsent       Boolean              @default(false)
+  // Дайджест руководителю в Telegram: OFF, DAILY или WEEKLY, час по Киеву, день недели (1 = понедельник) для WEEKLY
+  digestFrequency     String               @default("OFF")
+  digestHour          Int                  @default(9)
+  digestWeekday       Int                  @default(1)
+  lastDigestAt        DateTime?
+  // Ссылка, куда вести довольных пациентов оставить публичный отзыв (Google и т. п.)
+  reviewUrl           String?
+  // Тариф (TRIAL, START, PRO, CUSTOM), индивидуальные пределы поверх тарифа и приостановка клиники владельцем сервиса
+  plan                String               @default("START")
+  limitOverrides      Json?
+  // Billing: AWAITING_PAYMENT (registered, not paid: no access to real data), ACTIVE, PAST_DUE (paid period ended, grace days), LAPSED (grace over: blocked, data kept)
+  billingStatus       String               @default("AWAITING_PAYMENT")
+  // A visitor's copy of the demo clinic: made-up data, never billed, nothing is really sent
+  // Writing appointments and patients to the clinic's system: set only by the service owner after the live verification
+  // Chat widget for the clinic's own website: a public key, the sites it may run on and the greeting
+  widgetKey           String?              @unique
+  widgetEnabled       Boolean              @default(false)
+  widgetOrigins       Json                 @default("[]")
+  widgetGreeting      String?
+  // Leads from the clinic's website forms and ad forms: a secret key in the address, the sites that may post from a browser
+  leadKey             String?              @unique
+  leadEnabled         Boolean              @default(false)
+  leadOrigins         Json                 @default("[]")
+  bookingWriteEnabled Boolean              @default(false)
+  isDemo              Boolean              @default(false)
+  demoExpiresAt       DateTime?
+  // End of the paid month; the plan's allowances renew on every payment (periodStartsAt)
+  paidUntil           DateTime?
+  periodStartsAt      DateTime?
+  setupPaidAt         DateTime?
+  // AI replies bought in packs; they carry over and are spent only after the monthly included replies
+  aiPurchased         Int                  @default(0)
+  aiPackCapPerMonth   Int                  @default(5)
+  suspendedAt         DateTime?
+  // Владелец требует двухфакторный вход от всех сотрудников клиники
+  require2fa          Boolean              @default(false)
+  // ШІ-помічник для керівника: вільні запитання до даних клініки, відповідь звітом. Окремо від відповідей пацієнтам
+  aiAssistantEnabled  Boolean              @default(false)
+  channelLinks        ChannelLink[]
+  patientChannels     PatientChannel[]
+  automationRules     AutomationRule[]
+  outbox              OutboundMessage[]
+  chatMessages        ChatMessage[]
+  inboundEvents       InboundEvent[]
+  billingPayments     BillingPayment[]
+  bookingRequests     BookingRequest[]
+  aiUsages            AiUsage[]
+  campaigns           Campaign[]
+  savedReports        SavedReport[]
+  digestRecipients    DigestRecipient[]
+  reviews             Review[]
+  pushSubscriptions   PushSubscription[]
+}
+
+// Приглашение сотрудника по ссылке. В базе только хэш токена: по базе ссылку не восстановить.
+model Invitation {
+  id          String    @id @default(cuid())
+  clinicId    String
+  email       String
+  role        Role
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+}
+
+// Контакт с пациентом: результат задачи, ручная заметка или строка импорта
+model ContactLog {
+  id            String      @id @default(cuid())
+  clinicId      String
+  patientId     String
+  userId        String?
+  channel       String      @default("OTHER") // PHONE, MESSENGER, SMS, EMAIL, VISIT, OTHER
+  outcome       TaskResult?
+  note          String?
+  source        String      @default("MANUAL") // MANUAL, TASK, IMPORT
+  taskId        String?
+  importBatchId String?
+  contactedAt   DateTime    @default(now())
+  createdAt     DateTime    @default(now())
+  clinic        Clinic      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient       Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  user          User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId, patientId, contactedAt])
+}
+
+// Загруженная таблица (Excel/CSV): строки хранятся для предпросмотра и для скачивания несопоставленных
+model ImportBatch {
+  id        String    @id @default(cuid())
+  clinicId  String
+  userId    String?
+  filename  String
+  type      String? // PATIENT_EXTRA или CONTACTS (выбирается при применении)
+  columns   Json
+  rows      Json
+  status    String    @default("DRAFT") // DRAFT, DONE
+  stats     Json      @default("{}")
+  createdAt DateTime  @default(now())
+  appliedAt DateTime?
+  // Undo: previous values of the changed extra fields (patientId -> key -> old value), and when the import was undone
+  undoData  Json?
+  undoneAt  DateTime?
+  clinic    Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, createdAt])
+}
+
+// Пункт плана лечения из Cliniccards (GET /planItems)
+model PlanItem {
+  id             String    @id @default(cuid())
+  clinicId       String
+  patientId      String
+  externalId     String
+  planId         String
+  name           String
+  price          Decimal?  @db.Decimal(12, 2)
+  // NEW, PLANNED_TO_DO, DONE, INVOICED
+  status         String
+  createdAtExt   DateTime
+  markedDoneAt   DateTime?
+  // Группа услуги в прайсе Cliniccards («Терапія», «Імплантація»…): направление лечения в воронке
+  groupName      String?
+  doneByDoctorId String?
+  clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient        Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, patientId])
+  @@index([clinicId, status])
+}
+
+model Payment {
+  id         String   @id @default(cuid())
+  clinicId   String
+  patientId  String?
+  externalId String
+  paidAt     DateTime
+  amount     Decimal  @db.Decimal(12, 2)
+  type       String?
+  clinic     Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, paidAt])
+}
+
+// Акт выполненных работ (GET /invoices)
+model Invoice {
+  id         String   @id @default(cuid())
+  clinicId   String
+  patientId  String?
+  externalId String
+  issuedAt   DateTime
+  amount     Decimal  @db.Decimal(12, 2)
+  issuerName String?
+  clinic     Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, issuedAt])
+}
+
+// Кабинет (GET /cabinets): нужен, чтобы подписывать свободные окна названием, а не номером
+model Cabinet {
+  id         String @id @default(cuid())
+  clinicId   String
+  externalId String
+  name       String
+  clinic     Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, externalId])
+}
+
+// Итоги плана лечения (GET /plans). Суммы приходят в основной валюте клиники уже с учётом
+// фиксированного курса: цены отдельных пунктов могут быть в другой валюте, поэтому «сколько осталось
+// выполнить» берётся отсюда, а не суммой цен пунктов.
+model TreatmentPlan {
+  id           String   @id @default(cuid())
+  clinicId     String
+  externalId   String
+  total        Decimal  @db.Decimal(14, 2)
+  totalDone    Decimal  @db.Decimal(14, 2)
+  createdAtExt DateTime
+  clinic       Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, createdAtExt])
+}
+
+// Обращение до создания карточки или до записи (звонок, сообщение, заявка с сайта). Его вносит администратор;
+// по телефону обращение само связывается с карточкой пациента, когда она появляется. Верх воронки пациента.
+model Inquiry {
+  id          String   @id @default(cuid())
+  clinicId    String
+  occurredAt  DateTime @default(now())
+  // PHONE, INSTAGRAM, TELEGRAM, VIBER, GOOGLE, SITE, WALK_IN, RECOMMENDATION, OTHER
+  channel     String
+  phone       String?
+  phoneNorm   String?
+  name        String?
+  note        String?
+  // OPEN или LOST (человек отказался или не записался: отмечает администратор)
+  status      String   @default("OPEN")
+  patientId   String?
+  // Пациент с этим телефоном уже был до обращения: это не новый пациент и в воронке привлечения не считается
+  returning   Boolean  @default(false)
+  // Where it came from: the campaign marks of the address (UTM), the page of the form, and the id of the lead in the ad system
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  landing     String?
+  externalId  String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  clinic      Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient     Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, occurredAt])
+  @@index([clinicId, phoneNorm])
+}
+
+// Подключённый мессенджер пациента: чат, в который бот может писать. Один пациент — один чат на канал.
+// Один чат может быть связан с несколькими карточками (семья с одним номером).
+model PatientChannel {
+  id         String    @id @default(cuid())
+  clinicId   String
+  patientId  String
+  // TELEGRAM
+  channel    String
+  externalId String
+  username   String?
+  linkedAt   DateTime  @default(now())
+  // Пациент написал «Зупинити» или заблокировал бота: больше не пишем
+  optedOutAt DateTime?
+  clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, channel])
+  @@index([clinicId, channel, externalId])
+}
+
+// Одноразовая ссылка «Подключить напоминания»: в базе только хэш. С patientId привязывает чат к конкретной карточке.
+model ChannelLink {
+  id          String    @id @default(cuid())
+  clinicId    String
+  // PATIENT (привязка пациента) или DIGEST (привязка получателя дайджеста: владелец открывает ссылку и бот запоминает его чат)
+  purpose     String    @default("PATIENT")
+  createdById String?
+  patientId   String?
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+}
+
+// Настройка сценария рассылки клиники (включён ли, сроки, тексты). Список сценариев задан в коде.
+model AutomationRule {
+  id        String  @id @default(cuid())
+  clinicId  String
+  key       String
+  enabled   Boolean @default(false)
+  params    Json    @default("{}")
+  templates Json    @default("{}")
+  clinic    Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, key])
+}
+
+// Сообщение пациенту: от «ждёт подтверждения» до «отправлено». dedupeKey не даёт создать одно и то же дважды.
+model OutboundMessage {
+  id           String    @id @default(cuid())
+  clinicId     String
+  patientId    String
+  ruleKey      String
+  // TELEGRAM или SMS
+  channel      String
+  text         String
+  // PENDING_APPROVAL, APPROVED, SENT, FAILED, CANCELLED, EXPIRED
+  status       String    @default("PENDING_APPROVAL")
+  scheduledFor DateTime
+  // После этого момента отправлять уже нельзя (например, приём начался)
+  expiresAt    DateTime?
+  sentAt       DateTime?
+  error        String?
+  dedupeKey    String
+  visitId      String?
+  approvedById String?
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  clinic       Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient      Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, dedupeKey])
+  @@index([clinicId, status, scheduledFor])
+  @@index([patientId, createdAt])
+}
+
+// Напоминание сотруднику о пациенте (GET /reminders). Это не запись на приём: используется,
+// чтобы не показывать в списках «вернуть пациента» тех, о ком уже есть запланированный контакт.
+model Reminder {
+  id         String   @id @default(cuid())
+  clinicId   String
+  externalId String
+  patientId  String?
+  // День напоминания (дата без времени, полночь UTC)
+  dueDate    DateTime
+  note       String?
+  // NEW, DONE, CANCELLED, MOVED
+  status     String
+  clinic     Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient    Patient? @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, dueDate])
+  @@index([patientId])
+}
+
+// Смена врача в кабинете (GET /schedule-shifts)
+model Shift {
+  id          String   @id @default(cuid())
+  clinicId    String
+  externalId  String
+  doctorId    String
+  doctorName  String?
+  cabinetId   String
+  cabinetName String?
+  startsAt    DateTime
+  endsAt      DateTime
+  clinic      Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, startsAt])
+}
+
+// Зарезервированное время в кабинете (GET /schedule-spaces)
+model ReservedBlock {
+  id         String   @id @default(cuid())
+  clinicId   String
+  externalId String
+  cabinetId  String
+  startsAt   DateTime
+  endsAt     DateTime
+  note       String?
+  clinic     Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, startsAt])
+}
+
+model User {
+  id                 String       @id @default(cuid())
+  email              String       @unique
+  name               String
+  passwordHash       String
+  createdAt          DateTime     @default(now())
+  // Почта подтверждена переходом по ссылке из письма
+  emailVerifiedAt    DateTime?
+  // Сессии (токены), выданные до этого момента, недействительны: меняется при сбросе пароля
+  sessionsValidAfter DateTime?
+  // Двухфакторный вход (TOTP). Секрет хранится зашифрованным; включён, когда задан totpEnabledAt
+  totpSecretEnc      String?
+  totpEnabledAt      DateTime?
+  // Последний принятый временной шаг: один и тот же код второй раз не принимается
+  totpLastStep       Int?
+  // Хэши неиспользованных резервных кодов
+  recoveryHashes     Json?
+  authTokens         AuthToken[]
+  memberships        Membership[]
+  assignedTasks      Task[]       @relation("TaskAssignee")
+  createdTasks       Task[]       @relation("TaskCreator")
+  contactLogs        ContactLog[]
+}
+
+// Одноразовые ссылки из писем: сброс пароля и подтверждение почты. В базе только хэш токена.
+model AuthToken {
+  id        String    @id @default(cuid())
+  userId    String
+  // RESET или VERIFY
+  type      String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+// Счётчики попыток (вход, регистрация, сброс пароля). В базе, а не в памяти: работает на нескольких серверах.
+model RateLimit {
+  key         String   @id
+  count       Int
+  windowStart DateTime
+}
+
+model Task {
+  id          String      @id @default(cuid())
+  clinicId    String
+  patientId   String?
+  title       String
+  note        String?
+  // Откуда задача: manual или код отчёта (например report:no-next-visit); по нему не создаём дубли
+  source      String      @default("manual")
+  dueDate     DateTime
+  priority    Int         @default(1) // 1 обычный, 2 высокий
+  status      TaskStatus  @default(OPEN)
+  result      TaskResult?
+  assigneeId  String?
+  createdById String?
+  createdAt   DateTime    @default(now())
+  completedAt DateTime?
+  clinic      Clinic      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient     Patient?    @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  assignee    User?       @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy   User?       @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([clinicId, status, dueDate])
+  @@index([clinicId, patientId])
+}
+
+model Membership {
+  id       String @id @default(cuid())
+  userId   String
+  clinicId String
+  role     Role
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clinicId])
+}
+
+model Integration {
+  id         String    @id @default(cuid())
+  clinicId   String
+  provider   Provider
+  // Параметры подключения (токен, адрес, режим). Структура уточнится после изучения API Cliniccards.
+  config     Json      @default("{}")
+  // Ключ API Cliniccards, зашифрованный (AES-256-GCM, см. common/crypto.ts). Никогда не отдаётся наружу и не логируется.
+  apiKeyEnc  String?
+  lastSyncAt DateTime?
+  clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  syncRuns   SyncRun[]
+
+  @@unique([clinicId, provider])
+}
+
+model Patient {
+  id               String            @id @default(cuid())
+  clinicId         String
+  externalId       String // id пациента в Cliniccards
+  fullName         String
+  phone            String?
+  source           String? // источник обращения
+  preferredContact String?
+  lastVisitAt      DateTime?
+  balanceIssued    Decimal?          @db.Decimal(12, 2)
+  balancePaid      Decimal?          @db.Decimal(12, 2)
+  // Пациента больше нет в Cliniccards (удалён или объединён с другим): скрыт из списков и отчётов, но данные у нас сохранены
+  removedAt        DateTime?
+  // Когда создана карточка в Cliniccards и когда был первый визит: вход и этапы воронки пациента
+  createdAtExt     DateTime?
+  firstVisitAt     DateTime?
+  // Дата рождения из Cliniccards (только для поздравления)
+  birthDate        DateTime?
+  // Телефон только из цифр в едином виде (380...): по нему сопоставляются строки импорта
+  phoneNorm        String?
+  // Данные, которых нет в Cliniccards. Синхронизация эти поля не трогает.
+  consent          ContactConsent    @default(UNKNOWN)
+  consentNote      String?
+  consentUpdatedAt DateTime?
+  automationPaused Boolean           @default(false)
+  // Дополнительные поля из импорта: { "ключ": { "v": "значение", "b": "id загрузки" } }
+  extra            Json              @default("{}")
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  clinic           Clinic            @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  visits           Visit[]
+  waitlistEntries  WaitlistEntry[]
+  tasks            Task[]
+  planItems        PlanItem[]
+  payments         Payment[]
+  invoices         Invoice[]
+  contacts         ContactLog[]
+  reminders        Reminder[]
+  channels         PatientChannel[]
+  outbox           OutboundMessage[]
+  chatMessages     ChatMessage[]
+  bookingRequests  BookingRequest[]
+  inquiries        Inquiry[]
+  reviews          Review[]
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, fullName])
+  @@index([clinicId, phoneNorm])
+}
+
+model Visit {
+  id                 String    @id @default(cuid())
+  clinicId           String
+  patientId          String
+  externalId         String
+  doctorId           String?
+  doctorName         String?
+  cabinetId          String?
+  // Когда запись создана (а не когда приём): время «обращение → запись» в воронке
+  bookedAt           DateTime?
+  serviceName        String?
+  startsAt           DateTime
+  endsAt             DateTime?
+  // Статус Cliniccards как есть: PLANNED, CONFIRMED, NOT_CONFIRMED, VISITED, MOVED,
+  // DID_NOT_COME, IN_CLINIC, BOOKING, CANCELLED, IN_CHAIR
+  status             String
+  amount             Decimal?  @db.Decimal(12, 2)
+  // The patient pressed "I confirm" on our reminder (kept only here; Cliniccards is not changed, and sync does not touch this field)
+  patientConfirmedAt DateTime?
+  clinic             Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient            Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, externalId])
+  @@index([clinicId, startsAt])
+  @@index([patientId, startsAt])
+}
+
+model SyncRun {
+  id            String      @id @default(cuid())
+  clinicId      String
+  integrationId String
+  startedAt     DateTime    @default(now())
+  finishedAt    DateTime?
+  status        SyncStatus  @default(RUNNING)
+  patients      Int         @default(0)
+  visits        Int         @default(0)
+  // Ход загрузки для индикатора: процент и этап (patients, visits, treatment, finance, schedule, saving)
+  progress      Int         @default(0)
+  stage         String?
+  // Остальные счётчики: планы лечения, платежи, акты, смены и т.д.
+  extra         Json        @default("{}")
+  error         String?
+  clinic        Clinic      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  clinicId  String
+  userId    String?
+  action    String
+  details   Json     @default("{}")
+  createdAt DateTime @default(now())
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, createdAt])
+}
+
+// Переписка с пациентом в мессенджере (входящие и ответы сотрудников). Не путать с OutboundMessage: то автоматические сообщения по сценариям.
+// patientId пуст, пока чат не привязан к карточке. chatId — идентификатор чата во внешнем канале.
+model ChatMessage {
+  id           String    @id @default(cuid())
+  clinicId     String
+  patientId    String?
+  // TELEGRAM or INSTAGRAM
+  channel      String
+  chatId       String
+  contactName  String?
+  // IN от пациента, OUT от клиники
+  direction    String
+  text         String
+  // Для OUT: сотрудник, написавший ответ; пусто для автоответа системы
+  authorUserId String?
+  // Ответ отправил ШІ автоматически
+  byAi         Boolean   @default(false)
+  // Для IN: когда сотрудник открыл диалог
+  readAt       DateTime?
+  // Id of the message in the messenger (Instagram resends webhooks; this makes handling idempotent)
+  externalId   String?
+  // Quick answers offered with this message (appointment times): [{label, payload}]
+  buttons      Json?
+  error        String?
+  createdAt    DateTime  @default(now())
+  clinic       Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient      Patient?  @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@unique([clinicId, channel, externalId])
+  @@index([clinicId, channel, chatId, createdAt])
+  @@index([clinicId, createdAt])
+  @@index([patientId, createdAt])
+}
+
+// Журнал вызовов ИИ: только счётчики для лимита и расчёта расходов. Текст сообщений пациентов здесь не хранится.
+model AiUsage {
+  id           String   @id @default(cuid())
+  clinicId     String
+  kind         String
+  ok           Boolean
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  // Retries of one request (for example a report spec rebuilt after a mistake) are not billed
+  billable     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  clinic       Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, createdAt])
+}
+
+// Заявка администратору из переписки: запись, перенос, отмена или вопрос, который ШІ передал человеку.
+// Запись в Cliniccards вносит администратор вручную. Статус NEW, DONE (внесено) или DISMISSED (не нужно).
+model BookingRequest {
+  id          String    @id @default(cuid())
+  clinicId    String
+  patientId   String?
+  channel     String
+  chatId      String
+  contactName String?
+  // BOOKING, RESCHEDULE, CANCEL, HANDOFF
+  kind        String
+  summary     String
+  status      String    @default("NEW")
+  handledById String?
+  handledAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient     Patient?  @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId, status, createdAt])
+  @@index([clinicId, channel, chatId, status])
+}
+
+// Своя рассылка: например, акция. Всегда маркетинг: только пациентам с согласием и только с подтверждением сотрудника.
+// filters: { monthsSinceVisitMin?, monthsSinceVisitMax?, noFutureVisit? }. Статус DRAFT или QUEUED (сообщения созданы в очереди).
+model Campaign {
+  id          String    @id @default(cuid())
+  clinicId    String
+  name        String
+  text        String
+  filters     Json
+  status      String    @default("DRAFT")
+  queuedAt    DateTime?
+  queuedCount Int       @default(0)
+  createdById String?
+  createdAt   DateTime  @default(now())
+  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, createdAt])
+}
+
+// Сохранённый пользовательский отчёт: описание (spec) пересчитывается заново при каждом открытии, поэтому данные всегда свежие
+model SavedReport {
+  id          String   @id @default(cuid())
+  clinicId    String
+  name        String
+  spec        Json
+  createdById String?
+  createdAt   DateTime @default(now())
+  clinic      Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, createdAt])
+}
+
+// Получатель дайджеста: чат руководителя в Telegram. Привязывается ссылкой из настроек, не по номеру телефона.
+model DigestRecipient {
+  id        String   @id @default(cuid())
+  clinicId  String
+  chatId    String
+  name      String
+  lang      String   @default("uk")
+  createdAt DateTime @default(now())
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, chatId])
+}
+
+// Оценка пациента после визита (1-5), собирается ботом кнопками. Одна на визит. Низкая оценка ждёт комментарий (awaitingUntil).
+model Review {
+  id            String    @id @default(cuid())
+  clinicId      String
+  patientId     String
+  visitId       String    @unique
+  rating        Int
+  doctorName    String?
+  comment       String?
+  awaitingUntil DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  clinic        Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient       Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, createdAt])
+  @@index([clinicId, doctorName])
+}
+
+// Push subscription of one browser or phone (PWA) of a staff member: used to tell them about new requests
+model PushSubscription {
+  id        String   @id @default(cuid())
+  clinicId  String
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@index([userId])
+}
+
+// Every incoming event from a messenger is stored first and processed after, so that a failure never loses it.
+// PENDING (waits or is being processed), DONE, FAILED (gave up after several attempts; staff can retry).
+model InboundEvent {
+  id            String    @id @default(cuid())
+  clinicId      String
+  channel       String
+  // Id from the messenger; a repeated delivery of the same id is ignored
+  externalId    String?
+  payload       Json
+  status        String    @default("PENDING")
+  attempts      Int       @default(0)
+  lastError     String?
+  nextAttemptAt DateTime
+  createdAt     DateTime  @default(now())
+  processedAt   DateTime?
+  clinic        Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([channel, externalId])
+  @@index([status, nextAttemptAt])
+  @@index([clinicId, status])
+}
+
+// One LiqPay order. kind: SUBSCRIPTION (first one also carries the setup fee), AI_PACK.
+// status: PENDING, PAID, FAILED. The callback is idempotent by orderId.
+model BillingPayment {
+  id          String    @id @default(cuid())
+  clinicId    String
+  orderId     String    @unique
+  kind        String
+  plan        String?
+  // Amount in UAH kopecks (what LiqPay charges)
+  amountMinor Int
+  // The setup fee included in the amount (kopecks), for the receipt
+  setupMinor  Int       @default(0)
+  // AI replies in a pack
+  packReplies Int       @default(0)
+  status      String    @default("PENDING")
+  providerRef String?
+  createdAt   DateTime  @default(now())
+  paidAt      DateTime?
+  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, createdAt])
+}
+
+// One write to the clinic's system. The unique key makes a repeated request return the first result instead of writing again.
+// kind: CREATE, RESCHEDULE, CANCEL, CONFIRM, PATIENT.
+// status: STARTED (sent, no answer yet), DONE, FAILED (Cliniccards refused: nothing was written), UNKNOWN (no clear answer: check before retrying).
+model BookingAttempt {
+  id                String    @id @default(cuid())
+  clinicId          String
+  key               String
+  kind              String
+  patientId         String?
+  requestId         String?
+  startsAt          DateTime?
+  externalVisitId   String?
+  externalPatientId String?
+  status            String    @default("STARTED")
+  error             String?
+  createdById       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  clinic            Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, key])
+  @@index([clinicId, createdAt])
+}
+
+// What the AI may tell patients about the clinic. Only approved items reach the model; a change to the content needs a new approval;
+// a price is quoted only while it was reviewed in the last 90 days. kind: SERVICE, DOCTOR, LOCATION, FAQ.
+model KbItem {
+  id           String    @id @default(cuid())
+  clinicId     String
+  kind         String
+  // Service or doctor name, place name, or the question of a FAQ entry
+  title        String
+  // Price list group (for example Therapy), shown to the AI next to a service name
+  category     String?
+  // Preparation notes, about the doctor, address and how to get there, or the answer of a FAQ entry
+  text         String    @default("")
+  durationMin  Int?
+  // Approved price in hryvnias (whole); the currency of the clinic's system is not trusted, so a person confirms it
+  priceUah     Int?
+  active       Boolean   @default(true)
+  // MANUAL, or CLINICCARDS for a draft imported from the price list
+  source       String    @default("MANUAL")
+  externalId   String?
+  approvedAt   DateTime?
+  approvedById String?
+  // The last time a person confirmed that the item is still true
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  clinic       Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, kind, externalId])
+  @@index([clinicId, kind])
+}
+
+// A saved report that is calculated on a schedule and mailed as a file. Recipients are members of the clinic only; each one gets the
+// report calculated for their own role (so money fields a role may not see make the report fail for that person, not leak).
+// frequency: DAILY, WEEKLY (weekday 1-7), MONTHLY (monthDay 1-28).
+model ScheduledReport {
+  id            String    @id @default(cuid())
+  clinicId      String
+  savedReportId String
+  frequency     String
+  hour          Int       @default(8)
+  weekday       Int       @default(1)
+  monthDay      Int       @default(1)
+  // XLSX or PDF
+  format        String    @default("XLSX")
+  // User ids of the clinic's members
+  recipientIds  Json      @default("[]")
+  enabled       Boolean   @default(true)
+  nextRunAt     DateTime
+  lastRunAt     DateTime?
+  lastStatus    String?
+  lastError     String?
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  clinic        Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@index([enabled, nextRunAt])
+}
+
+// A deviation the manager wants to hear about. kind: CANCEL_RATE (share of cancelled and missed visits, percent), RETURN_DROP (fall of
+// completed visits against the previous period, percent), STALE_REQUESTS (requests waiting longer than `hours`, count).
+// Calculated by code; a rule that fired stays quiet for 24 hours.
+model AlertRule {
+  id          String    @id @default(cuid())
+  clinicId    String
+  kind        String
+  threshold   Float
+  windowDays  Int       @default(7)
+  hours       Int       @default(4)
+  enabled     Boolean   @default(false)
+  lastFiredAt DateTime?
+  lastValue   Float?
+  createdAt   DateTime  @default(now())
+  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, kind])
+}
+
+// A patient who waits for a suitable time. The code looks for free windows that fit and offers one through the approval queue.
+// status: ACTIVE (waiting), OFFERED (an offer is out), DONE (accepted a time), CANCELLED. An entry lives 30 days.
+model WaitlistEntry {
+  id          String      @id @default(cuid())
+  clinicId    String
+  patientId   String
+  // Wished doctor as the schedule names them; empty means any
+  doctorName  String?
+  // Days of the week 1 (Monday) to 7 (Sunday); empty means any
+  weekdays    Json        @default("[]")
+  fromHour    Int         @default(9)
+  toHour      Int         @default(20)
+  note        String?
+  status      String      @default("ACTIVE")
+  expiresAt   DateTime
+  createdById String?
+  createdAt   DateTime    @default(now())
+  clinic      Clinic      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient     Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  offers      SlotOffer[]
+
+  @@index([clinicId, status])
+}
+
+// One free time offered to one waiting patient. `activeKey` holds the slot while the offer is open and is unique per clinic, so
+// the database itself never lets one window be offered to two people at once; it is cleared when the offer ends.
+// status: OFFERED, ACCEPTED, DECLINED, EXPIRED.
+model SlotOffer {
+  id          String        @id @default(cuid())
+  clinicId    String
+  entryId     String
+  patientId   String
+  slotKey     String
+  activeKey   String?
+  startsAt    DateTime
+  doctorName  String?
+  cabinetName String?
+  status      String        @default("OFFERED")
+  // The queue message that carries the offer; the time to answer starts when it is really sent
+  outboundId  String?
+  sentAt      DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime      @default(now())
+  clinic      Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  entry       WaitlistEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, activeKey])
+  @@index([clinicId, status])
+  @@index([entryId])
+}
+
+// An automation made by the clinic: when something happens (trigger), and the patient fits the conditions, do something (action).
+// trigger: {type: VISIT_BEFORE, hours} | {type: VISIT_AFTER, status, delayHours} | {type: NO_VISIT, days} | {type: TREATMENT_OPEN, days} | {type: BIRTHDAY}
+// conditions: {noOtherFutureVisit, source, minVisits, maxVisits, doctor, service}
+// action: {type: SEND_MESSAGE | CREATE_REQUEST, text}; kind: service (a message about a visit) or marketing (needs consent, at most one in 14 days)
+// stop: {ifBooked, ifReplied} are checked again right before sending.
+model Automation {
+  id          String          @id @default(cuid())
+  clinicId    String
+  name        String
+  enabled     Boolean         @default(false)
+  kind        String          @default("service")
+  trigger     Json
+  conditions  Json            @default("{}")
+  action      Json
+  stop        Json            @default("{}")
+  templateKey String?
+  createdById String?
+  createdAt   DateTime        @default(now())
+  clinic      Clinic          @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  hits        AutomationHit[]
+  runs        AutomationRun[]
+
+  @@index([clinicId, enabled])
+}
+
+// What an automation already did for whom: the key keeps one action per visit or per patient and period
+model AutomationHit {
+  id           String     @id @default(cuid())
+  clinicId     String
+  automationId String
+  dedupeKey    String
+  patientId    String
+  outcome      String
+  createdAt    DateTime   @default(now())
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@unique([automationId, dedupeKey])
+  @@index([clinicId, createdAt])
+}
+
+// The journal: one row for every check that found someone, with the reasons why others were skipped
+model AutomationRun {
+  id           String     @id @default(cuid())
+  clinicId     String
+  automationId String
+  at           DateTime   @default(now())
+  candidates   Int
+  queued       Int
+  requests     Int
+  skipped      Json       @default("{}")
+  clinic       Clinic     @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId, at])
+}
+
+// A request from Meta (a person asked Facebook or Instagram to delete what an app holds about them) and what we did about it.
+// The confirmation code is shown on the public status page.
+model DataDeletionRequest {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  source         String   @default("META")
+  // The id of the person as Meta gives it (an account that connected a channel; for Instagram it is the account id)
+  externalUserId String
+  // DEAUTHORIZED (access taken away) or DELETED (data removed)
+  status         String
+  summary        Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  @@index([externalUserId])
+}
+
+// Between the return from Facebook and the choice of the clinic's page: the token that came back (encrypted) and what it can reach.
+// Lives 15 minutes, is deleted after the connection is made and holds no page tokens.
+model MetaConnectSession {
+  id        String   @id @default(cuid())
+  clinicId  String
+  userId    String
+  tokenEnc  String
+  // {type, expiresAt (ms, null = never expires)}
+  tokenInfo Json
+  // [{id, name, igId, igUsername}]
+  pages     Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+}
+
+// A session token that was signed out of: the token id is refused until the token would have expired anyway
+model RevokedToken {
+  jti       String   @id
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}

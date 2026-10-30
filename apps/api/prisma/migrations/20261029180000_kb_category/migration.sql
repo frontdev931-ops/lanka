@@ -1,0 +1,1 @@
+ALTER TABLE "KbItem" ADD COLUMN "category" TEXT;

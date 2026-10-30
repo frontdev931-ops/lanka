@@ -1,0 +1,32 @@
+# dependencies and build output
+node_modules
+dist
+dist-qa
+.next
+.next-qa
+*.tsbuildinfo
+coverage
+
+# secrets and local settings: real values live only in these files, never in git
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# logs, database dumps and backups (they contain patient data)
+*.log
+backups
+*.sql.gz
+*.dump
+
+# editor and system files
+.DS_Store
+.vscode
+.idea
+
+# local copies made before bulk edits
+.bak-*
+*.bak
+.claude/settings.local.json

@@ -1,0 +1,28 @@
+{
+  "name": "stomat",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:migrate": "npm -w apps/api run prisma:migrate",
+    "db:seed": "npm -w apps/api run seed",
+    "dev:api": "npm -w apps/api run start:dev",
+    "dev:web": "npm -w apps/web run dev"
+  },
+  "overrides": {
+    "@nestjs/platform-express": {
+      "multer": "2.5.0"
+    },
+    "@prisma/config": {
+      "deepmerge-ts": "8.0.2"
+    },
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
+  }
+}

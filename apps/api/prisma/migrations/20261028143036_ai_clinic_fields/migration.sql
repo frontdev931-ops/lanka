@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Clinic" ADD COLUMN     "aiEnabled" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "aiMonthlyLimit" INTEGER NOT NULL DEFAULT 300;
