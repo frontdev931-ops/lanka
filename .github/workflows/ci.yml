@@ -26,6 +26,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - name: Generate the Prisma client (types such as Role come from it)
+        run: npm exec --workspace apps/api -- prisma generate
       - name: Apply migrations to the test database
         run: npm exec --workspace apps/api -- prisma migrate deploy
       - name: API type check
