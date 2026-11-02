@@ -15,8 +15,10 @@ jest.setTimeout(60_000);
 const fake = {
   configured: true,
   calls: 0,
+  reply: null as string | null,
   complete: async () => {
     fake.calls++;
+    if (fake.reply) return { text: fake.reply, inputTokens: 100, outputTokens: 20 };
     return { text: JSON.stringify({ intent: 'info', reply: 'Добрий день! Чим можемо допомогти?', summary: '', options: [] }), inputTokens: 100, outputTokens: 20 };
   },
 };
@@ -191,6 +193,17 @@ describe('автовідповідь ШІ після сценарію запис
     await write(c, 'Дякую');
     expect(aiReplies(c.chat)).toBe(1);
     expect((await http().get(`/conversations/INSTAGRAM/${c.chat}`).set(auth(c.token)).expect(200)).body.botPausedUntil).toBeNull();
+  });
+
+  it('«хочу записатися» отримує відповідь ШІ, а не передачу людині, і в нормальному діалозі, і коли в чаті багато тестових повідомлень', async () => {
+    const c = await ready();
+    fake.reply = JSON.stringify({ intent: 'booking', reply: 'Добрий день! На яку послугу бажаєте записатися?', summary: 'запис', options: [] });
+    // ten patient messages in the last day (a testing session): the default limit of 20 does not cut the dialog
+    for (let i = 0; i < 10; i++) await prisma.chatMessage.create({ data: { clinicId: c.clinicId, channel: 'INSTAGRAM', chatId: c.chat, direction: 'IN', text: `тест ${i}` } });
+    await write(c, 'хочу записатися');
+    expect(sent.at(-1)!.text).toBe('Добрий день! На яку послугу бажаєте записатися?');
+    expect(sent.at(-1)!.text).not.toContain('Передаю');
+    fake.reply = null;
   });
 
   it('повернення боту належить своїй клініці', async () => {

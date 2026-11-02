@@ -7,7 +7,6 @@ import { KbFacts, KbService } from '../kb/kb.service';
 import { AiService } from './ai.service';
 import { HandoffReason, handoffText, incomingHandoff, parseModelJson, replyViolates, timesOutsideWindows } from './guardrails';
 
-const MAX_PATIENT_MESSAGES_PER_DAY = 8;
 const HISTORY = 8;
 
 const todayText = () => {
@@ -102,7 +101,9 @@ export class ChatAssistantService {
 
     // До модели доходят только безопасные сообщения: опасная тема или затянувшийся диалог сразу уходят человеку
     const today = await this.prisma.chatMessage.count({ where: { clinicId, channel, chatId, direction: 'IN', createdAt: { gt: new Date(Date.now() - 86_400_000) } } });
-    if (today > MAX_PATIENT_MESSAGES_PER_DAY) return handoff('long', last.text);
+    // A very long day-long conversation goes to a person; the limit is the clinic's per-chat limit (the same number as for the AI's own replies)
+    const cap = (await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { aiRepliesPerChatDay: true } }))?.aiRepliesPerChatDay ?? 20;
+    if (today > cap) return handoff('long', last.text);
     // Опасную тему ищем только в последнем сообщении: прежние уже получили свой ответ или передачу человеку
     const kbFacts = await this.kb.factsFor(clinicId, new Date(), msgs.filter((m) => m.direction === 'IN').slice(-3).map((m) => m.text).join(' '));
     const topic = incomingHandoff(last.text, kbFacts.pricesKnown);

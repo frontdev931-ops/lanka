@@ -213,7 +213,8 @@ describe('ИИ-помощник в переписке: границы', () => {
     fake.next = 'це не json';
     expect(await assistant.draft(c.clinicId, 'TELEGRAM', 'c2')).toMatchObject({ handoff: true, reason: 'model' });
 
-    // затянувшийся диалог: больше 8 сообщений пациента за сутки
+    // затянувшийся диалог: больше сообщений пациента за сутки, чем разрешает клиника (здесь 8)
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiRepliesPerChatDay: 8 } });
     for (let i = 0; i < 9; i++) await say('c3', `повідомлення ${i}`);
     const calls = fake.calls;
     expect(await assistant.draft(c.clinicId, 'TELEGRAM', 'c3')).toMatchObject({ handoff: true, reason: 'long' });

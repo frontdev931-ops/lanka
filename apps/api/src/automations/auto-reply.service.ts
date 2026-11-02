@@ -64,6 +64,8 @@ export class AutoReplyService {
       if (today >= clinic.aiRepliesPerChatDay) return this.skip(clinicId, channel, 'daily_ai_reply_cap');
 
       const d = await this.assistant.draft(clinicId, channel, chatId);
+      // Why a question went to a person (a code only): medical, price, complaint, long, reply_check, model
+      if (d.handoff) this.log.log(`AI autoreply handed over to a person: ${d.reason ?? 'unknown'} (clinic ${clinicId}, ${channel})`);
       try {
         await this.messenger.send(clinicId, channel, chatId, d.reply, d.options);
       } catch (e) {
