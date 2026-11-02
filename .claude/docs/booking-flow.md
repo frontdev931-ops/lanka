@@ -21,3 +21,8 @@ On only when all of these hold: the clinic's `aiAutoBooking`, the clinic's `book
 
 ## Tests
 `apps/api/test/booking-flow.spec.ts` (both modes on the Cliniccards mock, several-message collection, the administrator changing the time, a taken place, a lost answer, a refusal, a repeated tap or click, a delivery error and its retry, a card with the same phone, the switches).
+
+## The AI pause and why the AI can stay silent
+- A person's answer in a chat pauses the AI for 30 minutes (`AutoReplyService.pausedUntil`). The thread shows "ШІ мовчить до ..." with a "Повернути боту" button (`POST /conversations/:channel/:chatId/resume-bot`, table `ChatBotResume`). Only messages with an author (a person) pause the AI; scripted messages of the booking flow and the booking confirmation have no author and `byAi: false`, so they neither pause the AI nor use up its daily allowance (6 model replies per chat per day).
+- The booking flow takes a message only while it waits for a name or a phone, only when it really replies, not for a question (`?`) and not when the request is older than 6 hours.
+- Every reason the AI did not answer is logged as a code (`AI autoreply skipped: <reason> (clinic <id>, <channel>)`): `clinic_suspended`, `ai_off`, `autoreply_off`, `sending_off`, `plan_without_autoreply`, `opted_out`, `paused_after_staff_reply`, `daily_ai_reply_cap`, `send_failed_*`. Flow side: `Booking flow did not take the message: stale|question`. No chat ids, texts, phones or tokens are logged.

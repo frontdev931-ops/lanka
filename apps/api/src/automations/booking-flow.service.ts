@@ -16,6 +16,8 @@ import { RequestsService } from './requests.service';
 const MAX_ASKS = 3;
 // A confirmation message that has been "being sent" this long is probably lost (the server stopped); only an explicit retry sends it again
 const NOTICE_STUCK_MS = 5 * 60_000;
+// A request still waiting for a name or a phone this long after its last change no longer holds the dialog
+const COLLECT_STALE_MS = 6 * 3_600_000;
 const FREE_STATUSES = ['CANCELLED', 'MOVED', 'DID_NOT_COME'];
 
 export type Lang = 'uk' | 'ru';
@@ -140,7 +142,8 @@ export class BookingFlowService {
         chatId: c.chatId,
         direction: 'OUT',
         text,
-        byAi: true,
+        // a scripted message of the booking flow: not a model reply (it must not use up the AI's daily allowance) and not a person (it must not pause the AI)
+        byAi: false,
         ...(options.length ? { buttons: options.map((o) => ({ label: o.label, payload: `slot|${o.date}|${o.time}${o.doctor ? `|${o.doctor.slice(0, 16)}` : ''}` })) } : {}),
       },
     });
@@ -172,44 +175,58 @@ export class BookingFlowService {
 
   // ---- 2. later messages while the data is being collected ----
 
-  // Returns true when the message was taken as an answer to the bot's question (the AI must not answer it)
+  // Returns true only when the message was taken as an answer AND the bot replied to it (otherwise the message goes on to the AI, never into silence)
   async onText(c: FlowCtx, text: string): Promise<boolean> {
     const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
     if (!open || open.stage !== 'COLLECT') return false;
+    // A forgotten question from long ago does not hold the dialog
+    if (Date.now() - open.updatedAt.getTime() > COLLECT_STALE_MS) return this.skipCollect(c, 'stale');
     const got = parseContact(text);
-    const patch: Prisma.BookingRequestUpdateInput = {};
-    if (got.name) patch.fullName = got.name;
-    if (got.phone) patch.phone = got.phone;
     if (!got.name && !got.phone) {
-      // nothing usable: ask again a few times, then let the message go on its normal way and pass the request on as it is
+      // a question is for the AI; anything else is asked again a few times, then the request goes on as it is
+      if (text.includes('?')) return this.skipCollect(c, 'question');
       if (open.asks >= MAX_ASKS) {
         await this.complete(c, open.id, true);
         return false;
       }
-      await this.advance(c, open.id);
-      return true;
+      return this.advance(c, open.id);
     }
+    const patch: Prisma.BookingRequestUpdateInput = {};
+    if (got.name) patch.fullName = got.name;
+    if (got.phone) patch.phone = got.phone;
     await this.prisma.bookingRequest.update({ where: { id: open.id }, data: patch });
-    await this.advance(c, open.id);
-    return true;
+    return this.advance(c, open.id);
   }
 
-  // Asks for what is missing, or completes the request when everything is known
-  private async advance(c: FlowCtx, id: string): Promise<void> {
+  private skipCollect(c: FlowCtx, reason: string): false {
+    this.log.log(`Booking flow did not take the message: ${reason} (clinic ${c.clinicId}, ${c.channel})`);
+    return false;
+  }
+
+  // Asks for what is missing, or completes the request when everything is known. Returns true when the bot sent a message.
+  private async advance(c: FlowCtx, id: string): Promise<boolean> {
     const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id }, include: { patient: { select: { fullName: true, phone: true } } } });
-    if (r.stage === 'READY') return;
+    if (r.stage === 'READY') return false;
     const needName = !r.fullName && !r.patient?.fullName;
     const needPhone = !r.phone && !normalizePhone(r.patient?.phone);
-    if (!needName && !needPhone) return this.complete(c, id, false);
+    if (!needName && !needPhone) {
+      await this.complete(c, id, false);
+      return true;
+    }
     const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId }, select: { sendingEnabled: true } });
     // The bot cannot ask (sending is off) or already asked enough: the administrator gets what there is
-    if (!clinic.sendingEnabled || r.asks >= MAX_ASKS) return this.complete(c, id, true);
+    if (!clinic.sendingEnabled || r.asks >= MAX_ASKS) {
+      await this.complete(c, id, true);
+      return false;
+    }
     const lang = await this.lang(c);
     const x = T[lang];
     // asks is raised first: a repeated delivery of the same event does not ask twice in a row
     const claim = await this.prisma.bookingRequest.updateMany({ where: { id, asks: r.asks, stage: 'COLLECT' }, data: { asks: r.asks + 1 } });
-    if (!claim.count) return;
-    await this.say(c, needName && needPhone ? x.askBoth : needName ? x.askName : x.askPhone);
+    if (!claim.count) return true;
+    const sentOk = await this.say(c, needName && needPhone ? x.askBoth : needName ? x.askName : x.askPhone);
+    if (!sentOk) this.log.log(`Booking flow could not ask for the data: message not sent (clinic ${c.clinicId}, ${c.channel})`);
+    return sentOk;
   }
 
   // ---- 3. complete: one full request for the administrator, or the automatic booking ----
@@ -463,7 +480,7 @@ export class BookingFlowService {
     const existing = await this.prisma.chatMessage.findUnique({ where });
     if (existing && existing.error === null) return void (await set('SENT'));
     try {
-      if (!existing) await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? r.patientId, channel: r.channel, chatId: r.chatId, direction: 'OUT', text, authorUserId: userId, byAi: userId === null, externalId: key, error: 'pending' } });
+      if (!existing) await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? r.patientId, channel: r.channel, chatId: r.chatId, direction: 'OUT', text, authorUserId: null, byAi: false, externalId: key, error: 'pending' } });
       else await this.prisma.chatMessage.update({ where, data: { error: 'pending', text } });
     } catch (e) {
       // someone else claimed it a moment ago: that one sends it

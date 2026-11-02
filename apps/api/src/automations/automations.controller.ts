@@ -470,6 +470,14 @@ export class ConversationsController {
     return this.chat.reply(u.clinicId, u.userId, channel, chatId, dto.text.trim());
   }
 
+  // Give the dialog back to the bot (ends the pause that follows a person's answer)
+  @Post(':channel/:chatId/resume-bot')
+  @Roles(...OPERATORS)
+  @HttpCode(200)
+  resumeBot(@CurrentUser() u: AuthUser, @Param('channel') channel: string, @Param('chatId') chatId: string) {
+    return this.chat.resumeBot(u.clinicId, channel, chatId);
+  }
+
   // Черновик ответа от ИИ: только текст для сотрудника, ничего не отправляется
   @Post(':channel/:chatId/draft')
   @Roles(...OPERATORS)

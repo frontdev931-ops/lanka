@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AutoReplyService } from './auto-reply.service';
 import { MessengerService, SendError } from './messenger.service';
 
 const CHANNELS = ['TELEGRAM', 'INSTAGRAM', 'MESSENGER', 'WHATSAPP', 'VIBER', 'WEB'];
@@ -9,6 +10,7 @@ export class ChatService {
   constructor(
     private prisma: PrismaService,
     private messenger: MessengerService,
+    private autoReply: AutoReplyService,
   ) {}
 
   // Список диалогов: по последнему сообщению каждого чата, сверху новые; непрочитанные считаются отдельно
@@ -53,6 +55,8 @@ export class ChatService {
       patient: named?.patient ?? null,
       contactName: messages.find((m) => m.contactName)?.contactName ?? null,
       optedOut: !!ch?.optedOutAt,
+      // The AI is silent in this chat until this moment because a person answered; staff can give the dialog back to the bot
+      botPausedUntil: (await this.autoReply.pausedUntil(clinicId, channel, chatId))?.toISOString() ?? null,
       messages: messages
         .reverse()
         .map((m) => ({ id: m.id, direction: m.direction, text: m.text, createdAt: m.createdAt, error: m.error, system: m.direction === 'OUT' && !m.authorUserId && !m.byAi, byAi: m.byAi })),
@@ -80,6 +84,13 @@ export class ChatService {
     }
     await this.prisma.chatMessage.create({ data: base });
     return { ok: true };
+  }
+
+  // End the pause after a person's answer: the AI answers the next message again
+  async resumeBot(clinicId: string, channel: string, chatId: string) {
+    const known = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId }, select: { id: true } });
+    if (!known) throw new NotFoundException('conversation_not_found');
+    return this.autoReply.resume(clinicId, channel, chatId);
   }
 
   // Привязать неизвестный чат к карточке пациента вручную (когда номер не совпал)

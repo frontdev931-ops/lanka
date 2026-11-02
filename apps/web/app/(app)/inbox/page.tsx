@@ -26,6 +26,7 @@ interface Thread {
   contactName: string | null;
   optedOut: boolean;
   replyWindowOpen: boolean;
+  botPausedUntil: string | null;
   messages: { id: string; direction: 'IN' | 'OUT'; text: string; createdAt: string; error: string | null; system: boolean; byAi: boolean }[];
 }
 interface Draft {
@@ -109,6 +110,18 @@ export default function InboxPage() {
     }
   };
 
+  const resumeBot = async () => {
+    if (!open) return;
+    setBusy(true);
+    try {
+      await api(`/conversations/${open.channel}/${open.chatId}/resume-bot`, { method: 'POST' });
+      await loadThread(open);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const retryNotice = async (id: string, force: boolean) => {
     setBusy(true);
     try {
@@ -341,6 +354,12 @@ export default function InboxPage() {
               )}
               {thread.optedOut && <Alert tone="warn">{t('inbox.optedOut')}</Alert>}
               {!thread.replyWindowOpen && <Alert tone="warn">{t('inbox.windowClosed')}</Alert>}
+              {thread.botPausedUntil && (
+                <Alert tone="info">
+                  {t('inbox.botPaused', { time: new Date(thread.botPausedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}{' '}
+                  <button className="btn btn-sm" disabled={busy} onClick={resumeBot}>{t('inbox.botResume')}</button>
+                </Alert>
+              )}
               <div className="chat-thread">
                 {thread.messages.map((m) => (
                   <div key={m.id} className={`bubble ${m.direction === 'IN' ? 'in' : 'out'}`}>

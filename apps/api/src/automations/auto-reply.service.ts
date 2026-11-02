@@ -27,24 +27,47 @@ export class AutoReplyService {
     await this.requests.upsert(clinicId, { channel, chatId, patientId: lastIn?.patientId ?? null, contactName: lastIn?.contactName ?? null, kind: 'HANDOFF', summary: `Ліміт відповідей ШІ вичерпано, відповідь потрібна людині: «${(lastIn?.text ?? '').slice(0, 200)}»` });
   }
 
+  // Why the AI did not answer: only a code, the clinic and the channel (no chat id, no text, no tokens)
+  private skip(clinicId: string, channel: string, reason: string): false {
+    this.log.log(`AI autoreply skipped: ${reason} (clinic ${clinicId}, ${channel})`);
+    return false;
+  }
+
+  // The AI is silent for a while after a PERSON answered in the chat. Messages of the system (a booking confirmation, a scripted question)
+  // are not a person. The end of the pause is when the last person's message is older than the pause, or when staff gave the dialog back.
+  async pausedUntil(clinicId: string, channel: string, chatId: string): Promise<Date | null> {
+    const resumed = await this.prisma.chatBotResume.findUnique({ where: { clinicId_channel_chatId: { clinicId, channel, chatId } }, select: { resumedAt: true } });
+    const since = new Date(Math.max(Date.now() - STAFF_TAKEOVER_MS, resumed?.resumedAt.getTime() ?? 0));
+    const staff = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'OUT', authorUserId: { not: null }, createdAt: { gt: since } }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } });
+    return staff ? new Date(staff.createdAt.getTime() + STAFF_TAKEOVER_MS) : null;
+  }
+
+  async resume(clinicId: string, channel: string, chatId: string) {
+    await this.prisma.chatBotResume.upsert({ where: { clinicId_channel_chatId: { clinicId, channel, chatId } }, create: { clinicId, channel, chatId }, update: { resumedAt: new Date() } });
+    return { ok: true };
+  }
+
   async onInbound(clinicId: string, channel: string, chatId: string): Promise<boolean> {
     try {
       const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiAutoReply: true, sendingEnabled: true, suspendedAt: true, plan: true } });
-      if (clinic.suspendedAt || !clinic.aiEnabled || !clinic.aiAutoReply || !clinic.sendingEnabled || !hasFeature(clinic.plan, 'ai_autoreply')) return false;
+      if (clinic.suspendedAt) return this.skip(clinicId, channel, 'clinic_suspended');
+      if (!clinic.aiEnabled) return this.skip(clinicId, channel, 'ai_off');
+      if (!clinic.aiAutoReply) return this.skip(clinicId, channel, 'autoreply_off');
+      if (!clinic.sendingEnabled) return this.skip(clinicId, channel, 'sending_off');
+      if (!hasFeature(clinic.plan, 'ai_autoreply')) return this.skip(clinicId, channel, 'plan_without_autoreply');
       const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel, externalId: chatId }, select: { optedOutAt: true, patientId: true } });
-      if (ch?.optedOutAt) return false;
+      if (ch?.optedOutAt) return this.skip(clinicId, channel, 'opted_out');
       // Сотрудник уже подхватил диалог: ШІ не вмешивается
-      const staff = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'OUT', authorUserId: { not: null }, createdAt: { gt: new Date(Date.now() - STAFF_TAKEOVER_MS) } }, select: { id: true } });
-      if (staff) return false;
+      if (await this.pausedUntil(clinicId, channel, chatId)) return this.skip(clinicId, channel, 'paused_after_staff_reply');
       const today = await this.prisma.chatMessage.count({ where: { clinicId, channel, chatId, byAi: true, createdAt: { gt: new Date(Date.now() - 86_400_000) } } });
-      if (today >= MAX_AI_REPLIES_PER_DAY) return false;
+      if (today >= MAX_AI_REPLIES_PER_DAY) return this.skip(clinicId, channel, 'daily_ai_reply_cap');
 
       const d = await this.assistant.draft(clinicId, channel, chatId);
       try {
         await this.messenger.send(clinicId, channel, chatId, d.reply, d.options);
       } catch (e) {
         if (e instanceof SendError && e.blocked && channel === 'TELEGRAM') await this.prisma.patientChannel.updateMany({ where: { clinicId, channel, externalId: chatId }, data: { optedOutAt: new Date() } });
-        return false;
+        return this.skip(clinicId, channel, `send_failed_${e instanceof SendError ? e.reason : 'error'}`);
       }
       await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, direction: 'OUT', text: d.reply, byAi: true, ...(d.options.length ? { buttons: d.options.map((o) => ({ label: o.label, payload: `slot|${o.date}|${o.time}${o.doctor ? `|${o.doctor.slice(0, 16)}` : ''}` })) } : {}) } });
       // Заявка администратору: запись, перенос, отмена или вопрос, переданный человеку
@@ -58,7 +81,7 @@ export class AutoReplyService {
     } catch (e) {
       // The reply allowance is used up: the conversation goes to a person, who sees a request (no debt, nothing is lost)
       if ((e as Error).message === 'ai_limit') await this.handOffNoAllowance(clinicId, channel, chatId).catch(() => undefined);
-      else this.log.warn(`Автоответ не отправлен: ${(e as Error).message}`);
+      else this.log.warn(`Автоответ не отправлен: ${(e as Error).message} (clinic ${clinicId}, ${channel})`);
       return false;
     }
   }

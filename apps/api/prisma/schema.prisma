@@ -159,6 +159,7 @@ model Clinic {
   digestRecipients    DigestRecipient[]
   reviews             Review[]
   pushSubscriptions   PushSubscription[]
+  chatBotResumes ChatBotResume[]
 }
 
 // Приглашение сотрудника по ссылке. В базе только хэш токена: по базе ссылку не восстановить.
@@ -668,6 +669,19 @@ model AuditLog {
   clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@index([clinicId, createdAt])
+}
+
+// "Give the dialog back to the bot": after a person answered in a chat the AI pauses for a while; staff can end the pause earlier,
+// and only a person's messages written after this moment pause the AI again
+model ChatBotResume {
+  id        String   @id @default(cuid())
+  clinicId  String
+  channel   String
+  chatId    String
+  resumedAt DateTime @default(now())
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, channel, chatId])
 }
 
 // Переписка с пациентом в мессенджере (входящие и ответы сотрудников). Не путать с OutboundMessage: то автоматические сообщения по сценариям.
