@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { normalizePhone } from '../common/phone';
 import { PrismaService } from '../prisma/prisma.service';
@@ -32,6 +32,8 @@ export interface IncomingMessage {
 // for the administrator, let the AI answer (if the clinic allows), otherwise one polite reply a day.
 @Injectable()
 export class IntakeService {
+  private readonly log = new Logger(IntakeService.name);
+
   constructor(
     private prisma: PrismaService,
     private messenger: MessengerService,
@@ -45,7 +47,31 @@ export class IntakeService {
     const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { suspendedAt: true, sendingEnabled: true } });
     if (clinic.suspendedAt) return;
     const text = m.text.trim();
-    const slot = m.payload ? SLOT.exec(m.payload) : null;
+    let payload = m.payload;
+    // A tap that arrived as plain text (the channel did not pass the button's payload): when the text is exactly the title of a button
+    // in the last message we sent, it is that button
+    if (!payload && text) {
+      const lastOut = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'OUT' }, orderBy: { createdAt: 'desc' }, select: { buttons: true } });
+      const buttons = Array.isArray(lastOut?.buttons) ? (lastOut!.buttons as { label?: unknown; payload?: unknown }[]) : [];
+      const norm = (x: string) => x.trim().toLowerCase().replace(/\s+/g, ' ');
+      const valid = buttons.filter((b): b is { label: string; payload: string } => typeof b.label === 'string' && typeof b.payload === 'string');
+      let hit = valid.find((b) => norm(b.label) === norm(text));
+      // A short typed time ("19:00", "на 19:00", "02.11 19:00") that fits exactly one offered button; a question is not a choice
+      if (!hit && text.length <= 40 && !text.includes('?')) {
+        const t = /(?<!\d)(\d{1,2}):(\d{2})(?!\d)/.exec(text);
+        if (t) {
+          const time = `${t[1].padStart(2, '0')}:${t[2]}`;
+          const d = /(?<!\d)(\d{1,2})\.(\d{2})(?!\d)/.exec(text.replace(t[0], ' '));
+          const fits = valid.filter((b) => b.payload.split('|')[2] === time && (!d || b.label.includes(`${d[1].padStart(2, '0')}.${d[2]}`)));
+          if (new Set(fits.map((b) => b.payload)).size === 1) hit = fits[0];
+        }
+      }
+      if (hit) {
+        payload = hit.payload as string;
+        this.log.log(`A button tap arrived as text and was matched to the button (clinic ${clinicId}, ${channel})`);
+      }
+    }
+    const slot = payload ? SLOT.exec(payload) : null;
     if (!text && !slot) return; // photos, stickers and the like are not handled yet
 
     let ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel, externalId: chatId }, select: { patientId: true, optedOutAt: true } });

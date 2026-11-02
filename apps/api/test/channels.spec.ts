@@ -324,7 +324,7 @@ describe('чат на сайті клініки', () => {
     expect(await prisma.bookingRequest.findFirst({ where: { clinicId: c.clinicId, channel: 'WEB' } })).toMatchObject({ kind: 'BOOKING' });
     // a dangerous topic never reaches the model: a hand-over text comes back
     const risky = await say(c.key, token, 'У мене болить зуб').expect(200);
-    expect(risky.body.messages[0].text).toContain('адміністратор');
+    expect(risky.body.messages[0].text).toContain('термінове');
   });
 
   it('захист: без токена сесії 401; токен іншого ключа не підходить; порожнє й задовге повідомлення відхиляються; ліміт повідомлень; вимкнений чат і призупинена клініка недоступні', async () => {

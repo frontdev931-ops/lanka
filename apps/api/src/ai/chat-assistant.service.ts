@@ -5,7 +5,8 @@ import { readWorkHours } from '../clinic/work-hours';
 import { PrismaService } from '../prisma/prisma.service';
 import { KbFacts, KbService } from '../kb/kb.service';
 import { AiService } from './ai.service';
-import { HandoffReason, handoffText, incomingHandoff, parseModelJson, replyViolates, timesOutsideWindows } from './guardrails';
+import { DENTAL_GLOSSARY, URGENT_TEXT, expandForSearch } from './dental';
+import { HandoffReason, handoffText, incomingHandoff, isRussian, isUrgentSymptom, parseModelJson, replyViolates, timesOutsideWindows } from './guardrails';
 
 const HISTORY = 8;
 
@@ -32,7 +33,10 @@ ${facts}
 ${hours ? `Графік роботи клініки: ${hours}.` : 'Графік роботи тобі не відомий.'}
 ${kb.text ? `ДОВІДКА КЛІНІКИ (затверджена клінікою; тільки з неї можна називати послуги, тривалість, ціни, лікарів, адреси та відповіді на часті питання):\n${kb.text}\n\nПравила довідки: ціну називай ЛИШЕ якщо вона вказана в рядку послуги, дослівно в гривнях, без округлення, без знижок і без підсумків за кілька послуг. Якщо послуги немає в довідці, ціна не вказана або питання виходить за довідку, intent "handoff". Те, чого немає в довідці (адреса, телефон, лікарі), ти не знаєш.` : 'Адреси, телефону, цін і складу лікарів ти не знаєш.'}
 
+${DENTAL_GLOSSARY}
+
 СУВОРІ ПРАВИЛА:
+- Гострий біль, набряк, флюс, кровотеча чи травма зуба до тебе не доходять: їх обробляє код. Якщо все ж таке з’явилося, intent "handoff".
 - Ніколи не давай медичних порад, діагнозів, оцінки симптомів, рекомендацій щодо ліків чи догляду. Не називай цін і сум, окрім цін із довідки клініки.
 - Якщо пацієнт питає про здоров’я, біль, ліки, ціни, скаржиться або просить те, чого ти не знаєш, — intent "handoff".
 - Не відповідай на сторонні теми (політика, загальні знання, жарти, програмування тощо): ввічливо скажи, що допомагаєш лише із записом до клініки, і поверни розмову до запису.
@@ -105,7 +109,10 @@ export class ChatAssistantService {
     const cap = (await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { aiRepliesPerChatDay: true } }))?.aiRepliesPerChatDay ?? 20;
     if (today > cap) return handoff('long', last.text);
     // Опасную тему ищем только в последнем сообщении: прежние уже получили свой ответ или передачу человеку
-    const kbFacts = await this.kb.factsFor(clinicId, new Date(), msgs.filter((m) => m.direction === 'IN').slice(-3).map((m) => m.text).join(' '));
+    const patientWords = msgs.filter((m) => m.direction === 'IN').slice(-3).map((m) => m.text).join(' ');
+    const kbFacts = await this.kb.factsFor(clinicId, new Date(), `${patientWords} ${expandForSearch(patientWords)}`);
+    // A sudden problem (acute pain, a swelling, bleeding, a broken tooth): no model, no advice; the nearest time and an urgent mark for the staff
+    if (isUrgentSymptom(last.text, kbFacts.pricesKnown)) return this.urgent(clinicId, last.text);
     const topic = incomingHandoff(last.text, kbFacts.pricesKnown);
     if (topic) return handoff(topic, last.text);
 
@@ -136,7 +143,13 @@ export class ChatAssistantService {
     if (replyViolates(parsed.reply, kbFacts.allowedAmounts) || timesOutsideWindows(parsed.reply, windows)) return handoff('reply_check', last.text);
     // Кнопки со временем: каждый вариант должен лежать в посчитанном окне (с запасом на 30 минут приёма), иначе ответ не отправляем
     const options: SlotOption[] = [];
-    for (const o of parsed.options.slice(0, 3)) {
+    // the model may repeat a time: each time is offered once
+    const seen = new Set<string>();
+    for (const o of parsed.options) {
+      const key = `${o.date}|${o.time}|${o.doctor ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (seen.size > 3) break;
       const source = o.doctor ? doctors.get(o.doctor) : days;
       const day = source?.get(o.date);
       const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(o.time);
@@ -147,6 +160,16 @@ export class ChatAssistantService {
       options.push({ date: o.date, time: o.time, label: `${day.wd} ${dd}.${mm}, ${o.time}${o.doctor ? ` · ${o.doctor.split(' ')[0]}` : ''}`, ...(o.doctor ? { doctor: o.doctor } : {}) });
     }
     return { intent: parsed.intent, reply: parsed.reply, handoff: false, reason: null, summary: parsed.summary, service: parsed.service, options };
+  }
+
+  // The answer to a sudden health problem is written by the code: it does not evaluate the problem, offers the nearest times and tells
+  // the staff the request is urgent (the summary starts with "ТЕРМІНОВО")
+  private async urgent(clinicId: string, patientText: string): Promise<Draft> {
+    const lang = isRussian(patientText) ? 'ru' : 'uk';
+    const options = await this.freshOptions(clinicId).catch(() => [] as SlotOption[]);
+    const summary = 'ТЕРМІНОВО: пацієнт описує гострий стан (біль, набряк, кровотеча чи подібне), потрібен найближчий час або дзвінок';
+    if (!options.length) return { intent: 'handoff', reply: URGENT_TEXT[lang], handoff: true, reason: 'urgent', summary, service: null, options: [] };
+    return { intent: 'booking', reply: `${URGENT_TEXT[lang]}\n\n${URGENT_TEXT.withTimes[lang]}`, handoff: false, reason: null, summary, service: null, options };
   }
 
   // Up to three fresh times (one per day, the first free half hour), for when the time a person chose is no longer free.

@@ -2,6 +2,8 @@
 // 1) входящее сообщение с опасной темой не доходит до модели вообще: сразу передача человеку;
 // 2) готовый ответ проверяется на то, чего помощник говорить не должен.
 
+import { MEDICATION } from './dental';
+
 export const HANDOFF_TEXT = 'Передаю ваше запитання адміністратору клініки, він відповість найближчим часом.';
 export const HANDOFF_TEXT_RU = 'Передаю ваш вопрос администратору клиники, он ответит в ближайшее время.';
 
@@ -15,7 +17,7 @@ export function isRussian(patientText: string): boolean {
 export function handoffText(patientText: string): string {
   return isRussian(patientText) ? HANDOFF_TEXT_RU : HANDOFF_TEXT;
 }
-export type HandoffReason = 'medical' | 'price' | 'complaint' | 'long' | 'reply_check' | 'model';
+export type HandoffReason = 'medical' | 'price' | 'complaint' | 'long' | 'reply_check' | 'model' | 'urgent';
 
 const TOPICS: { reason: HandoffReason; re: RegExp }[] = [
   // здоровье: симптомы, лекарства, диагнозы — только врач или администратор
@@ -37,6 +39,13 @@ export function incomingHandoff(text: string, pricesKnown = false): HandoffReaso
     return t.reason;
   }
   return null;
+}
+
+// A sudden health problem WITHOUT a question about medicines, a diagnosis, prices or a complaint: the AI does not answer it, and it is not
+// simply handed over either: the code offers the nearest time and marks the request as urgent (see ChatAssistantService)
+export function isUrgentSymptom(text: string, pricesKnown = false): boolean {
+  if (incomingHandoff(text, pricesKnown) !== 'medical' || MEDICATION.test(text)) return false;
+  return !TOPICS.some((t) => t.reason !== 'medical' && t.re.test(text) && !(t.reason === 'price' && pricesKnown && !PRICE_ONLY_CASH.test(text)));
 }
 
 // Что нельзя в ответе клиники: суммы, дозировки, лекарства, диагнозы, советы по лечению

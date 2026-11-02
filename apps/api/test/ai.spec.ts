@@ -201,7 +201,8 @@ describe('ИИ-помощник в переписке: границы', () => {
     const say = (chatId: string, text: string, direction = 'IN') => prisma.chatMessage.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId, direction, text } });
 
     await say('c1', 'У мене болить зуб');
-    expect(await assistant.draft(c.clinicId, 'TELEGRAM', 'c1')).toMatchObject({ handoff: true, reason: 'medical' });
+    // a sudden problem is not just handed over: the code answers it (no free times here, so it goes to a person, marked urgent)
+    expect(await assistant.draft(c.clinicId, 'TELEGRAM', 'c1')).toMatchObject({ handoff: true, reason: 'urgent' });
     expect(fake.calls).toBe(0);
 
     await say('c2', 'Хочу записатися');
@@ -290,7 +291,7 @@ describe('ШІ сам отвечает пациентам в Telegram', () => {
     tg.sent.length = 0;
     await app.get(TelegramService).handleUpdate(q.clinicId, TOKEN, msg(q.chat, 'У мене болить зуб'));
     expect(fake.calls).toBe(calls); // до модели не дошло
-    expect(tg.sent[0].text).toContain('адміністратору');
+    expect(tg.sent[0].text).toContain('термінове');
   });
 
   it('выключены отправка или автоответ, сотрудник подхватил диалог, дневной лимит: ШІ молчит, остаётся обычный ответ', async () => {
