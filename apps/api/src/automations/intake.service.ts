@@ -6,6 +6,7 @@ import { AutoReplyService } from './auto-reply.service';
 import { BookingFlowService } from './booking-flow.service';
 import { MessengerService } from './messenger.service';
 import { RequestsService } from './requests.service';
+import { parseTypedTime } from './typed-time';
 
 const STOP = /^\/?(stop|зупинити|остановить)$/i;
 export const SLOT = /^slot\|(\d{4})-(\d{2})-(\d{2})\|(\d{2}:\d{2})(?:\|(.{1,24}))?$/u;
@@ -56,13 +57,12 @@ export class IntakeService {
       const norm = (x: string) => x.trim().toLowerCase().replace(/\s+/g, ' ');
       const valid = buttons.filter((b): b is { label: string; payload: string } => typeof b.label === 'string' && typeof b.payload === 'string');
       let hit = valid.find((b) => norm(b.label) === norm(text));
-      // A short typed time ("19:00", "на 19:00", "02.11 19:00") that fits exactly one offered button; a question is not a choice
-      if (!hit && text.length <= 40 && !text.includes('?')) {
-        const t = /(?<!\d)(\d{1,2}):(\d{2})(?!\d)/.exec(text);
-        if (t) {
-          const time = `${t[1].padStart(2, '0')}:${t[2]}`;
-          const d = /(?<!\d)(\d{1,2})\.(\d{2})(?!\d)/.exec(text.replace(t[0], ' '));
-          const fits = valid.filter((b) => b.payload.split('|')[2] === time && (!d || b.label.includes(`${d[1].padStart(2, '0')}.${d[2]}`)));
+      // A short typed time ("19:00", "на 11", "давай на 11") that fits exactly one offered button; a question is not a choice
+      if (!hit) {
+        const time = parseTypedTime(text);
+        if (time) {
+          const d = /(?<!\d)(\d{1,2})[.\-](\d{2})(?!\d)/.exec(text);
+          const fits = valid.filter((b) => b.payload.split('|')[2] === time && (!d || time === `${d[1].padStart(2, '0')}:${d[2]}` || b.label.includes(`${d[1].padStart(2, '0')}.${d[2]}`)));
           if (new Set(fits.map((b) => b.payload)).size === 1) hit = fits[0];
         }
       }

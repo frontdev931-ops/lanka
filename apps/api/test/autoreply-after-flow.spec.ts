@@ -5,6 +5,7 @@ import { LlmClient } from '../src/ai/llm.client';
 import { AppModule } from '../src/app.module';
 import { IntakeService } from '../src/automations/intake.service';
 import { ChatAssistantService } from '../src/ai/chat-assistant.service';
+import { parseTypedTime } from '../src/automations/typed-time';
 import { MessengerService } from '../src/automations/messenger.service';
 import { ReportsService } from '../src/reports/reports.service';
 import { clinicDate, clinicHm } from '../src/common/clinic-time';
@@ -307,6 +308,37 @@ describe('автовідповідь ШІ після сценарію запис
     await write(c, 'а на послезавтра какие есть окошки?');
     expect(sent.at(-1)!.text).toContain('Передаю ваш вопрос администратору клиники');
     fake.seq = [];
+  });
+
+  it('розбір набраного часу: «на 11», «давай на 11», «в 19-30», «11 годин»; питання й довгі повідомлення не вибір', () => {
+    expect(parseTypedTime('давай на 11')).toBe('11:00');
+    expect(parseTypedTime('на 11')).toBe('11:00');
+    expect(parseTypedTime('пн 02-11 на 19-30')).toBe('19:30');
+    expect(parseTypedTime('в 15.30')).toBe('15:30');
+    expect(parseTypedTime('11 годин')).toBe('11:00');
+    expect(parseTypedTime('11')).toBe('11:00');
+    expect(parseTypedTime('о 9:30, будь ласка')).toBe('09:30');
+    expect(parseTypedTime('а на 11 буде лікар?')).toBeNull();
+    expect(parseTypedTime('на 25')).toBeNull();
+    expect(parseTypedTime('2 зуби болять')).toBeNull();
+    expect(parseTypedTime('Хочу записатися на чистку зубів на наступному тижні, коли зручно')).toBeNull();
+  });
+
+  it('«давай на 11» у відповідь на запропоновані кнопки — це вибір часу, а не передача людині', async () => {
+    const c = await ready();
+    const s = tomorrow();
+    await prisma.chatMessage.create({ data: { clinicId: c.clinicId, channel: 'INSTAGRAM', chatId: c.chat, direction: 'OUT', text: 'Оберіть час', byAi: true, buttons: [{ label: 'вт 03.11, 09:00', payload: `slot|${s.date}|09:00` }, { label: 'вт 03.11, 11:00', payload: `slot|${s.date}|11:00` }] } });
+    const calls = fake.calls;
+    await write(c, 'давай на 11');
+    expect(fake.calls).toBe(calls);
+    expect(sent.at(-1)!.text).toContain('прізвище та ім’я і номер телефону');
+    expect(sent.map((m) => m.text).join('\n')).not.toContain('Передаю');
+    const req = await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: c.clinicId } });
+    expect(req.stage).toBe('COLLECT');
+    expect(clinicHm(req.slotAt!)).toBe('11:00');
+    // the next messages give the data and the request is complete
+    await write(c, 'Іван Петренко 0971234567');
+    expect(sent.at(-1)!.text).toContain('Передали заявку');
   });
 
   it('повернення боту належить своїй клініці', async () => {
