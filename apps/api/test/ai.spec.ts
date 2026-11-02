@@ -310,7 +310,7 @@ describe('ШІ сам отвечает пациентам в Telegram', () => {
     expect(fake.calls).toBe(0);
 
     const busy = await setup();
-    for (let i = 0; i < 6; i++) await prisma.chatMessage.create({ data: { clinicId: busy.clinicId, patientId: busy.p.id, channel: 'TELEGRAM', chatId: String(busy.chat), direction: 'OUT', text: `ШІ ${i}`, byAi: true } });
+    for (let i = 0; i < 20; i++) await prisma.chatMessage.create({ data: { clinicId: busy.clinicId, patientId: busy.p.id, channel: 'TELEGRAM', chatId: String(busy.chat), direction: 'OUT', text: `ШІ ${i}`, byAi: true } });
     await app.get(TelegramService).handleUpdate(busy.clinicId, TOKEN, msg(busy.chat, 'Хочу записатися'));
     expect(fake.calls).toBe(0);
   });

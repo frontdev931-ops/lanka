@@ -11,6 +11,8 @@ class AiDto {
   @IsOptional() @IsBoolean() autoReply?: boolean;
   @IsOptional() @IsBoolean() assistant?: boolean;
   @IsOptional() @IsInt() @Min(0) @Max(100000) monthlyLimit?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(200) repliesPerChatDay?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(720) pauseMinutes?: number;
 }
 
 @Controller('ai')

@@ -105,6 +105,9 @@ model Clinic {
   aiAutoBooking       Boolean              @default(false)
   // ШІ сам отвечает пациентам на безопасные темы (запись, перенос, отмена, история); остальное передаёт человеку. По умолчанию выключено
   aiAutoReply         Boolean              @default(false)
+  // How many AI replies one chat gets per day (a guard against loops and cost), and how long the AI stays silent after a person answered (0: no pause)
+  aiRepliesPerChatDay Int                  @default(20)
+  aiPauseMinutes      Int                  @default(30)
   // Владелец подтверждает: стандартное согласие пациентов клиники охватывает информационные и рекламные сообщения. Тогда «Невідомо» считается согласием; «Відкликано» блокирует всегда
   assumeConsent       Boolean              @default(false)
   // Дайджест руководителю в Telegram: OFF, DAILY или WEEKLY, час по Киеву, день недели (1 = понедельник) для WEEKLY

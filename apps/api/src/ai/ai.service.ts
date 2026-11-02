@@ -15,7 +15,7 @@ export class AiService {
   ) {}
 
   async status(clinicId: string) {
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiMonthlyLimit: true, aiAutoBooking: true, aiAutoReply: true, sendingEnabled: true, aiAssistantEnabled: true, aiPurchased: true, periodStartsAt: true } });
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiMonthlyLimit: true, aiAutoBooking: true, aiAutoReply: true, aiRepliesPerChatDay: true, aiPauseMinutes: true, sendingEnabled: true, aiAssistantEnabled: true, aiPurchased: true, periodStartsAt: true } });
     // Only billable replies count; retries of one request are free
     const since = { clinicId, ok: true, billable: true, createdAt: { gte: periodStart(c) } };
     const [used, tokens] = await Promise.all([this.prisma.aiUsage.count({ where: since }), this.prisma.aiUsage.aggregate({ where: since, _sum: { inputTokens: true, outputTokens: true } })]);
@@ -25,6 +25,8 @@ export class AiService {
       monthlyLimit: c.aiMonthlyLimit,
       autoBooking: c.aiAutoBooking,
       autoReply: c.aiAutoReply,
+      repliesPerChatDay: c.aiRepliesPerChatDay,
+      pauseMinutes: c.aiPauseMinutes,
       assistant: c.aiAssistantEnabled,
       sendingEnabled: c.sendingEnabled,
       autoBookingSupported: bookingWriteSupported(),
@@ -34,7 +36,7 @@ export class AiService {
     };
   }
 
-  async update(clinicId: string, patch: { enabled?: boolean; monthlyLimit?: number; autoBooking?: boolean; autoReply?: boolean; assistant?: boolean }) {
+  async update(clinicId: string, patch: { enabled?: boolean; monthlyLimit?: number; autoBooking?: boolean; autoReply?: boolean; assistant?: boolean; repliesPerChatDay?: number; pauseMinutes?: number }) {
     if (patch.enabled && !this.llm.configured) throw new BadRequestException('ai_not_configured');
     if (patch.assistant && !this.llm.configured) throw new BadRequestException('ai_not_configured');
     if (patch.autoReply && !this.llm.configured) throw new BadRequestException('ai_not_configured');
@@ -46,7 +48,7 @@ export class AiService {
     if (patch.autoBooking && !bookingWriteSupported()) throw new BadRequestException('booking_write_unsupported');
     await this.prisma.clinic.update({
       where: { id: clinicId },
-      data: { ...(patch.assistant !== undefined ? { aiAssistantEnabled: patch.assistant } : {}), ...(patch.enabled === false ? { aiAutoReply: false } : patch.autoReply !== undefined ? { aiAutoReply: patch.autoReply } : {}), ...(patch.autoBooking !== undefined ? { aiAutoBooking: patch.autoBooking } : {}), ...(patch.enabled !== undefined ? { aiEnabled: patch.enabled } : {}), ...(patch.monthlyLimit !== undefined ? { aiMonthlyLimit: patch.monthlyLimit } : {}) },
+      data: { ...(patch.assistant !== undefined ? { aiAssistantEnabled: patch.assistant } : {}), ...(patch.enabled === false ? { aiAutoReply: false } : patch.autoReply !== undefined ? { aiAutoReply: patch.autoReply } : {}), ...(patch.autoBooking !== undefined ? { aiAutoBooking: patch.autoBooking } : {}), ...(patch.repliesPerChatDay !== undefined ? { aiRepliesPerChatDay: patch.repliesPerChatDay } : {}), ...(patch.pauseMinutes !== undefined ? { aiPauseMinutes: patch.pauseMinutes } : {}), ...(patch.enabled !== undefined ? { aiEnabled: patch.enabled } : {}), ...(patch.monthlyLimit !== undefined ? { aiMonthlyLimit: patch.monthlyLimit } : {}) },
     });
     return this.status(clinicId);
   }

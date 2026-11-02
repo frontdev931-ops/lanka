@@ -21,6 +21,7 @@ const fake = {
   },
 };
 const sent: { chatId: string; text: string }[] = [];
+let failNext = false;
 
 let app: INestApplication;
 let prisma: PrismaService;
@@ -37,7 +38,13 @@ beforeAll(async () => {
   app.useGlobalFilters(new I18nExceptionFilter());
   await app.init();
   prisma = app.get(PrismaService);
-  jest.spyOn(app.get(MessengerService), 'send').mockImplementation(async (_c: string, _ch: string, chatId: string, text: string) => void sent.push({ chatId, text }));
+  jest.spyOn(app.get(MessengerService), 'send').mockImplementation(async (_c: string, _ch: string, chatId: string, text: string) => {
+    if (failNext) {
+      failNext = false;
+      throw new Error('send failed');
+    }
+    sent.push({ chatId, text });
+  });
 });
 afterAll(async () => {
   jest.restoreAllMocks();
@@ -148,6 +155,42 @@ describe('автовідповідь ШІ після сценарію запис
     sent.length = 0;
     await write(c, 'Гаразд');
     expect(aiReplies(c.chat)).toBe(0);
+  });
+
+  it('відповідь людини, яка не пішла (помилка відправки), не ставить паузу', async () => {
+    const c = await ready();
+    await write(c, 'Добрий день');
+    failNext = true;
+    await http().post(`/conversations/INSTAGRAM/${c.chat}/reply`).set(auth(c.token)).send({ text: 'Не дійде' }).expect(400);
+    expect(await prisma.chatMessage.count({ where: { clinicId: c.clinicId, direction: 'OUT', authorUserId: { not: null }, error: { not: null } } })).toBe(1);
+    sent.length = 0;
+    await write(c, 'Дякую');
+    expect(aiReplies(c.chat)).toBe(1);
+    expect((await http().get(`/conversations/INSTAGRAM/${c.chat}`).set(auth(c.token)).expect(200)).body.botPausedUntil).toBeNull();
+  });
+
+  it('ліміт відповідей на чат і пауза налаштовуються: більший ліміт пропускає, нуль вимикає паузу, межі перевіряються', async () => {
+    const c = await ready();
+    expect((await http().get('/ai').set(auth(c.token)).expect(200)).body).toMatchObject({ repliesPerChatDay: 20, pauseMinutes: 30 });
+    await http().patch('/ai').set(auth(c.token)).send({ repliesPerChatDay: 0 }).expect(400);
+    await http().patch('/ai').set(auth(c.token)).send({ pauseMinutes: 9999 }).expect(400);
+    // eight AI replies already today in this chat: the default limit of 20 lets the ninth through, a limit of 8 does not
+    for (let i = 0; i < 8; i++) await prisma.chatMessage.create({ data: { clinicId: c.clinicId, channel: 'INSTAGRAM', chatId: c.chat, direction: 'OUT', text: `Відповідь ${i}`, byAi: true } });
+    await write(c, 'Добрий день');
+    expect(aiReplies(c.chat)).toBe(1);
+    await http().patch('/ai').set(auth(c.token)).send({ repliesPerChatDay: 8 }).expect(200);
+    sent.length = 0;
+    await write(c, 'Ще питання');
+    expect(aiReplies(c.chat)).toBe(0);
+    await http().patch('/ai').set(auth(c.token)).send({ repliesPerChatDay: 50 }).expect(200);
+
+    // a pause of 0 minutes: a person's answer does not silence the AI
+    await http().patch('/ai').set(auth(c.token)).send({ pauseMinutes: 0 }).expect(200);
+    await http().post(`/conversations/INSTAGRAM/${c.chat}/reply`).set(auth(c.token)).send({ text: 'Це людина' }).expect(200);
+    sent.length = 0;
+    await write(c, 'Дякую');
+    expect(aiReplies(c.chat)).toBe(1);
+    expect((await http().get(`/conversations/INSTAGRAM/${c.chat}`).set(auth(c.token)).expect(200)).body.botPausedUntil).toBeNull();
   });
 
   it('повернення боту належить своїй клініці', async () => {

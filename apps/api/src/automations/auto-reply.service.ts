@@ -5,8 +5,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RequestKind, RequestsService } from './requests.service';
 import { MessengerService, SendError } from './messenger.service';
 
-const MAX_AI_REPLIES_PER_DAY = 6;
-const STAFF_TAKEOVER_MS = 30 * 60_000;
 
 // Автоответ ШІ на входящее сообщение пациента. Работает только если клиника включила ШІ, автоответ и общую отправку.
 // Любой сбой или отказ (лимит, опасная тема, ошибка модели) возвращает false: тогда действует обычный путь с одним
@@ -34,12 +32,15 @@ export class AutoReplyService {
   }
 
   // The AI is silent for a while after a PERSON answered in the chat. Messages of the system (a booking confirmation, a scripted question)
-  // are not a person. The end of the pause is when the last person's message is older than the pause, or when staff gave the dialog back.
+  // are not a person, and neither is a reply of staff that never left (a failed send). The end of the pause is when the last person's message is older than the pause, or when staff gave the dialog back.
   async pausedUntil(clinicId: string, channel: string, chatId: string): Promise<Date | null> {
     const resumed = await this.prisma.chatBotResume.findUnique({ where: { clinicId_channel_chatId: { clinicId, channel, chatId } }, select: { resumedAt: true } });
-    const since = new Date(Math.max(Date.now() - STAFF_TAKEOVER_MS, resumed?.resumedAt.getTime() ?? 0));
-    const staff = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'OUT', authorUserId: { not: null }, createdAt: { gt: since } }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } });
-    return staff ? new Date(staff.createdAt.getTime() + STAFF_TAKEOVER_MS) : null;
+    const minutes = (await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { aiPauseMinutes: true } }))?.aiPauseMinutes ?? 30;
+    if (minutes <= 0) return null;
+    const pauseMs = minutes * 60_000;
+    const since = new Date(Math.max(Date.now() - pauseMs, resumed?.resumedAt.getTime() ?? 0));
+    const staff = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'OUT', authorUserId: { not: null }, error: null, createdAt: { gt: since } }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } });
+    return staff ? new Date(staff.createdAt.getTime() + pauseMs) : null;
   }
 
   async resume(clinicId: string, channel: string, chatId: string) {
@@ -49,7 +50,7 @@ export class AutoReplyService {
 
   async onInbound(clinicId: string, channel: string, chatId: string): Promise<boolean> {
     try {
-      const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiAutoReply: true, sendingEnabled: true, suspendedAt: true, plan: true } });
+      const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiAutoReply: true, aiRepliesPerChatDay: true, sendingEnabled: true, suspendedAt: true, plan: true } });
       if (clinic.suspendedAt) return this.skip(clinicId, channel, 'clinic_suspended');
       if (!clinic.aiEnabled) return this.skip(clinicId, channel, 'ai_off');
       if (!clinic.aiAutoReply) return this.skip(clinicId, channel, 'autoreply_off');
@@ -60,7 +61,7 @@ export class AutoReplyService {
       // Сотрудник уже подхватил диалог: ШІ не вмешивается
       if (await this.pausedUntil(clinicId, channel, chatId)) return this.skip(clinicId, channel, 'paused_after_staff_reply');
       const today = await this.prisma.chatMessage.count({ where: { clinicId, channel, chatId, byAi: true, createdAt: { gt: new Date(Date.now() - 86_400_000) } } });
-      if (today >= MAX_AI_REPLIES_PER_DAY) return this.skip(clinicId, channel, 'daily_ai_reply_cap');
+      if (today >= clinic.aiRepliesPerChatDay) return this.skip(clinicId, channel, 'daily_ai_reply_cap');
 
       const d = await this.assistant.draft(clinicId, channel, chatId);
       try {

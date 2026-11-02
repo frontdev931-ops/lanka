@@ -35,6 +35,8 @@ interface AiStatus {
   enabled: boolean;
   monthlyLimit: number;
   autoReply: boolean;
+  repliesPerChatDay: number;
+  pauseMinutes: number;
   sendingEnabled: boolean;
   autoBooking: boolean;
   assistant: boolean;
@@ -101,12 +103,14 @@ export default function AutomationsPage() {
   const [busy, setBusy] = useState(false);
   const [ai, setAi] = useState<AiStatus | null>(null);
   const [limit, setLimit] = useState('');
+  const [perChat, setPerChat] = useState('');
+  const [pause, setPause] = useState('');
   const [staffCode, setStaffCode] = useState<string | null>(null);
   const { ask, dialog } = useConfirm();
 
   const loadAll = useCallback(() => {
     api<Overview>('/automations').then(setData).catch((e) => setError((e as Error).message));
-    api<AiStatus>('/ai').then((a) => { setAi(a); setLimit(String(a.monthlyLimit)); }).catch(() => undefined);
+    api<AiStatus>('/ai').then((a) => { setAi(a); setLimit(String(a.monthlyLimit)); setPerChat(String(a.repliesPerChatDay)); setPause(String(a.pauseMinutes)); }).catch(() => undefined);
     api<Preview[]>('/automations/preview').then(setPreview).catch(() => undefined);
   }, []);
   const loadMsgs = useCallback(() => {
@@ -292,6 +296,18 @@ export default function AutomationsPage() {
                 </label>
                 <button className="btn" disabled={busy || Number(limit) === ai.monthlyLimit || limit === ''} onClick={() => patchAi({ monthlyLimit: Number(limit) })}>{t('common.save')}</button>
               </div>
+              <div className="toolbar">
+                <label className="field" style={{ margin: 0 }}>
+                  <span>{t('ai.perChat')}</span>
+                  <input className="input" type="number" min={1} max={200} value={perChat} onChange={(e) => setPerChat(e.target.value)} style={{ width: 140 }} />
+                </label>
+                <label className="field" style={{ margin: 0 }}>
+                  <span>{t('ai.pause')}</span>
+                  <input className="input" type="number" min={0} max={720} value={pause} onChange={(e) => setPause(e.target.value)} style={{ width: 140 }} />
+                </label>
+                <button className="btn" disabled={busy || perChat === '' || pause === '' || (Number(perChat) === ai.repliesPerChatDay && Number(pause) === ai.pauseMinutes)} onClick={() => patchAi({ repliesPerChatDay: Number(perChat), pauseMinutes: Number(pause) })}>{t('common.save')}</button>
+              </div>
+              <p className="muted" style={{ marginTop: 6 }}>{t('ai.perChatHint')}</p>
               <label className="check-row">
                 <input type="checkbox" checked={ai.autoBooking} disabled={busy || !ai.autoBookingSupported} onChange={(e) => patchAi({ autoBooking: e.target.checked })} />
                 <span>
