@@ -453,8 +453,8 @@ describe('воронка пациента', () => {
     const C = await mk('C Без запису');
     const D = await mk('D Запис без итога', { source: 'Google реклама' });
     await visit(D.id, 'PLANNED', ago(20));
-    const E = await mk('E Давно був', { createdAt: undefined, createdAtExt: ago(340), source: 'Instagram' });
-    await visit(E.id, 'VISITED', ago(330));
+    const E = await mk('E Давно був', { createdAt: undefined, createdAtExt: ago(300), source: 'Instagram' });
+    await visit(E.id, 'VISITED', ago(290));
     const F = await mk('F Лікується, запис не закрито', { source: 'Google реклама', balancePaid: 800 });
     await visit(F.id, 'PLANNED', ago(20));
     await item(F.id, 'DONE', 'Ортопедія', ago(20));

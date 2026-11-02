@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { isRussian } from '../ai/guardrails';
 import { normalizePhone } from '../common/phone';
 import { PrismaService } from '../prisma/prisma.service';
 import { AutoReplyService } from './auto-reply.service';
+import { BookingFlowService } from './booking-flow.service';
 import { MessengerService } from './messenger.service';
 import { RequestsService } from './requests.service';
 
@@ -37,6 +37,7 @@ export class IntakeService {
     private messenger: MessengerService,
     private autoReply: AutoReplyService,
     private requests: RequestsService,
+    private flow: BookingFlowService,
   ) {}
 
   async handle(clinicId: string, m: IncomingMessage): Promise<void> {
@@ -79,17 +80,14 @@ export class IntakeService {
     if (ch?.optedOutAt) return;
     if (!ch && (await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN', OR: ['stop', '/stop', 'зупинити', 'остановить'].map((t) => ({ text: { equals: t, mode: 'insensitive' as const } })) }, select: { id: true } }))) return;
 
-    if (label) {
-      // The person chose a time on a button: a request for the administrator
-      const open = await this.requests.openFor(clinicId, channel, chatId);
-      await this.requests.upsert(clinicId, { channel, chatId, patientId: ch?.patientId ?? null, contactName, kind: (open?.kind as 'BOOKING' | 'RESCHEDULE' | 'CANCEL') ?? 'BOOKING', summary: `Обрано час: ${label}. ${open?.summary ?? ''}`.trim() }, true);
-      if (clinic.sendingEnabled) {
-        const lastText = (await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN', NOT: { text: stored } }, orderBy: { createdAt: 'desc' }, select: { text: true } }))?.text ?? '';
-        await this.reply(clinicId, channel, ch?.patientId ?? null, chatId, isRussian(lastText) ? `Спасибо! Передали ваш выбор администратору: ${label}. Он подтвердит запись.` : `Дякуємо! Передали ваш вибір адміністратору: ${label}. Він підтвердить запис.`, true);
-      }
+    if (slot) {
+      // The person chose a time on a button: the booking flow keeps the choice, asks for the name and the phone, then hands the request over
+      await this.flow.onSlotChosen({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, { date: `${slot[1]}-${slot[2]}-${slot[3]}`, time: slot[4], doctor: slot[5] ?? null }, label!);
       return;
     }
 
+    // An answer to the bot's question about the name and the phone is not for the AI
+    if (await this.flow.onText({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, text)) return;
     if (await this.autoReply.onInbound(clinicId, channel, chatId)) return;
     // No AI answer: one polite reply per day, only when sending is on
     if (!clinic.sendingEnabled) return;

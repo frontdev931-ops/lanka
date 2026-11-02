@@ -65,6 +65,8 @@ export interface ModelReply {
   intent: string;
   reply: string;
   summary: string | null;
+  // The service the person wants, as they said it or as the clinic's reference names it
+  service: string | null;
   options: ModelOption[];
 }
 
@@ -72,12 +74,12 @@ export function parseModelJson(raw: string): ModelReply | null {
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) return null;
   try {
-    const j = JSON.parse(m[0]) as { intent?: unknown; reply?: unknown; summary?: unknown; options?: unknown };
+    const j = JSON.parse(m[0]) as { intent?: unknown; reply?: unknown; summary?: unknown; service?: unknown; options?: unknown };
     if (typeof j.intent !== 'string' || typeof j.reply !== 'string' || !j.reply.trim()) return null;
     const options = Array.isArray(j.options)
       ? j.options.filter((o): o is ModelOption => !!o && typeof (o as ModelOption).date === 'string' && typeof (o as ModelOption).time === 'string').map((o) => ({ date: o.date, time: o.time, ...(typeof o.doctor === 'string' && o.doctor.trim() ? { doctor: o.doctor.trim() } : {}) }))
       : [];
-    return { intent: j.intent, reply: j.reply.trim().slice(0, 900), summary: typeof j.summary === 'string' && j.summary.trim() ? j.summary.trim().slice(0, 300) : null, options };
+    return { intent: j.intent, reply: j.reply.trim().slice(0, 900), summary: typeof j.summary === 'string' && j.summary.trim() ? j.summary.trim().slice(0, 300) : null, service: typeof j.service === 'string' && j.service.trim() ? j.service.trim().slice(0, 80) : null, options };
   } catch {
     return null;
   }

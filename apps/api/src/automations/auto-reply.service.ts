@@ -52,7 +52,7 @@ export class AutoReplyService {
       if (kind) {
         const lastIn = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, select: { text: true, contactName: true } });
         const named = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, contactName: { not: null } }, orderBy: { createdAt: 'desc' }, select: { contactName: true } });
-        await this.requests.upsert(clinicId, { channel, chatId, patientId: ch?.patientId ?? null, contactName: named?.contactName ?? null, kind, summary: kind === 'HANDOFF' ? `Питання передано людині: «${(lastIn?.text ?? '').slice(0, 200)}»` : (d.summary ?? (lastIn?.text ?? '').slice(0, 200)) });
+        await this.requests.upsert(clinicId, { channel, chatId, patientId: ch?.patientId ?? null, contactName: named?.contactName ?? null, kind, summary: kind === 'HANDOFF' ? `Питання передано людині: «${(lastIn?.text ?? '').slice(0, 200)}»` : (d.summary ?? (lastIn?.text ?? '').slice(0, 200)), service: kind === 'BOOKING' ? d.service : null });
       }
       return true;
     } catch (e) {

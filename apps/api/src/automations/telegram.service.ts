@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { hashToken, newToken } from '../auth/tokens';
 import { isRussian } from '../ai/guardrails';
 import { AutoReplyService } from './auto-reply.service';
+import { BookingFlowService } from './booking-flow.service';
 import { DigestService } from './digest.service';
 import { InboundService } from './inbound.service';
 import { WaitlistService } from './waitlist.service';
@@ -41,6 +42,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     private digest: DigestService,
     private inbound: InboundService,
     private waitlist: WaitlistService,
+    private flow: BookingFlowService,
   ) {
     this.inbound.register('TELEGRAM', async (clinicId, payload) => {
       const i = await this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.TELEGRAM } } });
@@ -239,6 +241,8 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
       }
       return;
     }
+    // An answer to the bot's question about the name and the phone is not for the AI
+    if (await this.flow.onText({ clinicId, channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName }, text)) return;
     // Автоответ ШІ (если клиника его включила); иначе обычный вежливый ответ раз в сутки
     if (await this.autoReply.onInbound(clinicId, 'TELEGRAM', chatId)) return;
     const recent = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel: 'TELEGRAM', chatId, direction: 'OUT', authorUserId: null, createdAt: { gt: new Date(Date.now() - 86_400_000) } }, select: { id: true } });
@@ -265,16 +269,9 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     const label = `${m[3]}.${m[2]} ${m[4]}${m[5] ? `, лікар ${m[5]}` : ''}`;
     const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: 'TELEGRAM', externalId: chatId }, select: { patientId: true, optedOutAt: true } });
     const named = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel: 'TELEGRAM', chatId, contactName: { not: null } }, orderBy: { createdAt: 'desc' }, select: { contactName: true } });
-    const lastIn = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel: 'TELEGRAM', chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, select: { text: true } });
     await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel: 'TELEGRAM', chatId, contactName: named?.contactName ?? null, direction: 'IN', text: `Обрав час: ${label}` } });
-    const open = await this.requests.openFor(clinicId, 'TELEGRAM', chatId);
-    await this.requests.upsert(clinicId, { channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName: named?.contactName ?? null, kind: (open?.kind as 'BOOKING' | 'RESCHEDULE' | 'CANCEL') ?? 'BOOKING', summary: `Обрано час: ${label}. ${open?.summary ?? ''}`.trim() }, true);
-    // Благодарность — ответ на действие пациента; уходит, только если отправка в клинике включена
-    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { sendingEnabled: true } });
-    if (!clinic.sendingEnabled || ch?.optedOutAt) return;
-    const text = isRussian(lastIn?.text ?? '') ? `Спасибо! Передали ваш выбор администратору: ${label}. Он подтвердит запись.` : `Дякуємо! Передали ваш вибір адміністратору: ${label}. Він підтвердить запис.`;
-    await this.api.sendMessage(token, chatId, text).catch(() => undefined);
-    await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel: 'TELEGRAM', chatId, direction: 'OUT', text, byAi: true } });
+    // The booking flow keeps the choice, asks for the name and the phone if they are missing, then passes one complete request on
+    await this.flow.onSlotChosen({ clinicId, channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName: named?.contactName ?? null }, { date: `${m[1]}-${m[2]}-${m[3]}`, time: m[4], doctor: m[5] ?? null }, label);
   }
 
   // The patient answered an offer from the waiting list

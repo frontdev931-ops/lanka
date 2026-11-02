@@ -112,7 +112,7 @@ export class BookingService {
     if (blocks.some((b) => b.cabinetId === p.cabinetId && b.startsAt < p.endsAt && b.endsAt > p.startsAt)) throw new ConflictException('booking_slot_blocked');
   }
 
-  private async run(clinicId: string, userId: string, s: Spec): Promise<BookingResult> {
+  private async run(clinicId: string, userId: string | null, s: Spec): Promise<BookingResult> {
     const base = { clinicId, key: s.key, kind: s.kind, patientId: s.patientId ?? null, requestId: s.requestId ?? null, startsAt: s.startsAt ?? null, createdById: userId };
     let attempt = await this.prisma.bookingAttempt.findUnique({ where: { clinicId_key: { clinicId, key: s.key } } });
     if (attempt?.status === 'DONE') return { externalVisitId: attempt.externalVisitId ?? attempt.externalPatientId, duplicate: true, verified: true };
@@ -169,7 +169,7 @@ export class BookingService {
     return { externalVisitId: externalId ?? null, duplicate: false, verified: seen !== null && seen !== 'unknown' };
   }
 
-  async book(clinicId: string, userId: string, d: BookInput): Promise<BookingResult> {
+  async book(clinicId: string, userId: string | null, d: BookInput): Promise<BookingResult> {
     const connector = await this.connector(clinicId);
     const patient = await this.prisma.patient.findFirst({ where: { id: d.patientId, clinicId, removedAt: null }, select: { id: true, externalId: true, fullName: true } });
     if (!patient || patient.externalId.startsWith('demo-')) throw new BadRequestException('patient_not_found');
@@ -301,7 +301,7 @@ export class BookingService {
   }
 
   // A new card without duplicates: an existing card with the same phone is returned instead; the write is guarded like a booking
-  async createPatient(clinicId: string, userId: string, d: { fullName: string; phone: string; source?: string }): Promise<{ patientId: string; existing: boolean }> {
+  async createPatient(clinicId: string, userId: string | null, d: { fullName: string; phone: string; source?: string }): Promise<{ patientId: string; existing: boolean }> {
     const norm = normalizePhone(d.phone);
     if (!norm) throw new BadRequestException('bad_phone');
     const [lastName, ...rest] = d.fullName.trim().split(/\s+/);

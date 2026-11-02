@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { AiModule } from '../ai/ai.module';
+import { BookingModule } from '../booking/booking.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
 import { ReportsModule } from '../reports/reports.module';
+import { BookingFlowService } from './booking-flow.service';
 import { AutoReplyService } from './auto-reply.service';
 import { AutomationScheduler } from './automation.scheduler';
 import { AutomationsController, ConversationsController, MessagesController, RequestsController, CampaignsController, DigestController, ReviewsController, TelegramWebhookController, InstagramWebhookController, IntegrationEventsController } from './automations.controller';
@@ -46,9 +49,9 @@ import { TelegramApi } from './telegram.api';
 import { TelegramService } from './telegram.service';
 
 @Module({
-  imports: [AiModule, ReportsModule],
+  imports: [AiModule, ReportsModule, BookingModule, IntegrationsModule],
   controllers: [AutomationsController, ConversationsController, MessagesController, RequestsController, CampaignsController, DigestController, ReviewsController, TelegramWebhookController, InstagramWebhookController, IntegrationEventsController, ChannelsController, MessengerWebhookController, WhatsAppWebhookController, WebChatSettingsController, WebChatPublicController, WaitlistController, CustomAutomationsController, MetaComplianceController, LeadsSettingsController, LeadsPublicController, MetaLoginPublicController],
-  providers: [MetaLoginApi, MetaLoginService, LeadsService, MetaComplianceService, CustomAutomationsService, WaitlistService, FacebookApi, FacebookAdapter, FacebookService, WhatsAppApi, WhatsAppAdapter, WhatsAppService, { provide: ViberProvider, useClass: NoViberProvider }, ViberService, ViberAdapter, WebAdapter, WebChatService, IntakeService, TelegramApi, TelegramService, InstagramApi, InstagramAdapter, TelegramAdapter, InstagramService, MessengerService, InboundService, PlannerService, OutboxService, ChatService, AutoReplyService, RequestsService, StaffNotifierService, CampaignsService, ResultsService, DigestService, ReviewsService, AutomationScheduler],
+  providers: [BookingFlowService, MetaLoginApi, MetaLoginService, LeadsService, MetaComplianceService, CustomAutomationsService, WaitlistService, FacebookApi, FacebookAdapter, FacebookService, WhatsAppApi, WhatsAppAdapter, WhatsAppService, { provide: ViberProvider, useClass: NoViberProvider }, ViberService, ViberAdapter, WebAdapter, WebChatService, IntakeService, TelegramApi, TelegramService, InstagramApi, InstagramAdapter, TelegramAdapter, InstagramService, MessengerService, InboundService, PlannerService, OutboxService, ChatService, AutoReplyService, RequestsService, StaffNotifierService, CampaignsService, ResultsService, DigestService, ReviewsService, AutomationScheduler],
   exports: [TelegramService, OutboxService, PlannerService, StaffNotifierService, WaitlistService, CustomAutomationsService],
 })
 export class AutomationsModule {}

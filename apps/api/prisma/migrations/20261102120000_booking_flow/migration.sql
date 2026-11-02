@@ -1,0 +1,21 @@
+-- The booking flow through the bot: data collected between messages, the booking as confirmed, and the state of the message to the client
+ALTER TABLE "BookingRequest"
+  ADD COLUMN "service" TEXT,
+  ADD COLUMN "doctor" TEXT,
+  ADD COLUMN "slotAt" TIMESTAMP(3),
+  ADD COLUMN "fullName" TEXT,
+  ADD COLUMN "phone" TEXT,
+  ADD COLUMN "stage" TEXT NOT NULL DEFAULT 'NONE',
+  ADD COLUMN "asks" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "confirmedStartsAt" TIMESTAMP(3),
+  ADD COLUMN "confirmedService" TEXT,
+  ADD COLUMN "confirmedDoctor" TEXT,
+  ADD COLUMN "confirmedAt" TIMESTAMP(3),
+  ADD COLUMN "confirmedBy" TEXT,
+  ADD COLUMN "confirmSource" TEXT,
+  ADD COLUMN "externalVisitId" TEXT,
+  ADD COLUMN "noticeStatus" TEXT,
+  ADD COLUMN "noticeError" TEXT,
+  ADD COLUMN "noticeAt" TIMESTAMP(3),
+  ADD COLUMN "autoState" TEXT,
+  ADD COLUMN "autoNote" TEXT;

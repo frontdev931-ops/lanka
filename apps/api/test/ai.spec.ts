@@ -189,7 +189,7 @@ describe('ИИ-помощник в переписке: границы', () => {
   it('ответ с суммой, дозировкой, лекарством или советом не пропускается', () => {
     for (const r of ['Чистка коштує 1200 грн', 'Прийміть 2 таблетки по 500 мг', 'Приймайте ібупрофен', 'Це схоже на діагноз пульпіт', 'Полощіть содовим розчином']) expect(replyViolates(r)).toBe(true);
     expect(replyViolates('Підкажіть, будь ласка, який день вам зручний?')).toBe(false);
-    expect(parseModelJson('текст {"intent":"booking","reply":"Привіт"} ще')).toEqual({ intent: 'booking', reply: 'Привіт', summary: null, options: [] });
+    expect(parseModelJson('текст {"intent":"booking","reply":"Привіт"} ще')).toEqual({ intent: 'booking', reply: 'Привіт', summary: null, service: null, options: [] });
     expect(parseModelJson('не json')).toBeNull();
     expect(parseModelJson('{"intent":"booking"}')).toBeNull();
   });
@@ -349,10 +349,16 @@ describe('кнопки со временем и заявки администр�
     const [y, m, d] = tomorrow().split('-');
     await app.get(TelegramService).handleUpdate(q.clinicId, TOKEN, { update_id: 2, callback_query: { id: 'cb1', from: { id: q.chat }, message: { chat: { id: q.chat } }, data: `slot|${tomorrow()}|15:30` } });
     expect(tg.answered).toEqual(['cb1']);
-    expect(tg.sent[0].text).toContain(`${d}.${m} 15:30`);
+    // the card has a name but no phone: the bot asks for the phone first and does not say the request was passed on yet
+    expect(tg.sent[0].text).toContain('номер телефону');
+    expect(tg.sent[0].text).not.toContain('Передали');
     expect(await prisma.bookingRequest.count({ where: { clinicId: q.clinicId } })).toBe(1); // та же заявка, не дубль
-    expect((await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: q.clinicId } })).summary).toContain(`Обрано час: ${d}.${m} 15:30`);
-    expect(y).toBeTruthy();
+    tg.sent.length = 0;
+    await app.get(TelegramService).handleUpdate(q.clinicId, TOKEN, msg(q.chat, '097 123 45 67'));
+    expect(tg.sent[0].text).toContain(`${d}.${m}.${y} о 15:30`);
+    expect(tg.sent[0].text).toContain('Очікуйте підтвердження запису');
+    expect(await prisma.bookingRequest.count({ where: { clinicId: q.clinicId } })).toBe(1);
+    expect((await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: q.clinicId } })).summary).toContain(`час: ${d}.${m}.${y} 15:30`);
     // подделанные данные кнопки игнорируются
     tg.sent.length = 0;
     await app.get(TelegramService).handleUpdate(q.clinicId, TOKEN, { update_id: 3, callback_query: { id: 'cb2', from: { id: q.chat }, message: { chat: { id: q.chat } }, data: 'slot|абв|99' } });
@@ -467,7 +473,7 @@ describe('служебный чат для заявок', () => {
     tg.sent.length = 0;
     await tgs.handleUpdate(c.clinicId, TOKEN, { update_id: 6, callback_query: { id: 'x', from: { id: chat }, message: { chat: { id: chat } }, data: `slot|${tomorrow()}|12:00` } });
     expect(tg.sent.find((s) => s.chatId === '-2001')!.text).toContain('Оновлення заявки');
-    expect(tg.sent.find((s) => s.chatId === '-2001')!.text).toContain('Обрано час');
+    expect(tg.sent.find((s) => s.chatId === '-2001')!.text).toContain('час:');
 
     // сообщение в служебном чате: ничего не сохраняется и бот не отвечает
     tg.sent.length = 0;

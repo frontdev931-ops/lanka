@@ -14,17 +14,18 @@ export class RequestsService {
   ) {}
 
   // Одна открытая заявка на чат и вид: новое сообщение обновляет её, а не плодит дубли
+  // silent: save without telling the staff (the bot is still collecting the person's data; the staff is told when the request is complete)
   // notifyUpdate: сообщить сотрудникам и об обновлении существующей заявки (например, пациент выбрал время). Новая заявка сообщается всегда.
-  async upsert(clinicId: string, d: { channel: string; chatId: string; patientId: string | null; contactName?: string | null; kind: RequestKind; summary: string }, notifyUpdate = false) {
+  async upsert(clinicId: string, d: { channel: string; chatId: string; patientId: string | null; contactName?: string | null; kind: RequestKind; summary: string; service?: string | null }, notifyUpdate = false, silent = false) {
     const open = await this.prisma.bookingRequest.findFirst({ where: { clinicId, channel: d.channel, chatId: d.chatId, kind: d.kind, status: 'NEW' } });
     const row = open
-      ? await this.prisma.bookingRequest.update({ where: { id: open.id }, data: { summary: d.summary.slice(0, 500), patientId: d.patientId ?? open.patientId } })
-      : await this.prisma.bookingRequest.create({ data: { clinicId, channel: d.channel, chatId: d.chatId, patientId: d.patientId, contactName: d.contactName ?? null, kind: d.kind, summary: d.summary.slice(0, 500) } });
-    if (!open || notifyUpdate) await this.notify(clinicId, row.id, !open);
+      ? await this.prisma.bookingRequest.update({ where: { id: open.id }, data: { ...(open.stage === 'READY' ? {} : { summary: d.summary.slice(0, 500) }), patientId: d.patientId ?? open.patientId, ...(d.service ? { service: d.service.slice(0, 80) } : {}) } })
+      : await this.prisma.bookingRequest.create({ data: { clinicId, channel: d.channel, chatId: d.chatId, patientId: d.patientId, contactName: d.contactName ?? null, kind: d.kind, summary: d.summary.slice(0, 500), service: d.service?.slice(0, 80) ?? null } });
+    if (!silent && (!open || notifyUpdate)) await this.notify(clinicId, row.id, !open);
     return row;
   }
 
-  private async notify(clinicId: string, id: string, created: boolean) {
+  async notify(clinicId: string, id: string, created: boolean) {
     const r = await this.prisma.bookingRequest.findUnique({ where: { id }, include: { patient: { select: { fullName: true, phone: true } } } });
     if (!r) return;
     const who = r.patient ? `${r.patient.fullName}${r.patient.phone ? `, ${r.patient.phone}` : ''}` : (r.contactName ?? 'Невідомий');

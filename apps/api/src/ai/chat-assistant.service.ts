@@ -46,7 +46,7 @@ ${kb.text ? `ДОВІДКА КЛІНІКИ (затверджена клінік�
 - Оформлення: короткі абзаци, між ними порожній рядок. У JSON переноси рядків записуй як \\n.
 
 Відповідь ТІЛЬКИ у форматі JSON:
-{"intent": "booking|reschedule|cancel|info|offtopic|handoff", "reply": "текст відповіді", "summary": "одне речення для адміністратора: що хоче пацієнт (послуга, бажаний день і час, ПІБ якщо назвав), без медичних подробиць", "options": [{"date": "РРРР-ММ-ДД", "time": "ГГ:ХХ", "doctor": "ім’я лікаря точно як у списку, лише якщо пацієнт просить конкретного лікаря"}]}
+{"intent": "booking|reschedule|cancel|info|offtopic|handoff", "reply": "текст відповіді", "summary": "одне речення для адміністратора: що хоче пацієнт (послуга, бажаний день і час, ПІБ якщо назвав), без медичних подробиць", "service": "назва послуги, яку хоче пацієнт: точно як у довідці клініки, якщо вона там є, інакше слова пацієнта; порожній рядок, якщо невідомо", "options": [{"date": "РРРР-ММ-ДД", "time": "ГГ:ХХ", "doctor": "ім’я лікаря точно як у списку, лише якщо пацієнт просить конкретного лікаря"}]}
 "options" заповнюй лише коли пропонуєш час: 2–3 варіанти СТРОГО з наведених вище вільних вікон (дата в дужках). Якщо в списку є лікарі: за замовчуванням бери вікна «Будь-який лікар» без поля doctor; якщо пацієнт просить конкретного лікаря, бери вікна цього лікаря й вказуй його ім’я в doctor. Тоді в "reply" час НЕ перелічуй: коротке вступне речення, запитання «Оберіть, будь ласка, зручний час кнопкою нижче» (мовою пацієнта) і речення, що запис підтверджує адміністратор. Якщо варіантів не пропонуєш, "options" порожній масив.`;
 
 export interface SlotOption {
@@ -75,11 +75,13 @@ export interface Draft {
   reason: HandoffReason | null;
   // Коротко для администратора: чего хочет пациент
   summary: string | null;
+  // The service the person wants (shown to the administrator and used for the length of the visit)
+  service: string | null;
   // Варианты времени (проверены по расписанию): в Telegram показываются кнопками
   options: SlotOption[];
 }
 
-const handoff = (reason: HandoffReason, patientText: string): Draft => ({ intent: 'handoff', reply: handoffText(patientText), handoff: true, reason, summary: null, options: [] });
+const handoff = (reason: HandoffReason, patientText: string): Draft => ({ intent: 'handoff', reply: handoffText(patientText), handoff: true, reason, summary: null, service: null, options: [] });
 
 @Injectable()
 export class ChatAssistantService {
@@ -143,7 +145,25 @@ export class ChatAssistantService {
       const [, mm, dd] = o.date.split('-');
       options.push({ date: o.date, time: o.time, label: `${day.wd} ${dd}.${mm}, ${o.time}${o.doctor ? ` · ${o.doctor.split(' ')[0]}` : ''}`, ...(o.doctor ? { doctor: o.doctor } : {}) });
     }
-    return { intent: parsed.intent, reply: parsed.reply, handoff: false, reason: null, summary: parsed.summary, options };
+    return { intent: parsed.intent, reply: parsed.reply, handoff: false, reason: null, summary: parsed.summary, service: parsed.service, options };
+  }
+
+  // Up to three fresh times (one per day, the first free half hour), for when the time a person chose is no longer free.
+  // Taken from the same schedule as the AI's offers; no model is involved.
+  async freshOptions(clinicId: string, doctor?: string | null): Promise<SlotOption[]> {
+    const { days, doctors } = await this.slots(clinicId);
+    const source = (doctor && doctors.get(doctor)) || days;
+    const out: SlotOption[] = [];
+    for (const [date, day] of source) {
+      if (out.length >= 3) break;
+      const first = day.windows[0];
+      if (!first) continue;
+      const time = `${String(Math.floor(first[0] / 60)).padStart(2, '0')}:${String(first[0] % 60).padStart(2, '0')}`;
+      const [, mm, dd] = date.split('-');
+      const named = doctor && doctors.get(doctor) ? doctor : undefined;
+      out.push({ date, time, label: `${day.wd} ${dd}.${mm}, ${time}${named ? ` · ${named.split(' ')[0]}` : ''}`, ...(named ? { doctor: named } : {}) });
+    }
+    return out;
   }
 
   // Что мы знаем о пациенте из базы клиники (она копия Cliniccards): только итоговые факты без имени и телефона.

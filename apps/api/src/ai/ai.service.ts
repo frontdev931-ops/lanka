@@ -3,9 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { hasFeature, periodStart } from '../service/plans';
 import { LlmClient, LlmError, LlmResult } from './llm.client';
 
-// Запись в Cliniccards пока не подключена (мы там ничего не меняем), поэтому ИИ может только готовить заявку для администратора.
-// Когда коннектор научится создавать записи, этот признак станет true и настройка заработает.
-export const BOOKING_WRITE_SUPPORTED = false;
+// The AI may book on its own only where writing to the clinic's system is switched on at all: the service-wide switch
+// CLINICCARDS_WRITE_ENABLED (off for real clinics until the manual verification stage) and, per clinic, bookingWriteEnabled (checked at booking time).
+export const bookingWriteSupported = () => process.env.CLINICCARDS_WRITE_ENABLED === 'true';
 
 @Injectable()
 export class AiService {
@@ -27,7 +27,7 @@ export class AiService {
       autoReply: c.aiAutoReply,
       assistant: c.aiAssistantEnabled,
       sendingEnabled: c.sendingEnabled,
-      autoBookingSupported: BOOKING_WRITE_SUPPORTED,
+      autoBookingSupported: bookingWriteSupported(),
       used,
       purchased: c.aiPurchased,
       tokens: (tokens._sum.inputTokens ?? 0) + (tokens._sum.outputTokens ?? 0),
@@ -43,7 +43,7 @@ export class AiService {
       if (!hasFeature(cur.plan, 'ai_autoreply')) throw new BadRequestException('plan_feature');
       if (!(patch.enabled ?? cur.aiEnabled)) throw new BadRequestException('ai_disabled');
     }
-    if (patch.autoBooking && !BOOKING_WRITE_SUPPORTED) throw new BadRequestException('booking_write_unsupported');
+    if (patch.autoBooking && !bookingWriteSupported()) throw new BadRequestException('booking_write_unsupported');
     await this.prisma.clinic.update({
       where: { id: clinicId },
       data: { ...(patch.assistant !== undefined ? { aiAssistantEnabled: patch.assistant } : {}), ...(patch.enabled === false ? { aiAutoReply: false } : patch.autoReply !== undefined ? { aiAutoReply: patch.autoReply } : {}), ...(patch.autoBooking !== undefined ? { aiAutoBooking: patch.autoBooking } : {}), ...(patch.enabled !== undefined ? { aiEnabled: patch.enabled } : {}), ...(patch.monthlyLimit !== undefined ? { aiMonthlyLimit: patch.monthlyLimit } : {}) },

@@ -11,6 +11,7 @@ import { CampaignsService } from './campaigns.service';
 import { ResultsService } from './results.service';
 import { ReviewsService } from './reviews.service';
 import { DigestService } from './digest.service';
+import { BookingFlowService } from './booking-flow.service';
 import { RequestsService } from './requests.service';
 import { OutboxService } from './outbox.service';
 import { PlannerService } from './planner.service';
@@ -387,10 +388,47 @@ class RequestStatusDto {
   @IsIn(['NEW', 'DONE', 'DISMISSED']) status: string;
 }
 
+class ConfirmDto {
+  @IsString() @MaxLength(10) date: string;
+  @IsString() @MaxLength(5) time: string;
+  @IsOptional() @IsString() @MaxLength(120) service?: string;
+  @IsOptional() @IsString() @MaxLength(80) doctor?: string;
+}
+
+class RetryNoticeDto {
+  @IsOptional() @IsBoolean() force?: boolean;
+}
+
 @Controller('requests')
 @UseGuards(AuthGuard)
 export class RequestsController {
-  constructor(private requests: RequestsService) {}
+  constructor(
+    private requests: RequestsService,
+    private flow: BookingFlowService,
+  ) {}
+
+  // The visits of this person in Cliniccards on the day of the request: the confirm form is filled from it (a read only)
+  @Get(':id/match')
+  @Roles(...OPERATORS)
+  match(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.flow.match(u.clinicId, id);
+  }
+
+  // "Entered in Cliniccards": the administrator states the real booking and the client is told. Nothing is written to Cliniccards.
+  @Post(':id/confirm')
+  @HttpCode(200)
+  @Roles(...OPERATORS)
+  confirm(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ConfirmDto) {
+    return this.flow.confirmByAdmin(u.clinicId, u.userId, id, dto);
+  }
+
+  // A safe retry of a confirmation message that was not delivered
+  @Post(':id/notice/retry')
+  @HttpCode(200)
+  @Roles(...OPERATORS)
+  retryNotice(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: RetryNoticeDto) {
+    return this.flow.retryNotice(u.clinicId, u.userId, id, !!dto.force);
+  }
 
   @Get()
   @Roles(...READERS)

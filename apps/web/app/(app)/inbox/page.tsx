@@ -7,6 +7,7 @@ import { useI18n } from '../../../lib/i18n';
 import { fmtDateTime } from '../../../lib/ui';
 import { Alert, Badge, Card, Empty, Loading, PageHeader } from '../../../components/ui';
 import { BookingForm } from '../../../components/BookingForm';
+import { RequestConfirm } from '../../../components/RequestConfirm';
 
 interface Conv {
   channel: string;
@@ -43,6 +44,18 @@ interface Req {
   status: 'NEW' | 'DONE' | 'DISMISSED';
   createdAt: string;
   patient: { id: string; fullName: string; phone: string | null } | null;
+  service: string | null;
+  doctor: string | null;
+  slotAt: string | null;
+  fullName: string | null;
+  phone: string | null;
+  confirmedAt: string | null;
+  confirmedBy: 'ADMIN' | 'AUTO' | null;
+  confirmSource: 'CLINICCARDS' | 'MANUAL' | 'AUTO' | null;
+  confirmedStartsAt: string | null;
+  noticeStatus: 'PENDING' | 'SENT' | 'FAILED' | 'SKIPPED' | null;
+  noticeError: string | null;
+  noticeAt: string | null;
 }
 interface PatientRow {
   id: string;
@@ -66,6 +79,7 @@ export default function InboxPage() {
   const [reqs, setReqs] = useState<{ newCount: number; rows: Req[] } | null>(null);
   const [bookingOn, setBookingOn] = useState(false);
   const [bookingFor, setBookingFor] = useState<string | null>(null);
+  const [confirmFor, setConfirmFor] = useState<string | null>(null);
   useEffect(() => {
     api<{ enabled: boolean }>('/bookings/status').then((s) => setBookingOn(s.enabled)).catch(() => undefined);
   }, []);
@@ -93,6 +107,25 @@ export default function InboxPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const retryNotice = async (id: string, force: boolean) => {
+    setBusy(true);
+    try {
+      await api(`/requests/${id}/notice/retry`, { method: 'POST', body: JSON.stringify({ force }) });
+      await loadReqs();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  // The time the bot offered or the person chose, in the clinic's local time, for the confirm form
+  const localParts = (iso: string | null) => {
+    if (!iso) return { date: '', time: '' };
+    const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(iso));
+    const g = (k: string) => p.find((x) => x.type === k)?.value ?? '';
+    return { date: `${g('year')}-${g('month')}-${g('day')}`, time: `${g('hour')}:${g('minute')}` };
   };
 
   useEffect(() => {
@@ -196,11 +229,25 @@ export default function InboxPage() {
             reqs.rows.map((r) => (
               <div key={r.id} className="req-item">
                 <span className="chat-name">
-                  <b>{r.patient?.fullName ?? r.contactName ?? t('inbox.unknown')}</b>
+                  <b>{r.patient?.fullName ?? r.fullName ?? r.contactName ?? t('inbox.unknown')}</b>
                   <Badge tone={r.kind === 'HANDOFF' ? 'amber' : 'blue'}>{t(`inbox.kind.${r.kind}`)}</Badge>
-                  {r.patient?.phone && <span className="muted">{r.patient.phone}</span>}
+                  {(r.patient?.phone ?? r.phone) && <span className="muted">{r.patient?.phone ?? r.phone}</span>}
                 </span>
                 <span>{r.summary}</span>
+                {r.confirmedAt && (
+                  <span className="muted">
+                    {r.confirmedBy === 'AUTO' ? t('confirm.byAuto') : t('confirm.byAdmin')}
+                    {r.confirmSource === 'CLINICCARDS' ? ` · ${t('confirm.cliniccards')}` : r.confirmSource === 'MANUAL' ? ` · ${t('confirm.manualMark')}` : ''}
+                  </span>
+                )}
+                {r.noticeStatus && (
+                  <span>
+                    <Badge tone={r.noticeStatus === 'SENT' ? 'green' : r.noticeStatus === 'PENDING' ? 'blue' : 'amber'}>
+                      {t(`confirm.${r.noticeStatus === 'SENT' ? 'sent' : r.noticeStatus === 'FAILED' ? 'failed' : r.noticeStatus === 'SKIPPED' ? 'skipped' : 'pending'}`)}
+                    </Badge>
+                    {r.noticeError && <span className="muted"> {r.noticeError === 'window_closed' ? t('confirm.err.window_closed') : r.noticeError === 'not_connected' ? t('confirm.err.not_connected') : r.noticeError === 'sending_off' ? t('confirm.err.sending_off') : r.noticeError === 'opted_out' ? t('confirm.err.opted_out') : t('confirm.err.failed')}</span>}
+                  </span>
+                )}
                 <span className="muted chat-time">{fmtDateTime(r.createdAt)}</span>
                 <div className="toolbar">
                   <button className="btn btn-sm" onClick={() => { setOpen({ channel: r.channel, chatId: r.chatId }); setTab('chats'); }}>{t('inbox.openChat')}</button>
@@ -209,13 +256,33 @@ export default function InboxPage() {
                   )}
                   {r.status === 'NEW' ? (
                     <>
-                      <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => closeReq(r.id, 'DONE')}>{t('inbox.reqMarkDone')}</button>
+                      {r.kind === 'BOOKING' || r.kind === 'RESCHEDULE' ? (
+                        <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => setConfirmFor(confirmFor === r.id ? null : r.id)}>{t('inbox.reqMarkDone')}</button>
+                      ) : (
+                        <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => closeReq(r.id, 'DONE')}>{t('inbox.reqMarkDone')}</button>
+                      )}
                       <button className="btn btn-sm" disabled={busy} onClick={() => closeReq(r.id, 'DISMISSED')}>{t('inbox.reqDismiss')}</button>
                     </>
                   ) : (
-                    <button className="btn btn-sm" disabled={busy} onClick={() => closeReq(r.id, 'NEW')}>{t('inbox.reqReopen')}</button>
+                    <>
+                      {r.confirmedAt && (r.noticeStatus === 'FAILED' || r.noticeStatus === 'SKIPPED') && (
+                        <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => retryNotice(r.id, false)}>{t('confirm.retry')}</button>
+                      )}
+                      {r.confirmedAt && r.noticeStatus === 'PENDING' && !!r.noticeAt && Date.now() - new Date(r.noticeAt).getTime() > 5 * 60_000 && (
+                        <button className="btn btn-sm" disabled={busy} onClick={() => retryNotice(r.id, true)}>{t('confirm.retryForce')}</button>
+                      )}
+                      {!r.confirmedAt && <button className="btn btn-sm" disabled={busy} onClick={() => closeReq(r.id, 'NEW')}>{t('inbox.reqReopen')}</button>}
+                    </>
                   )}
                 </div>
+                {confirmFor === r.id && (
+                  <RequestConfirm
+                    requestId={r.id}
+                    initial={{ ...localParts(r.slotAt), service: r.service ?? '', doctor: r.doctor ?? '' }}
+                    onCancel={() => setConfirmFor(null)}
+                    onDone={() => { setConfirmFor(null); loadReqs(); window.dispatchEvent(new Event('stomat:requests-changed')); }}
+                  />
+                )}
                 {bookingFor === r.id && r.patient && <BookingForm patientId={r.patient.id} requestId={r.id} onDone={() => { setBookingFor(null); loadReqs(); }} />}
               </div>
             ))

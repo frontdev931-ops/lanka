@@ -735,6 +735,32 @@ model BookingRequest {
   status      String    @default("NEW")
   handledById String?
   handledAt   DateTime?
+  // What the person chose and told us, kept between messages: the service, the doctor, the chosen time (UTC), the name and phone they gave
+  service     String?
+  doctor      String?
+  slotAt      DateTime?
+  fullName    String?
+  phone       String?
+  // NONE (no time chosen yet), COLLECT (a time is chosen, name or phone still missing), READY (the request is complete and was passed on)
+  stage       String    @default("NONE")
+  // How many times the bot asked for the missing data (it stops asking after a few tries)
+  asks        Int       @default(0)
+  // The booking as it really is, confirmed by an administrator (ADMIN) or made by the automatic mode (AUTO); the client is told these values
+  confirmedStartsAt DateTime?
+  confirmedService  String?
+  confirmedDoctor   String?
+  confirmedAt       DateTime?
+  confirmedBy       String?
+  // CLINICCARDS (the visit was found in Cliniccards), MANUAL (an administrator confirms by hand), AUTO (created by the automatic mode)
+  confirmSource     String?
+  externalVisitId   String?
+  // The message to the client about the confirmation: PENDING, SENT, FAILED or SKIPPED (sending is off, the person opted out)
+  noticeStatus      String?
+  noticeError       String?
+  noticeAt          DateTime?
+  // The automatic mode claims a request once: RUNNING, DONE, FAILED
+  autoState         String?
+  autoNote          String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)

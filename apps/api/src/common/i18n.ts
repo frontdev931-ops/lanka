@@ -276,6 +276,11 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Демо сейчас занято, попробуйте через несколько минут',
     en: 'The demo is busy right now, try again in a few minutes',
   },
+  confirm_time_invalid: {
+    uk: 'Вкажіть коректні дату й час запису',
+    ru: 'Укажите корректные дату и время записи',
+    en: 'Enter a valid date and time of the appointment',
+  },
   booking_write_disabled: {
     uk: 'Запис у систему клініки не ввімкнено',
     ru: 'Запись в систему клиники не включена',
