@@ -7,15 +7,30 @@ import { MEDICATION } from './dental';
 export const HANDOFF_TEXT = 'Передаю ваше запитання адміністратору клініки, він відповість найближчим часом.';
 export const HANDOFF_TEXT_RU = 'Передаю ваш вопрос администратору клиники, он ответит в ближайшее время.';
 
-// Язык пациента по буквам: і ї є ґ — украинский, ы э ъ ё — русский; непонятно — украинский
+// Язык пациента: і ї є ґ и украинские слова — украинский; ы э ъ ё и русские слова — русский; признаков нет — не определено
+const RU_WORDS = /(?<![\p{L}])(какие|какой|какая|какое|как|что|где|когда|есть|нужно|можно|окна|окон|окошк\p{L}*|сегодня|сколько|врач|записаться|запишите|запись|пожалуйста|спасибо|здравствуйте|привет|меня|мне|мой|моя|подскажите|свободн\p{L}*|ближайш\p{L}*|хотел\p{L}*|болит|чтобы|можете|ещё|лечение|во сколько)(?![\p{L}])/iu;
+const UK_WORDS = /(?<![\p{L}])(які|який|яка|яке|що|де|коли|є|потрібно|можна|вікна|вікон|вікно|сьогодні|скільки|лікар|записатися|запишіть|будь ласка|дякую|вітаю|добрий|мені|мене|мій|моя|підкажіть|вільн\p{L}*|найближч\p{L}*|хотів|хотіла|болить|щоб|можете|ще|лікування|о котрій)(?![\p{L}])/iu;
+export function detectLanguage(text: string): 'ru' | 'uk' | null {
+  if (/[іїєґ]/i.test(text)) return 'uk';
+  if (/[ыэъё]/i.test(text)) return 'ru';
+  const ru = RU_WORDS.test(text);
+  const uk = UK_WORDS.test(text);
+  return ru && !uk ? 'ru' : uk && !ru ? 'uk' : null;
+}
+// The language of a conversation: from the newest message that shows one (texts are newest first); Ukrainian when none does
+export function languageOf(textsNewestFirst: string[]): 'ru' | 'uk' {
+  for (const t of textsNewestFirst) {
+    const l = detectLanguage(t);
+    if (l) return l;
+  }
+  return 'uk';
+}
 export function isRussian(patientText: string): boolean {
-  if (/[іїєґ]/i.test(patientText)) return false;
-  if (/[ыэъё]/i.test(patientText)) return true;
-  return /(здравствуйте|привет|можно|нужно|сколько|почему|спасибо|пожалуйста|меня|мне|стоит|записаться|когда|есть ли|ещё|чтобы|можете)/i.test(patientText);
+  return detectLanguage(patientText) === 'ru';
 }
 
-export function handoffText(patientText: string): string {
-  return isRussian(patientText) ? HANDOFF_TEXT_RU : HANDOFF_TEXT;
+export function handoffText(lang: 'ru' | 'uk'): string {
+  return lang === 'ru' ? HANDOFF_TEXT_RU : HANDOFF_TEXT;
 }
 export type HandoffReason = 'medical' | 'price' | 'complaint' | 'long' | 'reply_check' | 'model' | 'urgent';
 

@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { Prisma } from '@prisma/client';
 import { bookingWriteSupported } from '../ai/ai.service';
 import { ChatAssistantService, SlotOption } from '../ai/chat-assistant.service';
-import { isRussian } from '../ai/guardrails';
+import { languageOf } from '../ai/guardrails';
 import { BookingService } from '../booking/booking.service';
 import { clinicDate, clinicHm, localToUtc } from '../common/clinic-time';
 import { normalizePhone } from '../common/phone';
@@ -119,8 +119,8 @@ export class BookingFlowService {
   ) {}
 
   private async lang(c: FlowCtx): Promise<Lang> {
-    const last = await this.prisma.chatMessage.findMany({ where: { clinicId: c.clinicId, channel: c.channel, chatId: c.chatId, direction: 'IN', NOT: { text: { startsWith: 'Обрав час:' } } }, orderBy: { createdAt: 'desc' }, take: 2, select: { text: true } });
-    return isRussian(last.map((m) => m.text).join(' ')) ? 'ru' : 'uk';
+    const last = await this.prisma.chatMessage.findMany({ where: { clinicId: c.clinicId, channel: c.channel, chatId: c.chatId, direction: 'IN', NOT: { text: { startsWith: 'Обрав час:' } } }, orderBy: { createdAt: 'desc' }, take: 6, select: { text: true } });
+    return languageOf(last.map((m) => m.text));
   }
 
   // The bot's own message: only when the clinic allowed sending and the person did not opt out

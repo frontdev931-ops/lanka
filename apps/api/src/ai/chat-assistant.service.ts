@@ -6,7 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { KbFacts, KbService } from '../kb/kb.service';
 import { AiService } from './ai.service';
 import { DENTAL_GLOSSARY, URGENT_TEXT, expandForSearch } from './dental';
-import { HandoffReason, handoffText, incomingHandoff, isRussian, isUrgentSymptom, parseModelJson, replyViolates, timesOutsideWindows } from './guardrails';
+import { HandoffReason, handoffText, incomingHandoff, isUrgentSymptom, languageOf, parseModelJson, replyViolates, timesOutsideWindows } from './guardrails';
 
 const HISTORY = 8;
 
@@ -84,7 +84,7 @@ export interface Draft {
   options: SlotOption[];
 }
 
-const handoff = (reason: HandoffReason, patientText: string): Draft => ({ intent: 'handoff', reply: handoffText(patientText), handoff: true, reason, summary: null, service: null, options: [] });
+const handoff = (reason: HandoffReason, lang: 'ru' | 'uk'): Draft => ({ intent: 'handoff', reply: handoffText(lang), handoff: true, reason, summary: null, service: null, options: [] });
 
 @Injectable()
 export class ChatAssistantService {
@@ -102,19 +102,21 @@ export class ChatAssistantService {
     const msgs = rows.reverse();
     const last = msgs[msgs.length - 1];
     if (last.direction !== 'IN') throw new BadRequestException('nothing_to_answer');
+    // The language of the conversation: the newest message that shows one (a short message may show none)
+    const lang = languageOf(msgs.filter((m) => m.direction === 'IN').map((m) => m.text).reverse());
 
     // До модели доходят только безопасные сообщения: опасная тема или затянувшийся диалог сразу уходят человеку
     const today = await this.prisma.chatMessage.count({ where: { clinicId, channel, chatId, direction: 'IN', createdAt: { gt: new Date(Date.now() - 86_400_000) } } });
     // A very long day-long conversation goes to a person; the limit is the clinic's per-chat limit (the same number as for the AI's own replies)
     const cap = (await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { aiRepliesPerChatDay: true } }))?.aiRepliesPerChatDay ?? 20;
-    if (today > cap) return handoff('long', last.text);
+    if (today > cap) return handoff('long', lang);
     // Опасную тему ищем только в последнем сообщении: прежние уже получили свой ответ или передачу человеку
     const patientWords = msgs.filter((m) => m.direction === 'IN').slice(-3).map((m) => m.text).join(' ');
     const kbFacts = await this.kb.factsFor(clinicId, new Date(), `${patientWords} ${expandForSearch(patientWords)}`);
     // A sudden problem (acute pain, a swelling, bleeding, a broken tooth): no model, no advice; the nearest time and an urgent mark for the staff
-    if (isUrgentSymptom(last.text, kbFacts.pricesKnown)) return this.urgent(clinicId, last.text);
+    if (isUrgentSymptom(last.text, kbFacts.pricesKnown)) return this.urgent(clinicId, lang);
     const topic = incomingHandoff(last.text, kbFacts.pricesKnown);
-    if (topic) return handoff(topic, last.text);
+    if (topic) return handoff(topic, lang);
 
     // Для модели: чередующиеся реплики, начиная с пациента. Имя и телефон пациента наружу не передаются.
     const turns: { role: 'user' | 'assistant'; content: string }[] = [];
@@ -136,36 +138,44 @@ export class ChatAssistantService {
 
     const facts = await this.facts(clinicId, msgs.find((m) => m.patientId)?.patientId ?? null);
     const { text: slotText, windows, days, doctors } = await this.slots(clinicId);
-    const r = await this.ai.complete(clinicId, 'chat_draft', SYSTEM(clinic.name, hours, slotText, todayText(), facts, kbFacts), turns, 1500);
-    const parsed = parseModelJson(r.text);
-    if (!parsed) return handoff('model', last.text);
-    if (parsed.intent === 'handoff') return handoff('model', last.text);
-    if (replyViolates(parsed.reply, kbFacts.allowedAmounts) || timesOutsideWindows(parsed.reply, windows)) return handoff('reply_check', last.text);
-    // Кнопки со временем: каждый вариант должен лежать в посчитанном окне (с запасом на 30 минут приёма), иначе ответ не отправляем
-    const options: SlotOption[] = [];
-    // the model may repeat a time: each time is offered once
-    const seen = new Set<string>();
-    for (const o of parsed.options) {
-      const key = `${o.date}|${o.time}|${o.doctor ?? ''}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (seen.size > 3) break;
-      const source = o.doctor ? doctors.get(o.doctor) : days;
-      const day = source?.get(o.date);
-      const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(o.time);
-      if (!day || !m) return handoff('reply_check', last.text);
-      const t = Number(m[1]) * 60 + Number(m[2]);
-      if (!day.windows.some(([a, b]) => t >= a && t + 30 <= b)) return handoff('reply_check', last.text);
-      const [, mm, dd] = o.date.split('-');
-      options.push({ date: o.date, time: o.time, label: `${day.wd} ${dd}.${mm}, ${o.time}${o.doctor ? ` · ${o.doctor.split(' ')[0]}` : ''}`, ...(o.doctor ? { doctor: o.doctor } : {}) });
+    // One try: a finished draft, a hand-over the model itself asked for, or the code of the check the answer did not pass.
+    // A failed check is tried once more (free of charge) with a reminder, before a person is bothered.
+    const attempt = async (reminder: string, billable: boolean): Promise<Draft | HandoffReason> => {
+      const r = await this.ai.complete(clinicId, 'chat_draft', SYSTEM(clinic.name, hours, slotText, todayText(), facts, kbFacts) + reminder, turns, 1500, 'chat', billable);
+      const parsed = parseModelJson(r.text);
+      if (!parsed) return 'model';
+      if (parsed.intent === 'handoff') return handoff('model', lang);
+      if (replyViolates(parsed.reply, kbFacts.allowedAmounts) || timesOutsideWindows(parsed.reply, windows)) return 'reply_check';
+      // Кнопки со временем: каждый вариант должен лежать в посчитанном окне (с запасом на 30 минут приёма), иначе ответ не отправляем
+      const options: SlotOption[] = [];
+      // the model may repeat a time: each time is offered once
+      const seen = new Set<string>();
+      for (const o of parsed.options) {
+        const key = `${o.date}|${o.time}|${o.doctor ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (seen.size > 3) break;
+        const source = o.doctor ? doctors.get(o.doctor) : days;
+        const day = source?.get(o.date);
+        const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(o.time);
+        if (!day || !m) return 'reply_check';
+        const t = Number(m[1]) * 60 + Number(m[2]);
+        if (!day.windows.some(([a, b]) => t >= a && t + 30 <= b)) return 'reply_check';
+        const [, mm, dd] = o.date.split('-');
+        options.push({ date: o.date, time: o.time, label: `${day.wd} ${dd}.${mm}, ${o.time}${o.doctor ? ` · ${o.doctor.split(' ')[0]}` : ''}`, ...(o.doctor ? { doctor: o.doctor } : {}) });
+      }
+      return { intent: parsed.intent, reply: parsed.reply, handoff: false, reason: null, summary: parsed.summary, service: parsed.service, options };
+    };
+    let result = await attempt('', true);
+    if (typeof result === 'string') {
+      result = await attempt(`\n\nУВАГА: попередня відповідь не пройшла перевірку (${result === 'model' ? 'не JSON за вказаним форматом' : 'час поза списком вільних вікон, сума або порада'}). Відповідай ТІЛЬКИ JSON за форматом, час і дати бери ЛИШЕ зі списку вільних вікон вище; якщо вікон на потрібну дату немає, скажи про це й запропонуй найближчі дати зі списку. Мова відповіді: ${lang === 'ru' ? 'російська' : 'українська'}.`, false);
     }
-    return { intent: parsed.intent, reply: parsed.reply, handoff: false, reason: null, summary: parsed.summary, service: parsed.service, options };
+    return typeof result === 'string' ? handoff(result, lang) : result;
   }
 
   // The answer to a sudden health problem is written by the code: it does not evaluate the problem, offers the nearest times and tells
   // the staff the request is urgent (the summary starts with "ТЕРМІНОВО")
-  private async urgent(clinicId: string, patientText: string): Promise<Draft> {
-    const lang = isRussian(patientText) ? 'ru' : 'uk';
+  private async urgent(clinicId: string, lang: 'ru' | 'uk'): Promise<Draft> {
     const options = await this.freshOptions(clinicId).catch(() => [] as SlotOption[]);
     const summary = 'ТЕРМІНОВО: пацієнт описує гострий стан (біль, набряк, кровотеча чи подібне), потрібен найближчий час або дзвінок';
     if (!options.length) return { intent: 'handoff', reply: URGENT_TEXT[lang], handoff: true, reason: 'urgent', summary, service: null, options: [] };

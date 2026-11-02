@@ -18,10 +18,12 @@ const fake = {
   configured: true,
   calls: 0,
   reply: null as string | null,
+  seq: [] as string[],
   system: '',
   complete: async (system?: string) => {
     fake.calls++;
     fake.system = system ?? '';
+    if (fake.seq.length) return { text: fake.seq.shift()!, inputTokens: 100, outputTokens: 20 };
     if (fake.reply) return { text: fake.reply, inputTokens: 100, outputTokens: 20 };
     return { text: JSON.stringify({ intent: 'info', reply: 'Добрий день! Чим можемо допомогти?', summary: '', options: [] }), inputTokens: 100, outputTokens: 20 };
   },
@@ -284,6 +286,27 @@ describe('автовідповідь ШІ після сценарію запис
       }
       expect(fake.calls).toBe(calls);
     });
+  });
+
+  it('мова розмови не перемикається сама: російською спитали — російською передача людині; помилка перевірки відповіді спершу повторюється', async () => {
+    const c = await ready();
+    // a Russian question whose answer fails the check (a time outside the free windows) is asked again once; the second answer passes
+    const s = tomorrow();
+    jest.spyOn(app.get(ReportsService), 'freeSlots').mockResolvedValue([{ dayAt: s.date, doctor: null, cabinet: 'Терапія', freeMinutes: 540, windows: '09:00–18:00' }] as never);
+    const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { workHours: Object.fromEntries(days.map((d) => [d, { from: '09:00', to: '20:00' }])) } });
+    const answers = [JSON.stringify({ intent: 'booking', reply: 'Свободно в 23:00', summary: 'x', options: [] }), JSON.stringify({ intent: 'booking', reply: 'Выберите, пожалуйста, время кнопкой ниже.', summary: 'x', options: [{ date: s.date, time: '12:00' }] })];
+    const calls = fake.calls;
+    fake.seq = answers;
+    await write(c, 'какие есть окошки на завтра?');
+    expect(fake.calls).toBe(calls + 2);
+    expect(sent.at(-1)!.text).toBe('Выберите, пожалуйста, время кнопкой ниже.');
+    // both answers fail: a hand-over in the language of the patient, not in Ukrainian
+    fake.seq = [JSON.stringify({ intent: 'booking', reply: 'В 23:00', summary: '', options: [] }), JSON.stringify({ intent: 'booking', reply: 'В 22:00', summary: '', options: [] })];
+    sent.length = 0;
+    await write(c, 'а на послезавтра какие есть окошки?');
+    expect(sent.at(-1)!.text).toContain('Передаю ваш вопрос администратору клиники');
+    fake.seq = [];
   });
 
   it('повернення боту належить своїй клініці', async () => {

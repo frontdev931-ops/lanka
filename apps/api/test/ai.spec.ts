@@ -4,7 +4,7 @@ import request from 'supertest';
 import { clinicDate } from '../src/common/clinic-time';
 import { AiService } from '../src/ai/ai.service';
 import { ChatAssistantService } from '../src/ai/chat-assistant.service';
-import { handoffText, incomingHandoff, parseModelJson, replyViolates, timesOutsideWindows } from '../src/ai/guardrails';
+import { handoffText, incomingHandoff, languageOf, parseModelJson, replyViolates, timesOutsideWindows } from '../src/ai/guardrails';
 import { LlmClient, LlmError } from '../src/ai/llm.client';
 import { AppModule } from '../src/app.module';
 import { TelegramApi } from '../src/automations/telegram.api';
@@ -149,11 +149,16 @@ describe('ИИ-помощник в переписке: границы', () => {
   });
 
   it('фраза о передаче человеку — на языке пациента', () => {
-    expect(handoffText('Добрий день, у мене болить зуб')).toContain('адміністратору');
-    expect(handoffText('Здравствуйте, у меня болит зуб')).toContain('администратору клиники, он ответит');
-    expect(handoffText('мне пора на чистку?')).toContain('администратору клиники, он ответит');
-    expect(handoffText('Сколько стоит чистка?')).toContain('администратору клиники, он ответит');
-    expect(handoffText('???')).toContain('адміністратору');
+    expect(handoffText(languageOf(['Добрий день, у мене болить зуб']))).toContain('адміністратору');
+    expect(handoffText(languageOf(['Здравствуйте, у меня болит зуб']))).toContain('администратору клиники, он ответит');
+    expect(handoffText(languageOf(['мне пора на чистку?']))).toContain('администратору клиники, он ответит');
+    expect(handoffText(languageOf(['Сколько стоит чистка?']))).toContain('администратору клиники, он ответит');
+    expect(handoffText(languageOf(['???']))).toContain('адміністратору');
+    // short Russian messages without special letters are still Russian; the language of the conversation survives a message that shows none
+    expect(languageOf(['какие есть окошки на завтра?'])).toBe('ru');
+    expect(languageOf(['на 19:00', 'хочу записаться, какие есть окна'])).toBe('ru');
+    expect(languageOf(['а на завтра є вікна?', 'хочу записаться'])).toBe('uk');
+    expect(languageOf(['ок'])).toBe('uk');
   });
 
   it('время в ответе должно лежать в посчитанных свободных окнах', () => {
