@@ -52,13 +52,17 @@ describe('пароли и сброс', () => {
     await http().post('/auth/register').send({ acceptTerms: true, clinicName: 'Клініка', name: 'Анна', email, password: email }).expect(400);
   });
 
-  it('сброс: ответ одинаков для известной и неизвестной почты, письмо уходит только известной', async () => {
+  it('сброс: для неизвестной почты говорим, что пользователя нет, и письмо не уходит; известной письмо уходит; лимиты действуют и для неизвестных адресов', async () => {
     const u = await register();
-    const known = await http().post('/auth/forgot-password').send({ email: u.email }).expect(200);
-    const unknown = await http().post('/auth/forgot-password').send({ email: `none${rnd()}@example.com` }).expect(200);
-    expect(known.body).toEqual(unknown.body);
+    await http().post('/auth/forgot-password').send({ email: u.email }).expect(200);
+    const unknown = `none${rnd()}@example.com`;
+    const res = await http().post('/auth/forgot-password').send({ email: unknown }).expect(404);
+    expect(JSON.stringify(res.body)).toContain('не знайдено');
     expect(tokenFromMail(u.email, 'reset')).toBeTruthy();
     expect(mail.outbox.filter((m) => m.to.startsWith('none'))).toHaveLength(0);
+    // a wrong address cannot be tried without limit
+    for (let i = 0; i < 2; i++) await http().post('/auth/forgot-password').send({ email: unknown }).expect(404);
+    await http().post('/auth/forgot-password').send({ email: unknown }).expect(429);
   });
 
   it('ссылка одноразовая; после сброса старый пароль и старые сессии не работают, в базе только хэш', async () => {

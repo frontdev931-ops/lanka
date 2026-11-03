@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { NotFoundException, BadRequestException, ConflictException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Role } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
@@ -174,10 +174,11 @@ export class AuthService {
     await this.limits.consume(`forgot:ip:${ip}`, 10, HOUR);
     await this.limits.consume(`forgot:email:${e}`, 3, HOUR);
     const user = await this.prisma.user.findUnique({ where: { email: e } });
-    if (user) {
-      const token = await this.issueToken(user.id, 'RESET', RESET_TTL);
-      await this.mail.send({ to: e, ...mailText('reset', lang, `${this.webOrigin()}/reset/${token}`) });
-    }
+    // The owner of the service decided that a person must be told when there is no such account (otherwise a wrong address looks like a mail
+    // that never arrives). The price is that the form shows which addresses are registered; the limits above (per address and per IP) stay.
+    if (!user) throw new NotFoundException('user_not_found');
+    const token = await this.issueToken(user.id, 'RESET', RESET_TTL);
+    await this.mail.send({ to: e, ...mailText('reset', lang, `${this.webOrigin()}/reset/${token}`) });
     return { ok: true };
   }
 

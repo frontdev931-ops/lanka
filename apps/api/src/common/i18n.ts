@@ -281,6 +281,7 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Укажите корректные дату и время записи',
     en: 'Enter a valid date and time of the appointment',
   },
+  user_not_found: { uk: 'Користувача з такою поштою не знайдено. Перевірте адресу', ru: 'Пользователь с такой почтой не найден. Проверьте адрес', en: 'No account with this email was found. Check the address' },
   doctor_unknown: {
     uk: 'Такого лікаря немає в Cliniccards. Оновіть список лікарів',
     ru: 'Такого врача нет в Cliniccards. Обновите список врачей',
