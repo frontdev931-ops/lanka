@@ -7,6 +7,7 @@ import {
   ExternalInvoice,
   ExternalCabinet,
   ExternalDoctor,
+  ExternalWorkingHours,
   ExternalPatient,
   ExternalPlan,
   ExternalReminder,
@@ -264,7 +265,7 @@ export class CliniccardsConnector implements ClinicConnector {
       const price = num(r.item_price);
       const group = decodeEntities(r.group_name ?? '').trim();
       const description = decodeEntities(r.item_additional ?? '').replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').trim();
-      out.push({ externalId: String(r.item_id), name, ...(group ? { groupName: group } : {}), ...(description ? { description } : {}), ...(price !== undefined && price > 0 ? { priceUah: price } : {}) });
+      out.push({ externalId: String(r.item_id), name, ...(group ? { groupName: group } : {}), ...(description ? { description } : {}), ...(price !== undefined && price >= 0 ? { priceUah: price } : {}) });
     }
     return out;
   }
@@ -272,6 +273,31 @@ export class CliniccardsConnector implements ClinicConnector {
   async fetchCabinets(): Promise<ExternalCabinet[]> {
     const rows = await this.client.get<RawCabinet[]>('/cabinets');
     return (rows ?? []).filter((c) => c.cabinet_id !== undefined && c.cabinet_id !== null).map((c) => ({ externalId: String(c.cabinet_id), name: c.name?.trim() || `#${c.cabinet_id}` }));
+  }
+
+  // GET /schedule-settings (official documentation): working_days with day_of_week 1..7, active 1/0, opening and closing HH:MM; holidays as
+  // YYYY-MM-DD. All seven days must be understood, otherwise nothing is imported: hours are never guessed (not from visits, not from the
+  // borders of a displayed calendar).
+  async fetchWorkingHours(): Promise<ExternalWorkingHours | null> {
+    const d = await this.client.get<{ working_days?: { day_of_week?: unknown; active?: unknown; opening?: unknown; closing?: unknown }[]; holidays?: unknown }>('/schedule-settings');
+    if (!d || !Array.isArray(d.working_days)) return null;
+    const hm = (v: unknown) => (typeof v === 'string' && /^([01]?\d|2[0-3]):[0-5]\d(:\d\d)?$/.test(v) ? v.slice(0, v.indexOf(':') + 3).padStart(5, '0') : null);
+    const week: ExternalWorkingHours['week'] = {};
+    for (const w of d.working_days) {
+      const n = Number(w.day_of_week);
+      if (!Number.isInteger(n) || n < 1 || n > 7) return null;
+      if (Number(w.active) === 0) {
+        week[String(n)] = null;
+        continue;
+      }
+      const from = hm(w.opening);
+      const to = hm(w.closing);
+      if (!from || !to || from >= to) return null;
+      week[String(n)] = { from, to };
+    }
+    if (Object.keys(week).length !== 7) return null;
+    const holidays = Array.isArray(d.holidays) ? d.holidays.filter((x): x is string => typeof x === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x)) : [];
+    return { week, holidays };
   }
 
   // GET /staff: only people with the role DOCTOR, without their phones

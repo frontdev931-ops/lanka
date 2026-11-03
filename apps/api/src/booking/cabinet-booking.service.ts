@@ -3,8 +3,10 @@ import { Prisma } from '@prisma/client';
 import { clinicDate, clinicHm, localToUtc } from '../common/clinic-time';
 import { readWorkHours } from '../clinic/work-hours';
 import { ExternalBlock, ExternalVisit } from '../integrations/connector';
+import { SettingsImportService } from '../integrations/settings-import.service';
 import { SyncService } from '../integrations/sync.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { priceDivergent } from '../kb/kb.service';
 import { DoctorsService } from './doctors.service';
 
 const MIN = 60_000;
@@ -42,6 +44,7 @@ export class CabinetBookingService {
     private prisma: PrismaService,
     private sync: SyncService,
     private doctors: DoctorsService,
+    private imports: SettingsImportService,
   ) {}
 
   // ---- settings ----
@@ -57,9 +60,9 @@ export class CabinetBookingService {
   async settings(clinicId: string, refreshDoctors = true) {
     if (refreshDoctors) await this.doctors.refresh(clinicId);
     const [clinic, cabinets, services, doctors] = await Promise.all([
-      this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { scheduleMode: true, sharedDoctorId: true, sharedDoctorName: true, workHours: true, workHoursExceptions: true } }),
+      this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { scheduleMode: true, sharedDoctorId: true, sharedDoctorName: true, workHours: true, workHoursExceptions: true, workHoursSource: true, workHoursUpdatedAt: true, workHoursHolidays: true, priceListSyncedAt: true, priceListCount: true } }),
       this.prisma.cabinet.findMany({ where: { clinicId }, orderBy: { name: 'asc' }, select: { externalId: true, name: true, onlineBooking: true, acceptsUrgent: true } }),
-      this.prisma.kbItem.findMany({ where: { clinicId, kind: 'SERVICE', active: true }, orderBy: { title: 'asc' }, select: { id: true, title: true, durationMin: true, onlineBooking: true, cabinetIds: true, approvedAt: true } }),
+      this.prisma.kbItem.findMany({ where: { clinicId, kind: 'SERVICE', active: true }, orderBy: [{ category: 'asc' }, { title: 'asc' }], select: { id: true, title: true, category: true, priceUah: true, durationMin: true, onlineBooking: true, cabinetIds: true, approvedAt: true, source: true, externalId: true, externalTitle: true, externalPrice: true, externalPriceAcked: true, missingInSourceAt: true } }),
       this.doctors.activeDoctors(clinicId),
     ]);
     const hoursSet = !!clinic.workHours && typeof clinic.workHours === 'object' && Object.keys(clinic.workHours as object).length > 0;
@@ -67,16 +70,36 @@ export class CabinetBookingService {
     const shared = clinic.sharedDoctorId ? doctors.find((d) => d.externalId === clinic.sharedDoctorId) : null;
     if (!clinic.sharedDoctorId || !shared) problems.push('no_shared_account');
     if (!cabinets.some((c) => c.onlineBooking)) problems.push('no_cabinets');
-    if (!services.some((s) => s.onlineBooking && s.durationMin && s.approvedAt)) problems.push('no_services');
+    if (!services.some((s) => s.onlineBooking && s.durationMin && s.approvedAt && !s.missingInSourceAt)) problems.push('no_services');
     if (!hoursSet || Object.values(readWorkHours(clinic.workHours)).every((h) => !h)) problems.push('no_hours');
     return {
       mode: clinic.scheduleMode as 'DOCTORS' | 'CABINETS',
       shared: clinic.sharedDoctorId ? { doctorId: clinic.sharedDoctorId, name: shared ? `${shared.lastName} ${shared.firstName}`.trim() : clinic.sharedDoctorName, missing: !shared } : null,
       accounts: doctors.map((d) => ({ externalId: d.externalId, name: `${d.lastName} ${d.firstName}`.trim() })),
       cabinets,
-      services: services.map((s) => ({ id: s.id, title: s.title, durationMin: s.durationMin, approved: !!s.approvedAt, onlineBooking: s.onlineBooking, cabinetIds: s.cabinetIds })),
+      services: services.map((s) => ({
+        id: s.id,
+        title: s.title,
+        category: s.category,
+        durationMin: s.durationMin,
+        approved: !!s.approvedAt,
+        onlineBooking: s.onlineBooking,
+        cabinetIds: s.cabinetIds,
+        // where the position came from: the price list of Cliniccards (with its id there) or typed by the clinic
+        fromCliniccards: !!s.externalId,
+        // Cliniccards now has another name or price than the approved one: shown, never applied silently
+        changedInSource: (!!s.externalId && !!s.externalTitle && s.externalTitle !== s.title) || priceDivergent(s),
+        priceState: s.priceUah === null ? 'UNKNOWN' : s.priceUah === 0 ? 'FREE' : 'SET',
+        priceDivergence: priceDivergent(s) ? { own: s.priceUah, source: s.externalPrice } : null,
+        // vanished from the price list of Cliniccards: new online bookings of it are paused until the administrator decides
+        missingInSource: !!s.missingInSourceAt,
+      })),
+      // the length of a visit is not in the price list of Cliniccards: only the missing ones are asked of the clinic
+      missingLength: services.filter((s) => !s.durationMin).length,
+      priceList: { syncedAt: clinic.priceListSyncedAt, count: clinic.priceListCount, imported: services.filter((s) => s.externalId).length },
       exceptions: this.parseExceptions(clinic.workHoursExceptions),
       hoursSet,
+      hours: { source: hoursSet ? clinic.workHoursSource ?? 'MANUAL' : null, updatedAt: hoursSet ? clinic.workHoursUpdatedAt : null, holidays: hoursSet && clinic.workHoursSource === 'CLINICCARDS' && Array.isArray(clinic.workHoursHolidays) ? (clinic.workHoursHolidays as string[]) : [] },
       problems,
     };
   }
@@ -112,17 +135,37 @@ export class CabinetBookingService {
   }
 
   // A service can be booked online only with an approved name and a KNOWN length; cabinets: empty means any cabinet open for online booking
-  async setServices(clinicId: string, userId: string, rows: { id: string; onlineBooking: boolean; cabinetIds: string[] }[]) {
+  async setServices(clinicId: string, userId: string, rows: { id: string; onlineBooking: boolean; cabinetIds: string[]; durationMin?: number }[]) {
     const cabinets = new Set((await this.prisma.cabinet.findMany({ where: { clinicId }, select: { externalId: true } })).map((c) => c.externalId));
     for (const r of rows) {
       const item = await this.prisma.kbItem.findFirst({ where: { id: r.id, clinicId, kind: 'SERVICE' } });
       if (!item) throw new BadRequestException('bad_services');
-      if (r.onlineBooking && (!item.durationMin || !item.approvedAt)) throw new BadRequestException('service_needs_duration');
+      // the length that is missing is asked of the clinic (the price list of Cliniccards has none); it is never guessed
+      if (r.durationMin !== undefined && (!Number.isInteger(r.durationMin) || r.durationMin < 5 || r.durationMin > 480)) throw new BadRequestException('bad_duration');
+      const durationMin = r.durationMin ?? item.durationMin;
+      if (r.onlineBooking && (!durationMin || !item.approvedAt)) throw new BadRequestException('service_needs_duration');
+      // a position that vanished from the price list of Cliniccards stays paused until the administrator decides (see the knowledge base)
+      if (r.onlineBooking && item.missingInSourceAt) throw new BadRequestException('service_missing_in_source');
       if (r.cabinetIds.some((c) => !cabinets.has(c))) throw new BadRequestException('bad_cabinets');
-      await this.prisma.kbItem.update({ where: { id: item.id }, data: { onlineBooking: r.onlineBooking, cabinetIds: [...new Set(r.cabinetIds)] } });
+      await this.prisma.kbItem.update({ where: { id: item.id }, data: { onlineBooking: r.onlineBooking, cabinetIds: [...new Set(r.cabinetIds)], ...(r.durationMin !== undefined ? { durationMin: r.durationMin, reviewedAt: new Date() } : {}) } });
     }
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'booking.services', details: { count: rows.length } } });
     return this.settings(clinicId, false);
+  }
+
+  // Takes the price list (and the hours, unless the clinic typed them) from Cliniccards: reads only
+  async importFromCliniccards(clinicId: string, userId: string) {
+    const connector = await this.sync.connectorForClinic(clinicId).catch(() => null);
+    if (!connector) throw new BadRequestException('kb_import_unavailable');
+    let prices;
+    try {
+      prices = await this.imports.importPrices(clinicId, connector);
+    } catch {
+      throw new BadRequestException('kb_import_failed');
+    }
+    const hours = await this.imports.importHours(clinicId, connector).catch(() => 'unavailable' as const);
+    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'booking.import', details: { ...prices, hours } } });
+    return { ...(await this.settings(clinicId, false)), imported: { ...prices, hours } };
   }
 
   async setExceptions(clinicId: string, userId: string, input: unknown) {
@@ -178,20 +221,22 @@ export class CabinetBookingService {
   // Free windows by cabinet. Hours are the clinic's working hours with their exceptions; unset hours offer nothing.
   async windows(clinicId: string, opts: { minutes: number; service?: { cabinetIds: string[] } | null; urgent?: boolean; days?: number; force?: boolean }): Promise<CabinetWindow[]> {
     const days = opts.days ?? 7;
-    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { workHours: true, workHoursExceptions: true } });
+    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { workHours: true, workHoursExceptions: true, workHoursSource: true, workHoursHolidays: true } });
     const configured = !!clinic.workHours && typeof clinic.workHours === 'object' && Object.keys(clinic.workHours as object).length > 0;
     const cabinets = await this.allowedCabinets(clinicId, opts.service ?? null, !!opts.urgent);
     if (!configured || !cabinets.length) return [];
     const { visits, blocks } = await this.fresh(clinicId, days, opts.force);
     const week = readWorkHours(clinic.workHours);
     const exceptions = this.parseExceptions(clinic.workHoursExceptions);
+    // holidays of the clinic from Cliniccards are closed days, unless the clinic made an exception for that date by hand
+    const holidays = new Set(clinic.workHoursSource === 'CLINICCARDS' && Array.isArray(clinic.workHoursHolidays) ? (clinic.workHoursHolidays as string[]) : []);
     const { dates } = this.range(days);
     const today = clinicDate(new Date());
     const earliestToday = Math.ceil((toMin(clinicHm(new Date())) + LEAD_MIN) / 30) * 30;
     const out: CabinetWindow[] = [];
     for (const date of dates) {
       const exc = exceptions.find((e) => e.date === date);
-      const h = exc ? (exc.closed ? null : { from: exc.from!, to: exc.to! }) : week[String(new Date(`${date}T00:00:00Z`).getUTCDay() || 7)];
+      const h = exc ? (exc.closed ? null : { from: exc.from!, to: exc.to! }) : holidays.has(date) ? null : week[String(new Date(`${date}T00:00:00Z`).getUTCDay() || 7)];
       if (!h) continue;
       for (const cabinetId of cabinets) {
         // EVERY visit in the cabinet counts, whatever doctor_id it has (the shared account is not one busy physical doctor)

@@ -15,10 +15,16 @@ interface Cab {
 interface Svc {
   id: string;
   title: string;
+  category: string | null;
   durationMin: number | null;
   approved: boolean;
   onlineBooking: boolean;
   cabinetIds: string[];
+  fromCliniccards: boolean;
+  changedInSource: boolean;
+  priceState?: 'UNKNOWN' | 'FREE' | 'SET';
+  priceDivergence?: { own: number | null; source: number } | null;
+  missingInSource?: boolean;
 }
 interface Exc {
   date: string;
@@ -34,6 +40,9 @@ interface Settings {
   services: Svc[];
   exceptions: Exc[];
   hoursSet: boolean;
+  hours: { source: 'CLINICCARDS' | 'MANUAL' | null; updatedAt: string | null; holidays: string[] };
+  priceList: { syncedAt: string | null; count: number | null; imported: number };
+  missingLength: number;
   problems: string[];
 }
 
@@ -77,19 +86,35 @@ export function BookingSettings() {
           <span><b>{t('cb.byCabinets')}</b><br /><span className="muted">{t('cb.byCabinetsHint')}</span></span>
         </label>
       </Card>
-      {s.mode === 'DOCTORS' ? <DoctorSettings /> : <CabinetSettings s={s} busy={busy} call={call} />}
+      {s.mode === 'DOCTORS' ? <DoctorSettings /> : <CabinetSettings s={s} busy={busy} call={call} reload={load} setError={setError} />}
     </>
   );
 }
 
-function CabinetSettings({ s, busy, call }: { s: Settings; busy: boolean; call: (path: string, body: unknown) => Promise<void> }) {
+function CabinetSettings({ s, busy, call, reload, setError }: { s: Settings; busy: boolean; call: (path: string, body: unknown) => Promise<void>; reload: () => Promise<unknown>; setError: (m: string) => void }) {
   const t = useT();
+  const [q, setQ] = useState('');
+  const [dur, setDur] = useState<Record<string, string>>({});
+  const [importing, setImporting] = useState(false);
+  const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString([], { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+  async function importNow() {
+    setImporting(true);
+    try {
+      await api('/booking-settings/import', { method: 'POST' });
+      await reload();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  }
+  const shown = s.services.filter((v) => !q.trim() || `${v.title} ${v.category ?? ''}`.toLowerCase().includes(q.trim().toLowerCase()));
   const [exc, setExc] = useState<Exc[]>(s.exceptions);
   const [saved, setSaved] = useState(false);
   useEffect(() => setExc(s.exceptions), [s.exceptions]);
 
   const cabs = (patch: (c: Cab) => Cab) => call('cabinets', { cabinets: s.cabinets.map((c) => { const x = patch(c); return { externalId: x.externalId, onlineBooking: x.onlineBooking, acceptsUrgent: x.acceptsUrgent }; }) });
-  const svc = (id: string, patch: Partial<Svc>) => call('services', { services: [{ id, onlineBooking: patch.onlineBooking ?? s.services.find((x) => x.id === id)!.onlineBooking, cabinetIds: patch.cabinetIds ?? s.services.find((x) => x.id === id)!.cabinetIds }] });
+  const svc = (id: string, patch: Partial<Svc>) => call('services', { services: [{ id, onlineBooking: patch.onlineBooking ?? s.services.find((x) => x.id === id)!.onlineBooking, cabinetIds: patch.cabinetIds ?? s.services.find((x) => x.id === id)!.cabinetIds, ...(patch.durationMin ? { durationMin: patch.durationMin } : {}) }] });
   const setE = (list: Exc[]) => { setSaved(false); setExc(list); };
 
   return (
@@ -135,16 +160,39 @@ function CabinetSettings({ s, busy, call }: { s: Settings; busy: boolean; call: 
 
       <b>{t('cb.services')}</b>
       <p className="muted" style={{ margin: '2px 0 6px' }}>{t('cb.servicesHint')}</p>
+      <p className="muted" style={{ margin: '0 0 6px' }}>
+        {s.priceList.syncedAt ? t('cb.priceFrom', { n: s.priceList.count ?? s.priceList.imported, time: when(s.priceList.syncedAt) }) : t('cb.priceNone')}
+        {s.missingLength > 0 && ` ${t('cb.missingLength', { n: s.missingLength })}`}
+      </p>
+      <div className="toolbar doctor-toolbar" style={{ marginBottom: 8 }}>
+        <button type="button" className="btn" disabled={busy || importing} onClick={importNow}>{importing ? t('common.wait') : t('cb.importPrices')}</button>
+      </div>
       {s.services.length === 0 && <p className="muted">{t('dr.noServices')}</p>}
-      {s.services.map((v) => {
+      {s.services.length > 8 && <input className="input" style={{ marginBottom: 8 }} placeholder={t('cb.search')} value={q} onChange={(e) => setQ(e.target.value)} />}
+      {shown.slice(0, 60).map((v) => {
         const ok = !!v.durationMin && v.approved;
         return (
           <div className="doctor-card" key={v.id}>
             <div className="doctor-body" style={{ borderTop: 'none' }}>
               <label className="check-row" style={{ margin: '4px 0' }}>
-                <input type="checkbox" disabled={busy || (!ok && !v.onlineBooking)} checked={v.onlineBooking} onChange={(e) => svc(v.id, { onlineBooking: e.target.checked })} />
-                <span><b>{v.title}</b>{v.durationMin ? ` · ${v.durationMin} ${t('book.min')}` : ''}{!ok && <> <Badge tone="amber">{v.durationMin ? t('cb.notApproved') : t('cb.noLength')}</Badge></>}</span>
+                <input type="checkbox" disabled={busy || ((!ok || v.missingInSource) && !v.onlineBooking)} checked={v.onlineBooking} onChange={(e) => svc(v.id, { onlineBooking: e.target.checked })} />
+                <span>
+                  <b>{v.title}</b>{v.durationMin ? ` · ${v.durationMin} ${t('book.min')}` : ''}
+                  {v.category && <><br /><span className="muted">{v.category}</span></>}
+                  {v.fromCliniccards && <> <Badge tone="blue">Cliniccards</Badge></>}
+                  {v.changedInSource && <> <Badge tone="amber">{t('cb.changed')}</Badge></>}
+                  {v.missingInSource && <> <Badge tone="red">{t('kb.review.missingShort')}</Badge></>}
+                  {v.priceState === 'UNKNOWN' && <> <Badge tone="gray">{t('kb.priceUnknown')}</Badge></>}
+                  {v.priceState === 'FREE' && <> <Badge tone="green">{t('kb.priceFree')}</Badge></>}
+                  {!v.approved && <> <Badge tone="amber">{t('cb.notApproved')}</Badge></>}
+                </span>
               </label>
+              {!v.durationMin && (
+                <div className="doctor-row">
+                  <input className="input" type="number" min={5} max={480} inputMode="numeric" aria-label={t('cb.lengthLabel')} placeholder={t('cb.lengthPh')} value={dur[v.id] ?? ''} onChange={(e) => setDur({ ...dur, [v.id]: e.target.value })} />
+                  <button type="button" className="btn btn-sm" disabled={busy || !dur[v.id]} onClick={() => svc(v.id, { durationMin: Number(dur[v.id]) })}>{t('common.save')}</button>
+                </div>
+              )}
               {v.onlineBooking && s.cabinets.length > 1 && (
                 <div>
                   <span className="muted">{t('cb.serviceCabinets')}</span>
@@ -160,9 +208,10 @@ function CabinetSettings({ s, busy, call }: { s: Settings; busy: boolean; call: 
           </div>
         );
       })}
+      {shown.length > 60 && <p className="muted">{t('cb.moreServices', { n: shown.length - 60 })}</p>}
 
       <b>{t('cb.hours')}</b>
-      <p className="muted" style={{ margin: '2px 0 6px' }}>{s.hoursSet ? t('cb.hoursHint') : t('cb.hoursUnset')}</p>
+      <p className="muted" style={{ margin: '2px 0 6px' }}>{s.hoursSet ? `${t('cb.hoursHint')} ${s.hours.source === 'CLINICCARDS' ? t('wh.srcCliniccards', { time: when(s.hours.updatedAt) }) : t('wh.srcManual', { time: when(s.hours.updatedAt) })}` : t('cb.hoursUnset')}</p>
       {exc.map((x, i) => (
         <div className="doctor-row" key={i}>
           <input className="input" type="date" aria-label={t('book.date')} value={x.date} onChange={(e) => setE(exc.map((y, j) => (j === i ? { ...y, date: e.target.value } : y)))} />

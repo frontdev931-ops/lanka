@@ -113,7 +113,9 @@ describe('налаштування запису за кабінетами', () =
     // Cliniccards returned doctors, and yet the mode stays "by doctors": nothing is switched on because the API returned one doctor
     expect(s0.mode).toBe('DOCTORS');
     expect(s0.accounts.map((a: { externalId: string }) => a.externalId).sort()).toEqual(['501', '502', '503']);
-    expect(s0.problems.sort()).toEqual(['no_cabinets', 'no_hours', 'no_services', 'no_shared_account']);
+    // the working hours came from Cliniccards with the sync, so they are not missing; the services are imported but none is allowed yet
+    expect(s0.problems.sort()).toEqual(['no_cabinets', 'no_services', 'no_shared_account']);
+    expect(s0.hours).toMatchObject({ source: 'CLINICCARDS' });
     // the way a request is handled is a different setting and is not touched
     expect(await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).toMatchObject({ aiAutoBooking: false, scheduleMode: 'DOCTORS' });
 
@@ -136,7 +138,7 @@ describe('налаштування запису за кабінетами', () =
     await put(c, '/booking-settings/exceptions', { exceptions: [{ date: day(3), closed: false, from: '14:00', to: '10:00' }] }).expect(400);
     const s2 = (await put(c, '/booking-settings/exceptions', { exceptions: [{ date: day(3), closed: true }, { date: day(4), closed: false, from: '10:00', to: '14:00' }] }).expect(200)).body;
     expect(s2.exceptions).toHaveLength(2);
-    expect(s2.problems).toEqual(['no_hours']); // what is still missing, named for booking by cabinets
+    expect(s2.problems).toEqual([]); // the hours came from Cliniccards, so nothing is missing any more
     await put(c, '/clinic/work-hours', WEEK).expect(200);
     expect((await http().get('/booking-settings').set(auth(c.token))).body.problems).toEqual([]);
     expect((await put(c, '/booking-settings/mode', { mode: 'CABINETS' }).expect(200)).body.mode).toBe('CABINETS');
@@ -197,8 +199,12 @@ describe('вільні вікна за кабінетами', () => {
     expect(only.every((x) => x.cabinetId === '802')).toBe(true);
     // urgent: only the cabinets the clinic allowed for urgent patients (none yet)
     expect(await win(c, 30, { urgent: true })).toEqual([]);
-    // hours not configured: nothing is offered
+    // hours not configured (Cliniccards does not give them and nobody typed them): nothing is offered
+    const keep = mock.data.scheduleSettings;
+    mock.data.scheduleSettings = null;
     const bare = await clinic({ hours: false });
+    mock.data.scheduleSettings = keep;
+    expect((await http().get('/booking-settings').set(auth(bare.token))).body.problems).toContain('no_hours');
     expect(await win(bare, 30)).toEqual([]);
     // no cabinet open for online booking: nothing
     await put(c, '/booking-settings/cabinets', { cabinets: [{ externalId: '801', onlineBooking: false, acceptsUrgent: false }, { externalId: '802', onlineBooking: false, acceptsUrgent: false }] }).expect(200);

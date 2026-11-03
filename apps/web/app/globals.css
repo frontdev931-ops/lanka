@@ -379,7 +379,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
   .input, .select, .field .input { font-size: 16px; min-height: 44px; }
   .select.sm { font-size: 15px; min-height: 40px; }
   .btn { min-height: 44px; padding: 10px 16px; }
-  .btn-sm { min-height: 40px; padding: 8px 12px; font-size: 14px; }
+  .btn-sm { min-height: 44px; padding: 8px 12px; font-size: 14px; }
   .checkbox input { width: 20px; height: 20px; }
   .toolbar > .input, .toolbar > .select, .toolbar > .search, .toolbar > .grow { flex: 1 1 100%; }
   .toolbar > .btn-primary:not(.btn-sm) { flex: 1 1 100%; }
@@ -424,6 +424,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .rule-preview { margin-top: 10px; padding: 10px 12px; background: var(--primary-soft); border-radius: 8px; font-size: 13px; line-height: 1.5; }
 .rule-preview .sample { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
 textarea.input { resize: vertical; min-height: 70px; font: inherit; }
+@media (max-width: 700px) { textarea.input { font-size: 16px; } }
 .msg-history { display: grid; gap: 10px; margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
 .msg-item { font-size: 14px; line-height: 1.45; }
 
@@ -593,3 +594,5 @@ body { -webkit-tap-highlight-color: transparent; }
 .doctor-card .btn, .doctor-body .btn { min-height: 44px; }
 
 .doctor-toolbar .btn, .doctor-row .btn { min-height: 44px; }
+
+.doctor-toolbar-btn { min-height: 44px; }

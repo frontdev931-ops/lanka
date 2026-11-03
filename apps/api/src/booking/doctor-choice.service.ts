@@ -218,6 +218,8 @@ export class DoctorChoiceService {
   // ---- the first decision of a booking dialogue ----
 
   async decide(c: ChoiceContext): Promise<Decision> {
+    // The service vanished from the price list of Cliniccards: new online bookings of it are paused until an administrator decides
+    if (c.service.missingInSourceAt) return this.handoff(c, {}, 'послугу прибрано з прайсу Cliniccards: запис призупинено до рішення адміністратора');
     const mode = await this.mode(c.clinicId);
     if (mode.scheduleMode === 'CABINETS') return this.decideCabinets(c, mode.sharedDoctorId);
     const docs = await this.known(c.clinicId);

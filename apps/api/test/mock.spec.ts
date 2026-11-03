@@ -210,10 +210,11 @@ describe('синхронизация и отчёты на данных имит�
 
   it('рабочие часы клиники: проверка, роли, изоляция', async () => {
     const week = (from: string, to: string) => Object.fromEntries(['1', '2', '3', '4', '5', '6', '7'].map((d) => [d, { from, to }]));
-    // по умолчанию 9:00–20:00 каждый день
+    // the hours came from Cliniccards with the sync (GET /schedule-settings of the mock: Monday to Saturday 09:00-21:00, Sunday off), with the source named
     const def = (await http().get('/clinic/work-hours').set(auth(owner)).expect(200)).body;
-    expect(def['1']).toEqual({ from: '09:00', to: '20:00' });
-    expect(def['7']).toEqual({ from: '09:00', to: '20:00' });
+    expect(def['1']).toEqual({ from: '09:00', to: '21:00' });
+    expect(def['7']).toBeNull();
+    expect((await http().get('/clinic/work-hours/info').set(auth(owner)).expect(200)).body).toMatchObject({ configured: true, source: 'CLINICCARDS', connected: true });
 
     await http().put('/clinic/work-hours').set(auth(admin)).send(week('10:00', '18:00')).expect(403); // администратор не меняет
     await http().put('/clinic/work-hours').set(auth(owner)).send({ ...week('10:00', '18:00'), '3': { from: '18:00', to: '10:00' } }).expect(400); // начало позже конца
@@ -224,10 +225,14 @@ describe('синхронизация и отчёты на данных имит�
     const saved = (await http().get('/clinic/work-hours').set(auth(owner)).expect(200)).body;
     expect(saved['1']).toEqual({ from: '10:00', to: '18:00' });
     expect(saved['7']).toBeNull();
+    // typed by hand: the source is now MANUAL and the next sync does not replace it
+    expect((await http().get('/clinic/work-hours/info').set(auth(owner)).expect(200)).body).toMatchObject({ configured: true, source: 'MANUAL' });
 
     // другая клиника своих часов не меняет и чужих не видит
     const other = await http().post('/auth/register').send({ acceptTerms: true, clinicName: `Часы ${rnd()}`, name: 'Ольга', email: `h${rnd()}@example.com`, password: 'password123' }).expect(201);
+    // a clinic that never set them: the form shows 09:00-20:00 as a default but it is NOT a setting, and the info says so
     expect((await http().get('/clinic/work-hours').set(auth(other.body.accessToken)).expect(200)).body['1']).toEqual({ from: '09:00', to: '20:00' });
+    expect((await http().get('/clinic/work-hours/info').set(auth(other.body.accessToken)).expect(200)).body).toMatchObject({ configured: false, source: null, connected: false });
     await http().put('/clinic/work-hours').set(auth(owner)).send(week('09:00', '20:00')).expect(200);
   });
 

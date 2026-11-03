@@ -54,12 +54,13 @@ beforeEach(() => {
   sent.length = 0;
 });
 
-// A clinic with a bot, one cabinet (so the schedule has free windows every working day) and Telegram on
+// A clinic with a bot, one cabinet (so the schedule has free windows every working day) and Telegram on. The hours are set by the clinic:
+// without shifts and without set hours there is no schedule, and no time is offered.
 async function clinic(over: Record<string, unknown> = {}) {
   const email = `w${rnd()}@example.com`;
   const res = await http().post('/auth/register').send({ acceptTerms: true, clinicName: `Клініка ${rnd()}`, name: 'Анна', email, password: PASSWORD }).expect(201);
   const clinicId = (await prisma.user.findUniqueOrThrow({ where: { email }, include: { memberships: true } })).memberships[0].clinicId;
-  await prisma.clinic.update({ where: { id: clinicId }, data: { sendingEnabled: true, autoSendService: true, ...over } });
+  await prisma.clinic.update({ where: { id: clinicId }, data: { sendingEnabled: true, autoSendService: true, workHours: Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((d) => [String(d), { from: '09:00', to: '20:00' }])), workHoursSource: 'MANUAL', workHoursUpdatedAt: new Date(), ...over } });
   await http().post('/automations/telegram').set(auth(res.body.accessToken)).send({ token: TOKEN }).expect(201);
   await prisma.cabinet.create({ data: { clinicId, externalId: `c${rnd()}`, name: 'Кабінет 1' } });
   return { token: res.body.accessToken as string, clinicId };

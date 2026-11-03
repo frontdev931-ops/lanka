@@ -19,6 +19,17 @@ interface Item {
   source: string;
   approved: boolean;
   stale: boolean;
+  priceState?: 'UNKNOWN' | 'FREE' | 'SET';
+  priceDivergence?: { own: number | null; source: number } | null;
+  fromCliniccards?: boolean;
+  missingInSource?: boolean;
+}
+interface Review {
+  syncedAt: string | null;
+  note: string | null;
+  priceChanges: { id: string; title: string; category: string | null; own: number | null; source: number | null }[];
+  missing: { id: string; title: string; category: string | null }[];
+  matches: { manual: { id: string; title: string; category: string | null; priceUah: number | null }; candidates: { id: string; title: string; category: string | null; priceUah: number | null }[] }[];
 }
 interface Data {
   items: Item[];
@@ -32,6 +43,7 @@ export default function KnowledgePage() {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();
   const [data, setData] = useState<Data | null>(null);
+  const [review, setReview] = useState<Review | null>(null);
   const [kind, setKind] = useState<Kind>('SERVICE');
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
@@ -41,7 +53,10 @@ export default function KnowledgePage() {
   const [me, setMe] = useState<{ role: string } | null>(null);
   const canEdit = me?.role === 'OWNER' || me?.role === 'MANAGER';
 
-  const load = useCallback(() => api<Data>('/knowledge').then(setData).catch((e) => setError((e as Error).message)), []);
+  const load = useCallback(() => {
+    api<Review>('/knowledge/review').then(setReview).catch(() => undefined);
+    return api<Data>('/knowledge').then(setData).catch((e) => setError((e as Error).message));
+  }, []);
   useEffect(() => {
     load();
     api<{ role: string }>('/auth/me').then(setMe).catch(() => undefined);
@@ -94,6 +109,49 @@ export default function KnowledgePage() {
         <section className="card stat"><div className="stat-top">{t('kb.drafts')}</div><div className="stat-value">{s.drafts}</div></section>
         <section className="card stat"><div className="stat-top">{t('kb.stale')}</div><div className="stat-value">{s.stale}</div></section>
       </div>
+
+      {canEdit && review && (review.priceChanges.length > 0 || review.missing.length > 0 || review.matches.length > 0 || review.note) && (
+        <Card title={t('kb.review.title')}>
+          <p className="rule" style={{ marginTop: 0 }}>{t('kb.review.hint')}</p>
+          {review.note && <Alert tone="warn">{t('kb.review.suspicious', { n: review.note.split(':')[1] ?? '' })}</Alert>}
+          {review.priceChanges.map((c) => (
+            <div key={c.id} className="req-item">
+              <b>{c.title}</b>{c.category ? <span className="muted"> · {c.category}</span> : null}
+              <span>{t('kb.review.priceChanged', { own: c.own === null ? t('kb.priceUnknown') : c.own === 0 ? t('kb.priceFree') : `${c.own} ${t('kb.uah')}`, source: c.source === 0 ? '0' : `${c.source} ${t('kb.uah')}` })}</span>
+              <span className="muted">{t('kb.review.priceMeanwhile')}</span>
+              <div className="toolbar">
+                <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act(() => api(`/knowledge/${c.id}/price-source`, { method: 'POST', body: JSON.stringify({ action: 'accept' }) }))}>{t('kb.review.accept')}</button>
+                <button className="btn btn-sm" disabled={busy} onClick={() => act(() => api(`/knowledge/${c.id}/price-source`, { method: 'POST', body: JSON.stringify({ action: 'keep' }) }))}>{t('kb.review.keep')}</button>
+              </div>
+            </div>
+          ))}
+          {review.missing.map((m) => (
+            <div key={m.id} className="req-item">
+              <b>{m.title}</b>{m.category ? <span className="muted"> · {m.category}</span> : null}
+              <span>{t('kb.review.missing')}</span>
+              <div className="toolbar">
+                <button className="btn btn-sm" disabled={busy} onClick={() => act(() => api(`/knowledge/${m.id}/missing`, { method: 'POST', body: JSON.stringify({ action: 'keep' }) }))}>{t('kb.review.keepOwn')}</button>
+                <button className="btn btn-sm" disabled={busy} onClick={() => act(() => api(`/knowledge/${m.id}/missing`, { method: 'POST', body: JSON.stringify({ action: 'disable' }) }))}>{t('kb.review.switchOff')}</button>
+              </div>
+            </div>
+          ))}
+          {review.matches.map((m) => (
+            <div key={m.manual.id} className="req-item">
+              <b>{m.manual.title}</b><span className="muted"> · {t('kb.review.matchOwn')}</span>
+              <span>{t('kb.review.matchHint', { n: m.candidates.length })}</span>
+              {m.candidates.map((c) => (
+                <div key={c.id} className="toolbar">
+                  <span>{c.category ?? t('kb.noGroup')}{c.priceUah !== null ? ` · ${c.priceUah} ${t('kb.uah')}` : ''}</span>
+                  <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act(() => api(`/knowledge/${m.manual.id}/link`, { method: 'POST', body: JSON.stringify({ importedId: c.id }) }))}>{t('kb.review.link')}</button>
+                </div>
+              ))}
+              <div className="toolbar">
+                <button className="btn btn-sm" disabled={busy} onClick={() => act(() => api(`/knowledge/${m.manual.id}/dismiss-match`, { method: 'POST' }))}>{t('kb.review.separate')}</button>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
 
       <div className="toolbar" role="tablist" style={{ marginBottom: 10 }}>
         {KINDS.map((k) => (
@@ -163,13 +221,17 @@ export default function KnowledgePage() {
                   {i.category && <span className="muted">{i.category}</span>}
                   {!i.approved ? <Badge tone="amber">{t('kb.draft')}</Badge> : i.stale ? <Badge tone="amber">{t('kb.needsReview')}</Badge> : <Badge tone="green">{t('kb.live')}</Badge>}
                   {!i.active && <Badge>{t('kb.off')}</Badge>}
+                  {i.kind === 'SERVICE' && i.priceState === 'UNKNOWN' && <Badge>{t('kb.priceUnknown')}</Badge>}
+                  {i.kind === 'SERVICE' && i.priceState === 'FREE' && <Badge tone="green">{t('kb.priceFree')}</Badge>}
+                  {i.priceDivergence && <Badge tone="amber">{t('kb.review.divergeShort')}: {i.priceDivergence.source} {t('kb.uah')}</Badge>}
+                  {i.missingInSource && <Badge tone="red">{t('kb.review.missingShort')}</Badge>}
                 </span>
                 {canEdit ? (
                   <>
                     <input className="input" value={e.title ?? i.title} maxLength={160} onChange={(ev) => patch(i, { title: ev.target.value })} aria-label={t('kb.name')} />
                     {i.kind === 'SERVICE' && (
                       <div className="toolbar">
-                        <label className="field" style={{ margin: 0 }}><span>{t('kb.price')}</span><input className="input" type="number" min={0} style={{ width: 120 }} value={e.priceText ?? (i.priceUah ?? '')} onChange={(ev) => patch(i, { priceText: ev.target.value })} /></label>
+                        <label className="field" style={{ margin: 0 }}><span>{t('kb.price')}</span><input className="input" type="number" min={0} placeholder={t('kb.priceUnknown')} style={{ width: 120 }} value={e.priceText ?? (i.priceUah ?? '')} onChange={(ev) => patch(i, { priceText: ev.target.value })} /></label>
                         <label className="field" style={{ margin: 0 }}><span>{t('kb.duration')}</span><input className="input" type="number" min={5} step={5} style={{ width: 100 }} value={e.durText ?? (i.durationMin ?? '')} onChange={(ev) => patch(i, { durText: ev.target.value })} /></label>
                       </div>
                     )}
@@ -183,7 +245,7 @@ export default function KnowledgePage() {
                     </div>
                   </>
                 ) : (
-                  <span className="muted">{i.priceUah !== null ? `${i.priceUah} ${t('kb.uah')}` : ''} {i.durationMin ? `· ${i.durationMin} ${t('book.min')}` : ''} {i.text}</span>
+                  <span className="muted">{i.kind === 'SERVICE' ? (i.priceUah === null ? t('kb.priceUnknown') : i.priceUah === 0 ? t('kb.priceFree') : `${i.priceUah} ${t('kb.uah')}`) : ''}{i.missingInSource ? ` · ${t('kb.review.missingShort')}` : ''}{i.priceDivergence ? ` · ${t('kb.review.divergeShort')}` : ''} {i.durationMin ? `· ${i.durationMin} ${t('book.min')}` : ''} {i.text}</span>
                 )}
               </div>
             );

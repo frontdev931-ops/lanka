@@ -87,6 +87,13 @@ export interface ExternalDoctor {
   firstName: string;
 }
 
+// The working hours of the clinic as Cliniccards keeps them (GET /schedule-settings): per weekday '1' Monday ... '7' Sunday, null for a
+// non-working day, and the holidays (dates). Cliniccards has no hours of its own for a cabinet or a doctor in this method.
+export interface ExternalWorkingHours {
+  week: Record<string, { from: string; to: string } | null>;
+  holidays: string[];
+}
+
 export interface ExternalCabinet {
   externalId: string;
   name: string;
@@ -158,6 +165,8 @@ export interface ClinicConnector {
   fetchCabinets?(): Promise<ExternalCabinet[]>;
   // Необязательно: врачи клиники (для выбора врача при записи)
   fetchDoctors?(): Promise<ExternalDoctor[]>;
+  // Необязательно: рабочие часы клиники; null, если метод их не отдал или ответ не разобрался (часы тогда не угадываются)
+  fetchWorkingHours?(): Promise<ExternalWorkingHours | null>;
   // Необязательно: итоги планов лечения за период
   fetchPlans?(window: SyncWindow): Promise<ExternalPlan[]>;
   // Необязательно: напоминания сотрудникам за период

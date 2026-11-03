@@ -200,8 +200,13 @@ describe('чернетки з Cliniccards', () => {
     expect(air.title).toBe('Професійна гігєна "Air flow" 1 ступеня'); // HTML entities decoded
     expect(air.text).toBe('— AirFlow\n— Полірування');
     expect(air.priceUah).toBe(1200);
-    await http().post(`/knowledge/${noPrice.id}/approve`).set(auth(c.token)).expect(400);
-    // the model sees nothing until a person approves
+    // an unknown price does not block the approval; the bot just never names a price for it
+    await http().post(`/knowledge/${noPrice.id}/approve`).set(auth(c.token)).expect(200);
+    say('Добрий день!');
+    llm.systems.length = 0;
+    await ask(c.clinicId, 'Розкажіть про консультацію');
+    expect(llm.systems.at(-1)).toMatch(/Консультація[^\n]*ціна: не називати/);
+    // the model sees nothing of the positions that are still drafts
     say('Добрий день!');
     llm.systems.length = 0;
     await ask(c.clinicId, 'Розкажіть про гігієну');
@@ -210,7 +215,7 @@ describe('чернетки з Cliniccards', () => {
 });
 
 describe('затвердити групу', () => {
-  it('затверджує чернетки однієї групи; позиції без ціни пропускає; чужа клініка й адміністратор не можуть', async () => {
+  it('затверджує чернетки однієї групи, у тому числі позиції з невідомою ціною; чужа клініка й адміністратор не можуть', async () => {
     const c = await clinic();
     const other = await clinic();
     await http().get('/integrations/cliniccards').set(auth(c.token)).expect(200);
@@ -220,11 +225,11 @@ describe('затвердити групу', () => {
     await http().post('/knowledge/approve-group').set(auth(admin)).send({ kind: 'SERVICE', category: 'Терапія' }).expect(403);
     // a group with one priced item
     expect((await http().post('/knowledge/approve-group').set(auth(c.token)).send({ kind: 'SERVICE', category: 'Терапія' }).expect(200)).body).toEqual({ approved: 1, skipped: 0 });
-    // the group whose only item has no price: nothing is approved
-    expect((await http().post('/knowledge/approve-group').set(auth(c.token)).send({ kind: 'SERVICE', category: 'Консультації' }).expect(200)).body).toEqual({ approved: 0, skipped: 1 });
+    // the group whose only item has an unknown price: approved too (no price is ever named for it)
+    expect((await http().post('/knowledge/approve-group').set(auth(c.token)).send({ kind: 'SERVICE', category: 'Консультації' }).expect(200)).body).toEqual({ approved: 1, skipped: 0 });
     const items = (await http().get('/knowledge').set(auth(c.token))).body.items as { title: string; approved: boolean }[];
     expect(items.find((i) => i.title === 'Лікування карієсу')!.approved).toBe(true);
-    expect(items.find((i) => i.title === 'Консультація')!.approved).toBe(false);
+    expect(items.find((i) => i.title === 'Консультація')!.approved).toBe(true);
     expect(items.find((i) => i.title.startsWith('Професійна гігєна'))!.approved).toBe(false);
     expect((await http().post('/knowledge/approve-group').set(auth(other.token)).send({ kind: 'SERVICE', category: 'Профілактика' }).expect(200)).body).toEqual({ approved: 0, skipped: 0 });
   });

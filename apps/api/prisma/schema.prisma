@@ -113,6 +113,17 @@ model Clinic {
   sharedDoctorName    String?
   // Days with other hours or a day off: [{date, closed, from?, to?}] on top of workHours
   workHoursExceptions Json                 @default("[]")
+  // Where workHours came from: CLINICCARDS (GET /schedule-settings) or MANUAL (typed by the clinic); null while they were never set.
+  // The default 09:00-20:00 shown in the form is NOT a setting and is never stored by itself.
+  workHoursSource     String?
+  workHoursUpdatedAt  DateTime?
+  // Holidays of the clinic from Cliniccards (dates, closed days)
+  workHoursHolidays   Json                 @default("[]")
+  // The last time the price list was read from Cliniccards, and how many positions it had
+  priceListSyncedAt   DateTime?
+  priceListCount      Int?
+  // Why the last price list was not applied in full (for example too many positions disappeared at once), or null
+  priceListNote       String?
   primaryDoctorId     String?
   primaryDoctorName   String?
   publicAddress       String?
@@ -1023,6 +1034,17 @@ model KbItem {
   // Booking by cabinets: the service may be booked online (needs a known length), and in which cabinets (empty: any online cabinet)
   onlineBooking Boolean  @default(false)
   cabinetIds   String[] @default([])
+  // What the price list of Cliniccards has for this position now (the name and the price in the system's currency), kept apart from the
+  // approved text so that a change in Cliniccards is visible but never silently changes what the bot says
+  externalTitle String?
+  externalPrice Int?
+  // The price list of Cliniccards, read in full and with success, no longer has this position: new online bookings of it are paused until an
+  // administrator decides (keep it as the clinic's own service, or switch it off). History and existing requests stay.
+  missingInSourceAt DateTime?
+  // The administrator saw the price Cliniccards has and chose to keep the clinic's own: that source price is no longer a discrepancy
+  externalPriceAcked Int?
+  // A hand-made service whose name equals an imported position was left separate on purpose
+  matchDismissed Boolean @default(false)
   // Approved price in hryvnias (whole); the currency of the clinic's system is not trusted, so a person confirms it
   priceUah     Int?
   active       Boolean   @default(true)

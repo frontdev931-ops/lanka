@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsImportService } from '../integrations/settings-import.service';
 import { SyncService } from '../integrations/sync.service';
 
 export const KB_KINDS = ['SERVICE', 'DOCTOR', 'LOCATION', 'FAQ'] as const;
@@ -7,7 +8,7 @@ export type KbKind = (typeof KB_KINDS)[number];
 const DAY = 86_400_000;
 // A price is quoted only while a person confirmed it this recently
 export const PRICE_FRESH_DAYS = 90;
-const MAX_ITEMS = 300;
+const MAX_ITEMS = 600;
 // How much of the knowledge goes into one prompt
 const PROMPT_BUDGET = 9000;
 // Up to this many services go into every prompt; above it only the ones that match the question (at most SERVICES_SHOWN)
@@ -31,6 +32,11 @@ export interface KbFacts {
   pricesKnown: boolean;
 }
 
+// The price Cliniccards has now differs from the clinic's own, and the administrator has not accepted it nor chosen to keep the own one
+// (only for an approved position: a draft simply follows Cliniccards)
+export const priceDivergent = (r: { externalId: string | null; externalPrice: number | null; priceUah: number | null; externalPriceAcked: number | null; approvedAt: Date | null }) =>
+  !!r.approvedAt && !!r.externalId && r.externalPrice !== null && r.externalPrice !== r.priceUah && r.externalPrice !== r.externalPriceAcked;
+
 const fresh = (d: Date | null, now = new Date()) => !!d && now.getTime() - d.getTime() < PRICE_FRESH_DAYS * DAY;
 
 @Injectable()
@@ -38,6 +44,7 @@ export class KbService {
   constructor(
     private prisma: PrismaService,
     private sync: SyncService,
+    private imports: SettingsImportService,
   ) {}
 
   async list(clinicId: string) {
@@ -51,6 +58,12 @@ export class KbService {
       text: r.text,
       durationMin: r.durationMin,
       priceUah: r.priceUah,
+      // unknown (null) is not the same as free (0): the first is never quoted, the second is told as "free"
+      priceState: r.priceUah === null ? 'UNKNOWN' : r.priceUah === 0 ? 'FREE' : 'SET',
+      // Cliniccards has another price than the clinic confirmed: shown to the administrator, and the old price is not quoted meanwhile
+      priceDivergence: priceDivergent(r) ? { own: r.priceUah, source: r.externalPrice } : null,
+      fromCliniccards: !!r.externalId,
+      missingInSource: !!r.missingInSourceAt,
       active: r.active,
       source: r.source,
       approved: !!r.approvedAt,
@@ -111,7 +124,7 @@ export class KbService {
   async approve(clinicId: string, userId: string, id: string) {
     const cur = await this.prisma.kbItem.findFirst({ where: { id, clinicId } });
     if (!cur) throw new NotFoundException('kb_not_found');
-    if (cur.kind === 'SERVICE' && cur.priceUah === null && cur.source === 'CLINICCARDS') throw new BadRequestException('kb_price_needed');
+    // an unknown price does not block the approval: the bot simply never names a price for it
     const now = new Date();
     await this.prisma.kbItem.update({ where: { id }, data: { approvedAt: now, approvedById: userId, reviewedAt: now } });
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.approved', details: { id } } });
@@ -122,7 +135,7 @@ export class KbService {
   async approveGroup(clinicId: string, userId: string, kind: KbKind, category: string | null): Promise<{ approved: number; skipped: number }> {
     if (!KB_KINDS.includes(kind)) throw new BadRequestException('bad_kb_kind');
     const drafts = await this.prisma.kbItem.findMany({ where: { clinicId, kind, category, approvedAt: null }, select: { id: true, kind: true, priceUah: true, source: true } });
-    const ok = drafts.filter((d) => !(d.kind === 'SERVICE' && d.priceUah === null && d.source === 'CLINICCARDS'));
+    const ok = drafts;
     const now = new Date();
     if (ok.length) await this.prisma.kbItem.updateMany({ where: { clinicId, id: { in: ok.map((d) => d.id) } }, data: { approvedAt: now, approvedById: userId, reviewedAt: now } });
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.approved_group', details: { kind, category, approved: ok.length } } });
@@ -142,28 +155,79 @@ export class KbService {
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.deleted', details: { id } } });
   }
 
-  // Drafts from the price list of the clinic's system. Nothing is approved: the currency of that list is not trusted, a person
-  // checks every price. Services already in the knowledge base are left as they are.
-  async importServices(clinicId: string, userId: string): Promise<{ added: number }> {
+  // Drafts from the price list of the clinic's system (see SettingsImportService): nothing is approved, the currency of that list is not
+  // trusted and a person checks every price; services already in the knowledge base are linked or refreshed, never doubled.
+  async importServices(clinicId: string, userId: string): Promise<{ added: number; updated: number; missing: number; total: number; note: string | null }> {
     const connector = await this.sync.connectorForClinic(clinicId);
     if (!connector?.fetchServiceList) throw new BadRequestException('kb_import_unavailable');
-    let list: { externalId: string; name: string; groupName?: string; description?: string; priceUah?: number }[];
+    let r;
     try {
-      list = await connector.fetchServiceList();
+      r = await this.imports.importPrices(clinicId, connector);
     } catch {
       throw new BadRequestException('kb_import_failed');
     }
-    const known = new Set((await this.prisma.kbItem.findMany({ where: { clinicId, kind: 'SERVICE' }, select: { externalId: true, title: true } })).flatMap((k) => [k.externalId ?? '', k.title.toLowerCase()]));
-    let added = 0;
-    for (const s of list.slice(0, MAX_ITEMS)) {
-      const name = s.name.trim().slice(0, 160);
-      if (!name || known.has(s.externalId) || known.has(name.toLowerCase())) continue;
-      if ((await this.prisma.kbItem.count({ where: { clinicId } })) >= MAX_ITEMS) break;
-      await this.prisma.kbItem.create({ data: { clinicId, kind: 'SERVICE', title: name, category: s.groupName?.slice(0, 120) ?? null, text: (s.description ?? '').slice(0, 900), priceUah: s.priceUah !== undefined && Number.isFinite(s.priceUah) ? Math.round(s.priceUah) : null, source: 'CLINICCARDS', externalId: s.externalId } });
-      added++;
-    }
-    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.imported', details: { added } } });
-    return { added };
+    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.imported', details: { added: r.added, updated: r.updated, missing: r.missing } } });
+    return r;
+  }
+
+  // What the administrator has to decide after an import: a price that changed in Cliniccards, positions that vanished from the price list,
+  // and hand-made services whose name equals an imported position (never linked automatically: names repeat across groups)
+  async review(clinicId: string) {
+    const [rows, clinic] = await Promise.all([
+      this.prisma.kbItem.findMany({ where: { clinicId, kind: 'SERVICE', active: true }, orderBy: { title: 'asc' } }),
+      this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { priceListNote: true, priceListSyncedAt: true } }),
+    ]);
+    const imported = rows.filter((r) => r.externalId && r.source === 'CLINICCARDS');
+    const matches = rows
+      .filter((r) => !r.externalId && !r.matchDismissed)
+      .map((m) => ({ manual: { id: m.id, title: m.title, category: m.category, priceUah: m.priceUah }, candidates: imported.filter((i) => i.title.toLowerCase() === m.title.toLowerCase()).map((i) => ({ id: i.id, title: i.title, category: i.category, priceUah: i.priceUah })) }))
+      .filter((m) => m.candidates.length > 0);
+    return {
+      syncedAt: clinic.priceListSyncedAt,
+      note: clinic.priceListNote,
+      priceChanges: rows.filter(priceDivergent).map((r) => ({ id: r.id, title: r.title, category: r.category, own: r.priceUah, source: r.externalPrice })),
+      missing: rows.filter((r) => r.missingInSourceAt).map((r) => ({ id: r.id, title: r.title, category: r.category, since: r.missingInSourceAt })),
+      matches,
+    };
+  }
+
+  // The administrator takes the price Cliniccards has now, or keeps the clinic's own one (and is not asked again until Cliniccards changes it)
+  async resolvePrice(clinicId: string, userId: string, id: string, action: 'accept' | 'keep') {
+    const cur = await this.prisma.kbItem.findFirst({ where: { id, clinicId, kind: 'SERVICE' } });
+    if (!cur || cur.externalPrice === null) throw new NotFoundException('kb_not_found');
+    if (action === 'accept') await this.prisma.kbItem.update({ where: { id }, data: { priceUah: cur.externalPrice, externalPriceAcked: null, reviewedAt: new Date() } });
+    else await this.prisma.kbItem.update({ where: { id }, data: { externalPriceAcked: cur.externalPrice, reviewedAt: new Date() } });
+    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.price_resolved', details: { id, action, source: cur.externalPrice, own: cur.priceUah } } });
+  }
+
+  // A position that vanished from the price list: keep it as the clinic's own service, or switch it off (nothing is deleted)
+  async resolveMissing(clinicId: string, userId: string, id: string, action: 'keep' | 'disable') {
+    const cur = await this.prisma.kbItem.findFirst({ where: { id, clinicId, kind: 'SERVICE', missingInSourceAt: { not: null } } });
+    if (!cur) throw new NotFoundException('kb_not_found');
+    if (action === 'keep') await this.prisma.kbItem.update({ where: { id }, data: { missingInSourceAt: null, externalId: null, externalTitle: null, externalPrice: null, externalPriceAcked: null } });
+    else await this.prisma.kbItem.update({ where: { id }, data: { active: false, onlineBooking: false } });
+    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.missing_resolved', details: { id, action } } });
+  }
+
+  // The administrator says that a hand-made service IS this position of the price list. The clinic's own text, length, price and settings stay; the
+  // imported duplicate is switched off (not deleted: a doctor's list of services may still point at it).
+  async link(clinicId: string, userId: string, manualId: string, importedId: string) {
+    const [manual, imp] = await Promise.all([
+      this.prisma.kbItem.findFirst({ where: { id: manualId, clinicId, kind: 'SERVICE', externalId: null } }),
+      this.prisma.kbItem.findFirst({ where: { id: importedId, clinicId, kind: 'SERVICE', externalId: { not: null }, source: 'CLINICCARDS' } }),
+    ]);
+    if (!manual || !imp) throw new NotFoundException('kb_not_found');
+    await this.prisma.$transaction([
+      this.prisma.kbItem.update({ where: { id: imp.id }, data: { externalId: null, active: false, onlineBooking: false, source: 'MANUAL', matchDismissed: true } }),
+      this.prisma.kbItem.update({ where: { id: manual.id }, data: { externalId: imp.externalId, externalTitle: imp.externalTitle, externalPrice: imp.externalPrice, ...(manual.category ? {} : { category: imp.category }) } }),
+    ]);
+    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.linked', details: { manualId, importedId } } });
+  }
+
+  async dismissMatch(clinicId: string, userId: string, id: string) {
+    const r = await this.prisma.kbItem.updateMany({ where: { id, clinicId, kind: 'SERVICE', externalId: null }, data: { matchDismissed: true } });
+    if (!r.count) throw new NotFoundException('kb_not_found');
+    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.match_dismissed', details: { id } } });
   }
 
   // What the model may know. Only approved, active items. A price and its amount appear only when confirmed in the last 90 days.
@@ -171,7 +235,7 @@ export class KbService {
   // only those that match the patient's words are included, plus the list of directions so the model knows what exists.
   // The amounts a reply may mention are those of the services that were included.
   async factsFor(clinicId: string, now = new Date(), query = ''): Promise<KbFacts> {
-    const rows = await this.prisma.kbItem.findMany({ where: { clinicId, active: true, approvedAt: { not: null } }, orderBy: [{ kind: 'asc' }, { title: 'asc' }] });
+    const rows = await this.prisma.kbItem.findMany({ where: { clinicId, active: true, approvedAt: { not: null }, missingInSourceAt: null }, orderBy: [{ kind: 'asc' }, { title: 'asc' }] });
     if (!rows.length) return { text: null, allowedAmounts: [], pricesKnown: false };
     const services = rows.filter((r) => r.kind === 'SERVICE');
     let shown = services;
@@ -185,9 +249,10 @@ export class KbService {
     const allowed = new Set<number>();
     const sections: Record<KbKind, string[]> = { SERVICE: [], DOCTOR: [], LOCATION: [], FAQ: [] };
     for (const r of shown) {
-      const price = r.priceUah !== null && fresh(r.reviewedAt, now) ? r.priceUah : null;
+      // the old price is not told as current while Cliniccards has another one that the administrator has not decided about
+      const price = r.priceUah !== null && fresh(r.reviewedAt, now) && !priceDivergent(r) ? r.priceUah : null;
       if (price !== null) allowed.add(price);
-      sections.SERVICE.push(`- ${r.title}${r.category ? ` (група: ${r.category})` : ''}${r.durationMin ? `; тривалість ${r.durationMin} хв` : ''}${price !== null ? `; ціна ${price} грн` : '; ціна: не називати, передати адміністратору'}${r.text ? `; ${r.text.replace(/\s*\n\s*/g, ' ')}` : ''}`);
+      sections.SERVICE.push(`- ${r.title}${r.category ? ` (група: ${r.category})` : ''}${r.durationMin ? `; тривалість ${r.durationMin} хв` : ''}${price === 0 ? '; безкоштовно (ціна 0 грн)' : price !== null ? `; ціна ${price} грн` : '; ціна: не називати, передати адміністратору'}${r.text ? `; ${r.text.replace(/\s*\n\s*/g, ' ')}` : ''}`);
     }
     for (const r of rows) {
       const kind = r.kind as KbKind;
@@ -201,6 +266,6 @@ export class KbService {
     add('ЛІКАРІ:', sections.DOCTOR);
     add('АДРЕСИ ТА КОНТАКТИ:', sections.LOCATION);
     add('ЧАСТІ ПИТАННЯ:', sections.FAQ);
-    return { text: parts.join('\n\n').slice(0, PROMPT_BUDGET), allowedAmounts: [...allowed], pricesKnown: [...allowed].length > 0 || services.some((r) => r.priceUah !== null && fresh(r.reviewedAt, now)) };
+    return { text: parts.join('\n\n').slice(0, PROMPT_BUDGET), allowedAmounts: [...allowed], pricesKnown: [...allowed].length > 0 || services.some((r) => r.priceUah !== null && fresh(r.reviewedAt, now) && !priceDivergent(r)) };
   }
 }

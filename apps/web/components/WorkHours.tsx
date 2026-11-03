@@ -19,8 +19,17 @@ const DAY_KEYS = [
 ] as const;
 
 // Рабочие часы клиники по дням недели: по ним считаются свободные окна, когда в Cliniccards нет смен врачей
+interface Info {
+  configured: boolean;
+  source: 'CLINICCARDS' | 'MANUAL' | null;
+  updatedAt: string | null;
+  holidays: string[];
+  connected: boolean;
+}
+
 export function WorkHours() {
   const t = useT();
+  const [info, setInfo] = useState<Info | null>(null);
   const [week, setWeek] = useState<Week | null>(null);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
@@ -28,6 +37,7 @@ export function WorkHours() {
 
   useEffect(() => {
     api<Week>('/clinic/work-hours').then(setWeek).catch((e) => setError((e as Error).message));
+    api<Info>('/clinic/work-hours/info').then(setInfo).catch(() => undefined);
   }, []);
 
   if (!week) return error ? <Alert tone="error">{error}</Alert> : null;
@@ -42,6 +52,7 @@ export function WorkHours() {
     setError('');
     try {
       setWeek(await api<Week>('/clinic/work-hours', { method: 'PUT', body: JSON.stringify(week) }));
+      setInfo(await api<Info>('/clinic/work-hours/info'));
       setSaved(true);
     } catch (e) {
       setError((e as Error).message);
@@ -50,9 +61,37 @@ export function WorkHours() {
     }
   }
 
+  // "Take them from Cliniccards": replaces what was typed by hand, only on this explicit action
+  async function importHours() {
+    setBusy(true);
+    setError('');
+    try {
+      setInfo(await api<Info>('/clinic/work-hours/import', { method: 'POST' }));
+      setWeek(await api<Week>('/clinic/work-hours'));
+      setSaved(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString([], { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+
   return (
     <Card title={t('wh.title')}>
       <p className="rule">{t('wh.hint')}</p>
+      {info && !info.configured && <Alert tone="warn">{t('wh.notSet')}</Alert>}
+      {info?.configured && (
+        <p className="muted" style={{ marginTop: 0 }}>
+          {info.source === 'CLINICCARDS' ? t('wh.srcCliniccards', { time: when(info.updatedAt) }) : t('wh.srcManual', { time: when(info.updatedAt) })}
+          {info.holidays.length > 0 && ` ${t('wh.holidays', { dates: info.holidays.map((d) => d.split('-').reverse().join('.')).join(', ') })}`}
+        </p>
+      )}
+      {info?.connected && (
+        <div className="toolbar" style={{ marginBottom: 10 }}>
+          <button type="button" className="btn doctor-toolbar-btn" disabled={busy} onClick={importHours}>{t('wh.import')}</button>
+        </div>
+      )}
       {error && <Alert tone="error">{error}</Alert>}
       <div className="hours-list">
         {DAY_KEYS.map(([day, key]) => {

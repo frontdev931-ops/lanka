@@ -84,6 +84,7 @@ const T = {
     confirmAskCabinets: (service: string | null, date: string, time: string, address: string | null) => `Підтверджуєте запис${service ? ` на ${service}` : ''} ${date} о ${time}${address ? `, ${address}` : ''}? Конкретного лікаря призначає клініка. Натисніть кнопку або напишіть «так» чи «ні».`,
     clinicAssigns: 'Лікаря призначить клініка',
     settingsChanged: 'Налаштування запису змінилися, тому попередній вибір більше не діє. Оберіть, будь ласка, час ще раз.',
+    servicePaused: 'Цю послугу тимчасово не можна записати онлайн. Адміністратор зв’яжеться з вами.',
     confirmAsk: (service: string | null, date: string, time: string, doctor: string | null) => `Підтверджуєте запис${service ? ` на ${service}` : ''} ${date} о ${time}${doctor ? `, лікар ${doctor}` : ''}? Натисніть кнопку або напишіть «так» чи «ні».`,
     yes: 'Так, підтверджую',
     no: 'Ні, інший час',
@@ -109,6 +110,7 @@ const T = {
     confirmAskCabinets: (service: string | null, date: string, time: string, address: string | null) => `Подтверждаете запись${service ? ` на ${service}` : ''} ${date} в ${time}${address ? `, ${address}` : ''}? Конкретного врача назначает клиника. Нажмите кнопку или напишите «да» или «нет».`,
     clinicAssigns: 'Врача назначит клиника',
     settingsChanged: 'Настройки записи изменились, поэтому прежний выбор больше не действует. Выберите, пожалуйста, время ещё раз.',
+    servicePaused: 'Эту услугу временно нельзя записать онлайн. Администратор свяжется с вами.',
     confirmAsk: (service: string | null, date: string, time: string, doctor: string | null) => `Подтверждаете запись${service ? ` на ${service}` : ''} ${date} в ${time}${doctor ? `, врач ${doctor}` : ''}? Нажмите кнопку или напишите «да» или «нет».`,
     yes: 'Да, подтверждаю',
     no: 'Нет, другое время',
@@ -202,6 +204,11 @@ export class BookingFlowService {
     // The same button pressed again after the request was already passed on: nothing to do
     if (open?.stage === 'READY' && open.slotAt?.getTime() === slotAt.getTime()) return;
     // A button from before a change of the setting: the doctors and the cabinets are different worlds, so the old choice is dropped and new times are offered
+    // A button from before a service vanished from the price list: no new time is stored on the request, however old the button is
+    if (open?.service && (await this.choice.findService(c.clinicId, open.service))?.missingInSourceAt) {
+      await this.say(c, T[await this.lang(c)].servicePaused);
+      return;
+    }
     const cm = await this.clinicMode(c.clinicId);
     const stored = open?.scheduleMode ?? null;
     const withDoctor = !!slot.doctor?.startsWith('#');
@@ -584,8 +591,11 @@ export class BookingFlowService {
     // Booking by cabinets: the service must be allowed, the shared account must be one Cliniccards lists, and a cabinet must be free for the
     // whole visit by the schedule read from Cliniccards right now (an unreadable schedule confirms nothing)
     const cm = await this.clinicMode(c.clinicId);
+    // a position that vanished from the price list of Cliniccards: no new booking until an administrator decides (history and requests stay)
+    const known = await this.choice.findService(c.clinicId, r.service);
+    if (known?.missingInSourceAt) return { ok: false, busy: false, note: 'послугу прибрано з прайсу Cliniccards: запис призупинено до рішення адміністратора' };
     if (cm.scheduleMode === 'CABINETS') {
-      const svc = await this.choice.findService(c.clinicId, r.service);
+      const svc = known;
       if (!svc?.onlineBooking || !svc.durationMin) return { ok: false, busy: false, note: 'послугу не дозволено для запису за кабінетами' };
       const shared = cm.sharedDoctorId ? await this.prisma.doctor.findUnique({ where: { clinicId_externalId: { clinicId: c.clinicId, externalId: cm.sharedDoctorId } } }) : null;
       if (!shared || !shared.active) return { ok: false, busy: false, note: 'не вибрано спільний обліковий запис Cliniccards для запису за кабінетами' };

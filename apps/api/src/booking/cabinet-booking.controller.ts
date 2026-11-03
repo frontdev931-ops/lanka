@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Put, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { AuthGuard, AuthUser, CurrentUser, Roles } from '../common/auth.guard';
 import { CabinetBookingService } from './cabinet-booking.service';
@@ -26,6 +26,7 @@ class ServiceDto {
   @IsString() @MaxLength(40) id: string;
   @IsBoolean() onlineBooking: boolean;
   @IsArray() @ArrayMaxSize(100) @IsString({ each: true }) cabinetIds: string[];
+  @IsOptional() @IsInt() @Min(5) @Max(480) durationMin?: number;
 }
 class ServicesDto {
   @IsArray() @ArrayMaxSize(500) @ValidateNested({ each: true }) @Type(() => ServiceDto) services: ServiceDto[];
@@ -41,6 +42,14 @@ export class CabinetBookingController {
   @Roles(...READERS)
   get(@CurrentUser() u: AuthUser) {
     return this.cabinets.settings(u.clinicId, true);
+  }
+
+  // The price list (and the hours, unless typed by the clinic) from Cliniccards
+  @Post('import')
+  @HttpCode(200)
+  @Roles(...MANAGERS)
+  import(@CurrentUser() u: AuthUser) {
+    return this.cabinets.importFromCliniccards(u.clinicId, u.userId);
   }
 
   @Put('mode')

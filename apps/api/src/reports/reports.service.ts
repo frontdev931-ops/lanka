@@ -11,6 +11,12 @@ const DONE = 'VISITED';
 // Статусы записи, которые к концу приёма должны смениться на итог (пришёл, не пришёл, отмена, перенос)
 const UNCLOSED = ['PLANNED', 'CONFIRMED', 'NOT_CONFIRMED', 'IN_CLINIC', 'IN_CHAIR'];
 const INACTIVE = ['CANCELLED', 'DID_NOT_COME', 'MOVED'];
+const NO_SCHEDULE_NOTICE: Record<string, string> = {
+  uk: 'Вільних вікон не показано: у Cliniccards немає змін лікарів, а робочі години клініки не задано, тож надійного розкладу немає. Задайте години в «Налаштуваннях» або підтягніть їх з Cliniccards.',
+  ru: 'Свободных окон не показано: в Cliniccards нет смен врачей, а рабочие часы клиники не заданы, поэтому надёжного расписания нет. Задайте часы в «Настройках» или подтяните их из Cliniccards.',
+  en: 'No free times are shown: Cliniccards has no doctor shifts and the working hours of the clinic are not set, so there is no reliable schedule. Set the hours in Settings or take them from Cliniccards.',
+};
+
 const DAY = 86_400_000;
 
 export type Cell = string | number | boolean | null;
@@ -26,6 +32,8 @@ export interface Report {
   generatedAt: string;
   columns: { key: string; label: string }[];
   canCreateTasks: boolean;
+  // A reason shown instead of data that would only be a guess (for example no reliable schedule for the free times), or null
+  notice?: string | null;
   // Значения kind (код статуса), rebooked (boolean) и пустой source подписывает клиент на своём языке
   rows: Row[];
 }
@@ -101,6 +109,8 @@ export class ReportsService {
       dataUpdatedAt: integration?.lastSyncAt ?? null,
       generatedAt: new Date().toISOString(),
       canCreateTasks: meta.canCreateTasks,
+      // a reason shown instead of times that would only be guesses
+      notice: id === 'free-slots' && !rows.length && (await this.freeSlotsNotice(clinicId, undefined, d)) ? NO_SCHEDULE_NOTICE[lang] : null,
       // Свободные окна по часам кабинета не привязаны к врачу: колонка «Лікар» тогда не нужна
       columns: meta.columns.filter((key) => !(id === 'free-slots' && key === 'doctor' && rows.every((r) => !r.doctor))).map((key) => ({ key, label: COLUMN_LABEL[lang][key] ?? key })),
       rows,
@@ -247,6 +257,16 @@ export class ReportsService {
   // его кабинета. Если смен нет (клиника не заводит профили врачей): рабочие часы клиники минус записи
   // кабинета минус серые блоки кабинета (блоки в расписании обозначают «здесь никого не записывать»).
   // Дни и часы считаются в часовом поясе клиники.
+  // Why the report of free time may be empty: no shifts in Cliniccards and no working hours set. Null when there is a reliable schedule.
+  async freeSlotsNotice(clinicId: string, from = startOfClinicDay(new Date()), days = 7): Promise<'no_schedule' | null> {
+    const [shifts, clinic] = await Promise.all([
+      this.prisma.shift.count({ where: { clinicId, startsAt: { gte: from, lt: new Date(from.getTime() + days * DAY) } } }),
+      this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { workHours: true } }),
+    ]);
+    const hoursSet = !!clinic?.workHours && typeof clinic.workHours === 'object' && Object.keys(clinic.workHours as object).length > 0;
+    return !shifts && !hoursSet ? 'no_schedule' : null;
+  }
+
   async freeSlots(clinicId: string, days: number): Promise<Row[]> {
     const from = startOfClinicDay(new Date());
     const to = new Date(from.getTime() + days * DAY);
@@ -260,6 +280,10 @@ export class ReportsService {
       this.prisma.cabinet.findMany({ where: { clinicId } }),
       this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { workHours: true } }),
     ]);
+    // Without shifts the only source of hours is the working hours the clinic set (or took from Cliniccards). The default 09:00-20:00 is NOT a
+    // schedule, so nothing is offered then (the report says why, see freeSlotsNotice).
+    const hoursSet = !!clinic?.workHours && typeof clinic.workHours === 'object' && Object.keys(clinic.workHours as object).length > 0;
+    if (!shifts.length && !hoursSet) return [];
 
     const hhmm = (t: number) => clinicHm(t);
     // Промежутки внутри [start, end], не занятые отрезками busy, не короче MIN_GAP_MINUTES

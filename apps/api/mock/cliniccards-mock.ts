@@ -38,6 +38,10 @@ export interface MockData {
   cabinets: Json[];
   reminders: Json[];
   plans: Json[];
+  // GET /schedule-settings (null: the method answers 404, as for a clinic that does not give it)
+  scheduleSettings: Json | null;
+  // GET /prices rows
+  prices: Json[];
 }
 
 export interface MockHandle {
@@ -292,7 +296,18 @@ export function buildData(opts: MockOptions = {}): MockData {
     plan_total: String(a.total), plan_total_done: String(a.done), plan_discount: '0',
     plan_total_with_discount: String(a.total), plan_total_done_with_discount: String(a.done), stages_list: {},
   }));
-  return { patients, visits, planItems, payments, invoices, shifts, spaces, staff, cabinets, reminders: [], plans };
+  // As in the official documentation: working days (1 Monday ... 7 Sunday, active 1/0, opening and closing HH:MM), holidays, settings.
+  // No cabinet has hours of its own: the documentation of GET /cabinets has only id, name, color and order.
+  const dayName = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
+  const scheduleSettings: Json = {
+    working_days: dayName.map((day, i) => ({ day_of_week: i + 1, day, active: i === 6 ? 0 : 1, opening: '09:00', closing: '21:00' })),
+    holidays: [day(new Date(Date.now() + 20 * DAY)), day(new Date(Date.now() + 21 * DAY))],
+    settings: { schedule_view: 'DOCTORS', min_free_time: '0:45' },
+  };
+  // The price list has no length of a visit: the documentation of GET /prices has group, item id, name, code, additional text and price only
+  const priceRow = (g: string, gid: string, id: string, name: string, price: string | null): Json => ({ group_id: gid, group_name: g, group_color: '1', group_additional: null, item_id: id, item_name: name, item_code: null, item_additional: null, item_price: price });
+  const prices: Json[] = [{ ...priceRow('Профілактика', '77', '1001', 'Професійна гігєна &#34;Air flow&#34; 1 ступеня', '1200'), item_additional: '— AirFlow\r\n— Полірування' }, priceRow('Терапія', '78', '1002', 'Лікування карієсу', '1800'), priceRow('Консультації', '79', '1003', 'Консультація', '0')];
+  return { patients, visits, planItems, payments, invoices, shifts, spaces, staff, cabinets, reminders: [], plans, scheduleSettings, prices };
 }
 
 const inRange = (value: unknown, from?: string, to?: string) => {
@@ -438,10 +453,8 @@ export async function startMock(opts: MockOptions = {}, port = 0): Promise<MockH
     if (path === '/clinic-profile') return ok(res, { id: 1, name: 'Mock', type: 'CLINIC', website: 'www.mock.example', email: 'mock@example.com', phone: '0440000000', address: 'Mock Street, 1', logo: MOCK_LOGO, date_created: '2023-11-19 18:14:57' });
     if (path === '/plans') return ok(res, range(data.plans, 'date_created'));
     if (path === '/reminders') return ok(res, range(data.reminders, 'date').filter((r) => !q.patient_id || String(r.patient_id) === q.patient_id));
-    if (path === '/prices') {
-      const row = (g: string, gid: string, id: string, name: string, price: string | null) => ({ group_id: gid, group_name: g, group_color: '1', group_additional: null, item_id: id, item_name: name, item_code: null, item_additional: null, item_price: price });
-      return ok(res, [{ ...row('Профілактика', '77', '1001', 'Професійна гігєна &#34;Air flow&#34; 1 ступеня', '1200'), item_additional: '— AirFlow\r\n— Полірування' }, row('Терапія', '78', '1002', 'Лікування карієсу', '1800'), row('Консультації', '79', '1003', 'Консультація', '0')]);
-    }
+    if (path === '/prices') return ok(res, data.prices);
+    if (path === '/schedule-settings') return data.scheduleSettings ? ok(res, data.scheduleSettings) : fail(res, 404, 'Unknown method /schedule-settings');
     if (path === '/staff') return ok(res, data.staff);
     if (path === '/cabinets') return ok(res, data.cabinets);
     if (path === '/sub-clinics') return ok(res, []);

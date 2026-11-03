@@ -1,10 +1,12 @@
-import { BadRequestException, Body, Controller, DefaultValuePipe, Delete, Get, HttpCode, ParseIntPipe, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, DefaultValuePipe, Delete, Get, HttpCode, ParseIntPipe, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import type { Request, Response } from 'express';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { AuthGuard, AuthUser, CurrentUser, Roles, SESSION_COOKIE } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsImportService } from '../integrations/settings-import.service';
+import { SyncService } from '../integrations/sync.service';
 import { parseWorkHours, readWorkHours } from './work-hours';
 import { TERMS_VERSION } from '../common/terms';
 
@@ -26,7 +28,11 @@ class DeleteClinicDto {
 @Controller('clinic')
 @UseGuards(AuthGuard)
 export class ClinicController {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private sync: SyncService,
+    private imports: SettingsImportService,
+  ) {}
 
   // Владелец принимает соглашение об обработке данных от имени клиники (версия должна быть текущей)
   @Put('terms')
@@ -45,11 +51,39 @@ export class ClinicController {
     return readWorkHours(c?.workHours);
   }
 
+  // Whether the hours are really set, where they came from and when. The 09:00-20:00 that the form shows for an unset clinic is NOT a setting.
+  @Get('work-hours/info')
+  async workHoursInfo(@CurrentUser() u: AuthUser) {
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: u.clinicId }, select: { workHours: true, workHoursSource: true, workHoursUpdatedAt: true, workHoursHolidays: true } });
+    const configured = !!c.workHours && typeof c.workHours === 'object' && Object.keys(c.workHours as object).length > 0;
+    return {
+      configured,
+      source: configured ? c.workHoursSource ?? 'MANUAL' : null,
+      updatedAt: configured ? c.workHoursUpdatedAt : null,
+      holidays: configured && c.workHoursSource === 'CLINICCARDS' && Array.isArray(c.workHoursHolidays) ? (c.workHoursHolidays as string[]) : [],
+      connected: !!(await this.sync.connectorForClinic(u.clinicId).catch(() => null)),
+    };
+  }
+
+  // "Take them from Cliniccards": an explicit action that replaces hours typed by hand. If Cliniccards does not give the hours the answer is
+  // an error and nothing is changed (hours are never guessed).
+  @Post('work-hours/import')
+  @HttpCode(200)
+  @Roles(Role.OWNER, Role.MANAGER)
+  async importWorkHours(@CurrentUser() u: AuthUser) {
+    const connector = await this.sync.connectorForClinic(u.clinicId).catch(() => null);
+    if (!connector) throw new BadRequestException('hours_unavailable');
+    const r = await this.imports.importHours(u.clinicId, connector, true);
+    if (r !== 'imported') throw new BadRequestException('hours_unavailable');
+    await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'clinic.work_hours_imported' } });
+    return this.workHoursInfo(u);
+  }
+
   @Put('work-hours')
   @Roles(Role.OWNER, Role.MANAGER)
   async setWorkHours(@CurrentUser() u: AuthUser, @Body() body: unknown) {
     const hours = parseWorkHours(body);
-    await this.prisma.clinic.update({ where: { id: u.clinicId }, data: { workHours: hours } });
+    await this.prisma.clinic.update({ where: { id: u.clinicId }, data: { workHours: hours, workHoursSource: 'MANUAL', workHoursUpdatedAt: new Date() } });
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'clinic.work_hours' } });
     return hours;
   }

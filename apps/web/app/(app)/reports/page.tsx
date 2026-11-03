@@ -27,6 +27,7 @@ interface Report {
   id: string;
   title: string;
   rule: string;
+  notice?: string | null;
   days: number;
   dataUpdatedAt: string | null;
   columns: { key: string; label: string }[];
@@ -283,6 +284,11 @@ export default function ReportsPage() {
           <p className="rule" style={{ padding: '0 20px' }}>
             <b>{t('rep.rule')}</b> {report.rule}. <b>{t('rep.updated')}</b>{' '}
             {report.dataUpdatedAt ? fmtDateTime(report.dataUpdatedAt) : t('common.neverSynced')}.
+          </p>
+        )}
+        {report?.notice && (
+          <p className="rule" style={{ padding: '0 20px' }}>
+            <b>{report.notice}</b>
           </p>
         )}
 

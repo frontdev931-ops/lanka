@@ -6,6 +6,7 @@ import { normalizePhone } from '../common/phone';
 import { matchInquiries } from '../inquiries/match';
 import { ClinicConnector } from './connector';
 import { DemoConnector } from './demo.connector';
+import { SettingsImportService } from './settings-import.service';
 import { CliniccardsClient } from './cliniccards.client';
 import { CliniccardsConnector } from './cliniccards.connector';
 
@@ -36,7 +37,10 @@ const missing = (existing: { externalId: string }[], fresh: Set<string>) =>
 
 @Injectable()
 export class SyncService implements OnApplicationBootstrap {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private imports: SettingsImportService,
+  ) {}
 
   // Перезапуск сервера обрывает загрузку на полпути, а запись о ней остаётся «идёт» навсегда.
   // Сервер один, поэтому при старте любая запись «идёт» точно осиротела. (Если серверов станет несколько,
@@ -154,6 +158,8 @@ export class SyncService implements OnApplicationBootstrap {
       const profile = await connector.fetchProfile?.().catch(() => null);
       // the logo and the name of the clinic come from Cliniccards, so the cabinet and the messages to patients carry the real name
       if (profile) await this.prisma.clinic.update({ where: { id: clinicId }, data: { logo: profile.logo ?? null, ...(profile.name ? { name: profile.name } : {}) } });
+      // The working hours and the price list are what the clinic would otherwise type again: read from Cliniccards, without ever replacing what it typed itself
+      await this.imports.afterSync(clinicId, connector);
 
       const idByExternal = new Map<string, string>();
       await inBatches(patients, async (p) => {
