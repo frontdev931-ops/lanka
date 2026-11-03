@@ -282,6 +282,10 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     en: 'Enter a valid date and time of the appointment',
   },
   user_not_found: { uk: 'Користувача з такою поштою не знайдено. Перевірте адресу', ru: 'Пользователь с такой почтой не найден. Проверьте адрес', en: 'No account with this email was found. Check the address' },
+  bad_schedule_mode: { uk: 'Невірний спосіб розкладу', ru: 'Неверный способ расписания', en: 'Invalid schedule mode' },
+  bad_cabinets: { uk: 'Невірний перелік кабінетів', ru: 'Неверный перечень кабинетов', en: 'Invalid list of cabinets' },
+  bad_exceptions: { uk: 'Невірні винятки: перевірте дати й години', ru: 'Неверные исключения: проверьте даты и часы', en: 'Invalid exceptions: check the dates and hours' },
+  service_needs_duration: { uk: 'Послугу можна дозволити для онлайн-запису лише затвердженою й з відомою тривалістю', ru: 'Услугу можно разрешить для онлайн-записи только утверждённой и с известной длительностью', en: 'A service can be allowed for online booking only when approved and with a known length' },
   doctor_unknown: {
     uk: 'Такого лікаря немає в Cliniccards. Оновіть список лікарів',
     ru: 'Такого врача нет в Cliniccards. Обновите список врачей',

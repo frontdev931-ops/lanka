@@ -335,9 +335,11 @@ describe('синхронизация и отчёты на данных имит�
     expect(await prisma.reminder.count({ where: { clinicId } })).toBe(0);
   });
 
-  it('логотип клиники подтягивается из профиля и виден только своей клинике', async () => {
+  it('логотип и название клиники подтягиваются из профиля и видны только своей клинике', async () => {
     const mine = await http().get('/auth/me').set(auth(owner)).expect(200);
     expect(mine.body.clinicLogo).toMatch(/^data:image\/png;base64,/);
+    // the name of the clinic is the one Cliniccards has (the profile of the mock is called "Mock")
+    expect(mine.body.clinicName).toBe('Mock');
 
     const other = await http().post('/auth/register').send({ acceptTerms: true, clinicName: `Без логотипа ${rnd()}`, name: 'Ольга', email: `o${rnd()}@example.com`, password: 'password123' }).expect(201);
     const theirs = await http().get('/auth/me').set(auth(other.body.accessToken)).expect(200);
@@ -346,7 +348,11 @@ describe('синхронизация и отчёты на данных имит�
 
   it('небезопасный или слишком большой логотип не принимается', async () => {
     const { CliniccardsConnector } = await import('../src/integrations/cliniccards.connector');
-    const connectorWith = (logo: unknown) => new CliniccardsConnector({ get: async () => ({ logo }) } as never);
+    const connectorWith = (logo: unknown, name?: unknown) => new CliniccardsConnector({ get: async () => ({ logo, name }) } as never);
+    // the name: entities decoded, empty and absurdly long names ignored
+    expect((await connectorWith(null, ' Клініка &#34;Усмішка&#34; ').fetchProfile()).name).toBe('Клініка "Усмішка"');
+    expect((await connectorWith(null, '   ').fetchProfile()).name).toBeUndefined();
+    expect((await connectorWith(null, 'x'.repeat(121)).fetchProfile()).name).toBeUndefined();
     expect((await connectorWith('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=').fetchProfile()).logo).toBeUndefined();
     expect((await connectorWith('javascript:alert(1)').fetchProfile()).logo).toBeUndefined();
     expect((await connectorWith('data:image/png;base64,' + 'A'.repeat(1_000_001)).fetchProfile()).logo).toBeUndefined();

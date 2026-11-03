@@ -13,7 +13,7 @@ import { useConfirm } from '../../../components/ConfirmDialog';
 import { Alert, Badge, Card, Empty, Icon, PageHeader } from '../../../components/ui';
 import { WorkHours } from '../../../components/WorkHours';
 import { ClinicContacts } from '../../../components/ClinicContacts';
-import { DoctorSettings } from '../../../components/DoctorSettings';
+import { BookingSettings } from '../../../components/BookingSettings';
 
 interface Member {
   id: string;
@@ -240,7 +240,7 @@ export default function SettingsPage() {
       )}
 
       {canAudit && <ClinicContacts />}
-      {canAudit && <DoctorSettings />}
+      {canAudit && <BookingSettings />}
       {canAudit && <WorkHours />}
 
       {canAudit && (

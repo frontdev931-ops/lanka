@@ -106,6 +106,13 @@ model Clinic {
   // ШІ сам отвечает пациентам на безопасные темы (запись, перенос, отмена, история); остальное передаёт человеку. По умолчанию выключено
   // What patients may be told about the clinic in a chat: set by the clinic itself (Cliniccards does not give them to us)
   // The doctor a new patient without preferences is booked to (the id in Cliniccards, and the name as it was when it was chosen)
+  // HOW the schedule is organised: DOCTORS (by the doctors) or CABINETS (by the cabinets, through ONE shared account of Cliniccards used as doctor_id).
+  // It is separate from the way a request is handled (a request for an administrator or the automatic booking).
+  scheduleMode        String               @default("DOCTORS")
+  sharedDoctorId      String?
+  sharedDoctorName    String?
+  // Days with other hours or a day off: [{date, closed, from?, to?}] on top of workHours
+  workHoursExceptions Json                 @default("[]")
   primaryDoctorId     String?
   primaryDoctorName   String?
   publicAddress       String?
@@ -293,6 +300,9 @@ model Cabinet {
   clinicId   String
   externalId String
   name       String
+  // Booking by cabinets: the cabinet is open for online booking / takes urgent patients (set by the clinic, never overwritten by the sync)
+  onlineBooking Boolean @default(false)
+  acceptsUrgent Boolean @default(false)
   clinic     Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@unique([clinicId, externalId])
@@ -771,6 +781,11 @@ model BookingRequest {
   firstName   String?
   // The field the bot asked for last: all, lastName, firstName or phone
   askField    String?
+  // How the request was scheduled when the times were offered (DOCTORS or CABINETS), the cabinet of the booking, and the doctor the patient WISHED
+  // (only a wish: it is never booked through the shared account)
+  scheduleMode String?
+  cabinetId   String?
+  wishedDoctor String?
   // The doctor of the request (the id in Cliniccards) and why him: CLIENT_CHOICE, CONTINUATION, PRIMARY, SERVICE_MATCH or URGENT
   doctorId    String?
   doctorReason String?
@@ -1005,6 +1020,9 @@ model KbItem {
   // Preparation notes, about the doctor, address and how to get there, or the answer of a FAQ entry
   text         String    @default("")
   durationMin  Int?
+  // Booking by cabinets: the service may be booked online (needs a known length), and in which cabinets (empty: any online cabinet)
+  onlineBooking Boolean  @default(false)
+  cabinetIds   String[] @default([])
   // Approved price in hryvnias (whole); the currency of the clinic's system is not trusted, so a person confirms it
   priceUah     Int?
   active       Boolean   @default(true)

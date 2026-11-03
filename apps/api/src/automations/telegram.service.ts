@@ -262,11 +262,11 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     if (wl) return this.handleWaitlist(clinicId, token, chatId, wl[1], wl[2] === 'y');
     const rate = /^rate\|([A-Za-z0-9]{10,40})\|([1-5])$/.exec(cq.data ?? '');
     if (rate) return this.handleRating(clinicId, token, chatId, rate[1], Number(rate[2]));
-    const docAnswer = /^doc(pick|yes|no)\|([A-Za-z0-9]{1,40})$/.exec(cq.data ?? '');
+    const docAnswer = /^doc(pick|yes|no|any|wish)\|([A-Za-z0-9]{1,40})$/.exec(cq.data ?? '');
     if (docAnswer) {
       const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: 'TELEGRAM', externalId: chatId }, select: { patientId: true } });
       await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel: 'TELEGRAM', chatId, direction: 'IN', text: docAnswer[1] === 'yes' ? 'Так' : docAnswer[1] === 'no' ? 'Ні' : 'Обрав лікаря' } });
-      return void (await this.flow.onDoctorAnswer({ clinicId, channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName: null }, docAnswer[1] as 'pick' | 'yes' | 'no', docAnswer[2]));
+      return void (await this.flow.onDoctorAnswer({ clinicId, channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName: null }, docAnswer[1] as 'pick' | 'yes' | 'no' | 'any' | 'wish', docAnswer[2]));
     }
     const book = /^book(yes|no)\|([A-Za-z0-9]{10,40})$/.exec(cq.data ?? '');
     if (book) {

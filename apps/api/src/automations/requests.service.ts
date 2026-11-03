@@ -36,6 +36,8 @@ export class RequestsService {
       ...(p.doctorState !== undefined ? { doctorState: p.doctorState } : {}),
       ...(p.pendingDoctorId !== undefined ? { pendingDoctorId: p.pendingDoctorId } : {}),
       ...(p.urgent !== undefined ? { urgent: p.urgent } : {}),
+      ...(p.scheduleMode !== undefined ? { scheduleMode: p.scheduleMode } : {}),
+      ...(p.wishedDoctor !== undefined ? { wishedDoctor: p.wishedDoctor } : {}),
     };
   }
 

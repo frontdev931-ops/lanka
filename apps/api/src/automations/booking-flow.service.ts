@@ -4,6 +4,7 @@ import { bookingWriteSupported } from '../ai/ai.service';
 import { ChatAssistantService, SlotOption } from '../ai/chat-assistant.service';
 import { languageOf } from '../ai/guardrails';
 import { AvailabilityService } from '../booking/availability.service';
+import { CabinetBookingService } from '../booking/cabinet-booking.service';
 import { BookingService } from '../booking/booking.service';
 import { DoctorChoiceService, isNo, isYes, serves } from '../booking/doctor-choice.service';
 import { clinicDate, clinicHm, localToUtc } from '../common/clinic-time';
@@ -80,6 +81,9 @@ const T = {
     askPhone: 'Дякуємо! Підкажіть, будь ласка, номер телефону для зв’язку.',
     handed: (service: string | null, date: string, time: string) => `Дякуємо! Передали заявку на ${service ?? 'запис'} на ${date} о ${time} адміністратору. Очікуйте підтвердження запису.`,
     handedPlain: 'Дякуємо! Передали заявку адміністратору. Очікуйте підтвердження запису.',
+    confirmAskCabinets: (service: string | null, date: string, time: string, address: string | null) => `Підтверджуєте запис${service ? ` на ${service}` : ''} ${date} о ${time}${address ? `, ${address}` : ''}? Конкретного лікаря призначає клініка. Натисніть кнопку або напишіть «так» чи «ні».`,
+    clinicAssigns: 'Лікаря призначить клініка',
+    settingsChanged: 'Налаштування запису змінилися, тому попередній вибір більше не діє. Оберіть, будь ласка, час ще раз.',
     confirmAsk: (service: string | null, date: string, time: string, doctor: string | null) => `Підтверджуєте запис${service ? ` на ${service}` : ''} ${date} о ${time}${doctor ? `, лікар ${doctor}` : ''}? Натисніть кнопку або напишіть «так» чи «ні».`,
     yes: 'Так, підтверджую',
     no: 'Ні, інший час',
@@ -102,6 +106,9 @@ const T = {
     askPhone: 'Спасибо! Подскажите, пожалуйста, номер телефона для связи.',
     handed: (service: string | null, date: string, time: string) => `Спасибо! Передали заявку на ${service ?? 'запись'} на ${date} в ${time} администратору. Ожидайте подтверждения записи.`,
     handedPlain: 'Спасибо! Передали заявку администратору. Ожидайте подтверждения записи.',
+    confirmAskCabinets: (service: string | null, date: string, time: string, address: string | null) => `Подтверждаете запись${service ? ` на ${service}` : ''} ${date} в ${time}${address ? `, ${address}` : ''}? Конкретного врача назначает клиника. Нажмите кнопку или напишите «да» или «нет».`,
+    clinicAssigns: 'Врача назначит клиника',
+    settingsChanged: 'Настройки записи изменились, поэтому прежний выбор больше не действует. Выберите, пожалуйста, время ещё раз.',
     confirmAsk: (service: string | null, date: string, time: string, doctor: string | null) => `Подтверждаете запись${service ? ` на ${service}` : ''} ${date} в ${time}${doctor ? `, врач ${doctor}` : ''}? Нажмите кнопку или напишите «да» или «нет».`,
     yes: 'Да, подтверждаю',
     no: 'Нет, другое время',
@@ -120,12 +127,13 @@ const T = {
 };
 
 // The booking as it will be told to the client: only what is known, nothing added
-export function confirmationText(lang: Lang, p: { service: string | null; startsAt: Date; doctor: string | null; clinic: string; address: string | null }): string {
+export function confirmationText(lang: Lang, p: { service: string | null; startsAt: Date; doctor: string | null; clinic: string; address: string | null; doctorNote?: string }): string {
   const x = T[lang];
   const lines = [x.head];
   if (p.service) lines.push(`${x.service}: ${p.service}`);
   lines.push(`${x.date}: ${fmtDate(clinicDate(p.startsAt))}`, `${x.time}: ${clinicHm(p.startsAt)}`);
   if (p.doctor) lines.push(`${x.doctor}: ${p.doctor}`);
+  else if (p.doctorNote) lines.push(`${x.doctor}: ${p.doctorNote}`);
   lines.push(`${x.clinic}: ${p.clinic}`);
   if (p.address) lines.push(`${x.address}: ${p.address}`);
   return lines.join('\n');
@@ -148,6 +156,7 @@ export class BookingFlowService {
     private sync: SyncService,
     private choice: DoctorChoiceService,
     private availability: AvailabilityService,
+    private cabinets: CabinetBookingService,
   ) {}
 
   private async lang(c: FlowCtx): Promise<Lang> {
@@ -192,6 +201,18 @@ export class BookingFlowService {
     const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
     // The same button pressed again after the request was already passed on: nothing to do
     if (open?.stage === 'READY' && open.slotAt?.getTime() === slotAt.getTime()) return;
+    // A button from before a change of the setting: the doctors and the cabinets are different worlds, so the old choice is dropped and new times are offered
+    const cm = await this.clinicMode(c.clinicId);
+    const stored = open?.scheduleMode ?? null;
+    const withDoctor = !!slot.doctor?.startsWith('#');
+    const stale = (stored && stored !== cm.scheduleMode) || (cm.scheduleMode === 'CABINETS' && withDoctor) || (cm.scheduleMode === 'DOCTORS' && stored === 'CABINETS');
+    if (stale && open) {
+      await this.prisma.bookingRequest.update({ where: { id: open.id }, data: { doctorId: null, doctor: null, doctorReason: null, doctorState: null, pendingDoctorId: null, scheduleMode: null, slotAt: null, stage: 'NONE', autoState: null } });
+      const options = await this.freshFor(c, { doctorId: null, doctor: null, service: open.service });
+      const x = T[await this.lang(c)];
+      await this.say(c, options.length ? x.settingsChanged : x.handedPlain, options);
+      return;
+    }
     const prev = (open?.summary ?? '').replace(/^Обрано час:[^.]*\.\s*/, '');
     const row = await this.requests.upsert(
       c.clinicId,
@@ -203,15 +224,15 @@ export class BookingFlowService {
     // The button may carry the doctor as an id of Cliniccards ("#501"); only a doctor the clinic really has is stored, by id and by name.
     // A tap without a doctor never wipes the doctor of the request.
     let doctorPatch: Prisma.BookingRequestUpdateInput = {};
-    if (slot.doctor?.startsWith('#')) {
+    if (cm.scheduleMode === 'DOCTORS' && slot.doctor?.startsWith('#')) {
       const d = await this.prisma.doctor.findUnique({ where: { clinicId_externalId: { clinicId: c.clinicId, externalId: slot.doctor.slice(1) } } });
       if (d) {
         doctorPatch = { doctorId: d.externalId, doctor: `${d.lastName} ${d.firstName}`.trim(), doctorReason: open?.doctorReason ?? 'CLIENT_CHOICE' };
         if (open?.doctorId !== d.externalId) await this.prisma.auditLog.create({ data: { clinicId: c.clinicId, userId: null, action: 'booking_request.doctor', details: { request: row.id, doctorId: d.externalId, reason: open?.doctorReason ?? 'CLIENT_CHOICE' } } });
       }
-    } else if (slot.doctor) doctorPatch = { doctor: slot.doctor };
+    } else if (slot.doctor && cm.scheduleMode === 'DOCTORS' && !slot.doctor.startsWith('#')) doctorPatch = { doctor: slot.doctor };
     // a different time or doctor than before: the request is collected again, and the automatic mode asks the person's yes again
-    await this.prisma.bookingRequest.update({ where: { id: row.id }, data: { slotAt, ...doctorPatch, stage: 'COLLECT', autoState: null, asks: 0 } });
+    await this.prisma.bookingRequest.update({ where: { id: row.id }, data: { slotAt, ...doctorPatch, scheduleMode: cm.scheduleMode, stage: 'COLLECT', autoState: null, asks: 0 } });
     await this.advance(c, row.id);
   }
 
@@ -220,6 +241,8 @@ export class BookingFlowService {
   // Returns true only when the message was taken as an answer AND the bot replied to it (otherwise the message goes on to the AI, never into silence)
   async onText(c: FlowCtx, text: string): Promise<boolean> {
     const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
+    // A named doctor with no separate schedule: the person says "any doctor" in words
+    if (open?.doctorState === 'WISH_ASKED' && !text.includes('?') && /(будь-?який|любой|все одно|всё равно|без різниці|без разницы)/i.test(text)) return this.onDoctorAnswer(c, 'any', null);
     // A proposed doctor waits for the person's "yes" or "no"
     if (open?.doctorState === 'PROPOSED' && open.stage !== 'CONFIRM' && !text.includes('?')) {
       if (isYes(text)) return this.onDoctorAnswer(c, 'yes', open.pendingDoctorId);
@@ -303,10 +326,14 @@ export class BookingFlowService {
   // ---- the answer to a question about the doctor (a button, or "так"/"ні") ----
 
   // docpick: the person chose one of the doctors named; docyes/docno: the answer to a proposed doctor. A repeated answer does nothing twice.
-  async onDoctorAnswer(c: FlowCtx, kind: 'pick' | 'yes' | 'no', doctorId: string | null): Promise<boolean> {
+  async onDoctorAnswer(c: FlowCtx, kind: 'pick' | 'yes' | 'no' | 'any' | 'wish', doctorId: string | null): Promise<boolean> {
     const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
     if (!open) return false;
-    if (kind === 'pick') {
+    if (kind === 'any' || kind === 'wish') {
+      // the answer to "any doctor or a wish for the administrator?": only the first answer counts
+      const claim = await this.prisma.bookingRequest.updateMany({ where: { id: open.id, doctorState: 'WISH_ASKED' }, data: { doctorState: null } });
+      if (!claim.count) return true;
+    } else if (kind === 'pick') {
       if (open.doctorState === 'AGREED' && open.doctorId === doctorId) return true; // the same button again
     } else {
       // the claim: only the first answer to a proposal counts
@@ -398,11 +425,22 @@ export class BookingFlowService {
     return r;
   }
 
+  // The address the clinic gave (one approved location), when it is known
+  private async addressOf(clinicId: string): Promise<string | null> {
+    const places = await this.prisma.kbItem.findMany({ where: { clinicId, kind: 'LOCATION', active: true, approvedAt: { not: null } }, select: { title: true, text: true }, take: 2 });
+    return places.length === 1 ? (places[0].text.trim() || places[0].title).split('\n')[0].slice(0, 200) : null;
+  }
+
+  private async clinicMode(clinicId: string) {
+    return this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { scheduleMode: true, sharedDoctorId: true } });
+  }
+
   // The automatic mode: the person confirms the booking in so many words before anything is written
   private async askConfirm(c: FlowCtx, id: string) {
     const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id } });
     const x = T[await this.lang(c)];
-    const text = x.confirmAsk(r.service, fmtDate(clinicDate(r.slotAt!)), clinicHm(r.slotAt!), r.doctor);
+    // booking by cabinets: service, date, time and the address; the clinic assigns the doctor, which the person is told
+    const text = r.scheduleMode === 'CABINETS' ? x.confirmAskCabinets(r.service, fmtDate(clinicDate(r.slotAt!)), clinicHm(r.slotAt!), await this.addressOf(c.clinicId)) : x.confirmAsk(r.service, fmtDate(clinicDate(r.slotAt!)), clinicHm(r.slotAt!), r.doctor);
     await this.say(c, text, [
       { label: x.yes, date: '', time: '', payload: `bookyes|${id}` },
       { label: x.no, date: '', time: '', payload: `bookno|${id}` },
@@ -473,7 +511,9 @@ export class BookingFlowService {
       if (durationMin === null) return await this.handToAdmin(c, id, 'тривалість послуги невідома');
       const place = await this.placement(c, r, durationMin);
       if (!place.ok) return place.busy ? await this.busy(c, id, 'вікно вже не вільне') : await this.handToAdmin(c, id, place.note ?? 'лікаря не визначено');
-      const doBook = () => this.booking.book(c.clinicId, null, { patientId: patientId!, startsAt: slotAt, durationMin, cabinetId: place.cabinetId, doctorId: place.doctorId, note: 'Запис створено ботом LANKA', requestId: id });
+      // the note of the visit: useful context, and never a claim that the shared account is a real doctor
+      const note = place.shared ? `Запис створено ботом LANKA. Лікаря призначає клініка${r.wishedDoctor ? `. Побажання пацієнта: ${r.wishedDoctor}` : ''}`.slice(0, 400) : 'Запис створено ботом LANKA';
+      const doBook = () => this.booking.book(c.clinicId, null, { patientId: patientId!, startsAt: slotAt, durationMin, cabinetId: place.cabinetId, doctorId: place.doctorId, note, requestId: id, sharedAccount: place.shared });
       let res;
       try {
         res = await doBook();
@@ -482,7 +522,7 @@ export class BookingFlowService {
         if (e instanceof ConflictException && e.message === 'booking_unknown') res = await doBook();
         else throw e;
       }
-      await this.finishAuto(c, id, r, slotAt, place.doctorName, res.externalVisitId);
+      await this.finishAuto(c, id, r, slotAt, place.doctorName, res.externalVisitId, place.shared ? { cabinetId: place.cabinetId, sharedDoctorId: place.doctorId } : undefined);
     } catch (e) {
       const code = e instanceof Error ? e.message : 'failed';
       if (code === 'booking_slot_taken' || code === 'booking_slot_blocked') return await this.busy(c, id, code);
@@ -492,19 +532,32 @@ export class BookingFlowService {
   }
 
   // The visit exists in Cliniccards: only now is the client told, with the real time
-  private async finishAuto(c: FlowCtx, id: string, r: { service: string | null; doctor: string | null; doctorId: string | null; doctorReason: string | null }, startsAt: Date, doctorName: string | null, externalVisitId: string | null) {
+  private async finishAuto(c: FlowCtx, id: string, r: { service: string | null; doctor: string | null; doctorId: string | null; doctorReason: string | null; wishedDoctor?: string | null }, startsAt: Date, doctorName: string | null, externalVisitId: string | null, cabinets?: { cabinetId: string; sharedDoctorId: string }) {
     const claim = await this.prisma.bookingRequest.updateMany({
       where: { id, confirmedAt: null },
-      data: { status: 'DONE', handledAt: new Date(), confirmedAt: new Date(), confirmedBy: 'AUTO', confirmSource: 'AUTO', confirmedStartsAt: startsAt, confirmedService: r.service, confirmedDoctor: doctorName ?? r.doctor, externalVisitId, noticeStatus: 'PENDING', autoState: 'DONE' },
+      data: { status: 'DONE', handledAt: new Date(), confirmedAt: new Date(), confirmedBy: 'AUTO', confirmSource: 'AUTO', confirmedStartsAt: startsAt, confirmedService: r.service, confirmedDoctor: cabinets ? null : (doctorName ?? r.doctor), externalVisitId, noticeStatus: 'PENDING', autoState: 'DONE', ...(cabinets ? { cabinetId: cabinets.cabinetId, scheduleMode: 'CABINETS' } : {}) },
     });
     if (!claim.count) return;
-    await this.prisma.auditLog.create({ data: { clinicId: c.clinicId, userId: null, action: 'booking_request.confirmed', details: { request: id, by: 'auto', visit: externalVisitId, at: startsAt.toISOString(), doctorId: r.doctorId, doctorReason: r.doctorReason } } });
+    await this.prisma.auditLog.create({ data: { clinicId: c.clinicId, userId: null, action: 'booking_request.confirmed', details: { request: id, by: 'auto', visit: externalVisitId, at: startsAt.toISOString(), doctorId: r.doctorId, doctorReason: r.doctorReason, ...(cabinets ? { scheduleMode: 'CABINETS', cabinetId: cabinets.cabinetId, sharedAccount: cabinets.sharedDoctorId, wishedDoctor: r.wishedDoctor ?? null } : {}) } } });
     await this.deliver(c.clinicId, id, null);
   }
 
   // Fresh times after the chosen one is gone or refused: of the SAME doctor when the request has one (never another without the person's yes),
   // otherwise from the schedule report as before
   private async freshFor(c: FlowCtx, r: { doctorId: string | null; doctor: string | null; service: string | null; slotAt?: Date | null }, taken = false): Promise<SlotOption[]> {
+    // booking by cabinets: the nearest times of the cabinets for the service (read from Cliniccards now); a time found taken is not offered again
+    if ((await this.clinicMode(c.clinicId)).scheduleMode === 'CABINETS') {
+      const svc = await this.choice.findService(c.clinicId, r.service);
+      if (!svc?.onlineBooking || !svc.durationMin) return [];
+      try {
+        const lang = await this.lang(c);
+        const gone = taken && r.slotAt ? { date: clinicDate(r.slotAt), time: clinicHm(r.slotAt) } : null;
+        const offers = (await this.cabinets.offers(c.clinicId, { minutes: svc.durationMin, service: svc }, 6)).filter((o) => !(gone && o.date === gone.date && o.time === gone.time)).slice(0, 3);
+        return offers.map((o) => ({ label: `${o.date.slice(8)}.${o.date.slice(5, 7)}, ${o.time}`, date: o.date, time: o.time }));
+      } catch {
+        return [];
+      }
+    }
     if (r.doctorId) {
       const svc = await this.choice.findService(c.clinicId, r.service);
       const gone = taken && r.slotAt ? { date: clinicDate(r.slotAt), time: clinicHm(r.slotAt) } : undefined;
@@ -527,7 +580,23 @@ export class BookingFlowService {
   // Where and with whom the visit can be made. A request with a doctor of the clinic is checked against THAT doctor: he must provide the service
   // (or have treated the person with it before), have a real schedule (shifts in Cliniccards or the schedule kept in LANKA) and be free for
   // the whole visit, with a free cabinet. Without a doctor on the request the schedule report is used as before.
-  private async placement(c: FlowCtx, r: BookingRequest, minutes: number): Promise<{ ok: true; cabinetId: string; doctorId: string; doctorName: string | null } | { ok: false; busy: boolean; note?: string }> {
+  private async placement(c: FlowCtx, r: BookingRequest, minutes: number): Promise<{ ok: true; cabinetId: string; doctorId: string; doctorName: string | null; shared?: boolean } | { ok: false; busy: boolean; note?: string }> {
+    // Booking by cabinets: the service must be allowed, the shared account must be one Cliniccards lists, and a cabinet must be free for the
+    // whole visit by the schedule read from Cliniccards right now (an unreadable schedule confirms nothing)
+    const cm = await this.clinicMode(c.clinicId);
+    if (cm.scheduleMode === 'CABINETS') {
+      const svc = await this.choice.findService(c.clinicId, r.service);
+      if (!svc?.onlineBooking || !svc.durationMin) return { ok: false, busy: false, note: 'послугу не дозволено для запису за кабінетами' };
+      const shared = cm.sharedDoctorId ? await this.prisma.doctor.findUnique({ where: { clinicId_externalId: { clinicId: c.clinicId, externalId: cm.sharedDoctorId } } }) : null;
+      if (!shared || !shared.active) return { ok: false, busy: false, note: 'не вибрано спільний обліковий запис Cliniccards для запису за кабінетами' };
+      try {
+        const p = await this.cabinets.placeFor(c.clinicId, r.slotAt!, svc.durationMin, svc);
+        if (!p) return { ok: false, busy: true };
+        return { ok: true, cabinetId: p.cabinetId, doctorId: shared.externalId, doctorName: null, shared: true };
+      } catch {
+        return { ok: false, busy: false, note: 'не вдалося оновити розклад Cliniccards, запис не підтверджено за застарілими даними' };
+      }
+    }
     if (r.doctorId) {
       const doc = await this.prisma.doctor.findUnique({ where: { clinicId_externalId: { clinicId: c.clinicId, externalId: r.doctorId } } });
       if (!doc || !doc.active) return { ok: false, busy: false, note: 'лікаря немає серед лікарів Cliniccards' };
@@ -679,9 +748,10 @@ export class BookingFlowService {
     const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: r.channel, externalId: r.chatId }, select: { optedOutAt: true, patientId: true } });
     if (ch?.optedOutAt) return void (await set('SKIPPED', 'opted_out'));
     const lang = await this.lang({ clinicId, channel: r.channel, chatId: r.chatId, patientId: r.patientId, contactName: r.contactName });
-    const places = await this.prisma.kbItem.findMany({ where: { clinicId, kind: 'LOCATION', active: true, approvedAt: { not: null } }, select: { title: true, text: true }, take: 2 });
-    const address = places.length === 1 ? (places[0].text.trim() || places[0].title).split('\n')[0].slice(0, 200) : null;
-    const text = confirmationText(lang, { service: r.confirmedService, startsAt: r.confirmedStartsAt, doctor: r.confirmedDoctor, clinic: clinic.name, address });
+    const address = await this.addressOf(clinicId);
+    // booking by cabinets: the shared account is never shown as a doctor; the clinic assigns one
+    const byCabinets = r.scheduleMode === 'CABINETS';
+    const text = confirmationText(lang, { service: r.confirmedService, startsAt: r.confirmedStartsAt, doctor: byCabinets ? null : r.confirmedDoctor, clinic: clinic.name, address, ...(byCabinets ? { doctorNote: T[lang].clinicAssigns } : {}) });
 
     const key = `bookconfirm:${id}`;
     const where = { clinicId_channel_externalId: { clinicId, channel: r.channel, externalId: key } };

@@ -163,7 +163,11 @@ export class ChatAssistantService {
     const hourPoints: [number, number][] = configured ? Object.values(readWorkHours(clinic.workHours)).flatMap((h) => (h ? [[hmMinutes(h.from), hmMinutes(h.from)], [hmMinutes(h.to), hmMinutes(h.to)]] as [number, number][] : [])) : [];
 
     const facts = await this.facts(clinicId, msgs.find((m) => m.patientId)?.patientId ?? null);
-    const { text: slotText, windows, days, doctors } = await this.slots(clinicId);
+    const slotsInfo = await this.slots(clinicId);
+    const { windows, days, doctors } = slotsInfo;
+    // Booking by cabinets: the times come only from the cabinet schedule (see DoctorChoiceService), so the model is not given the old per-doctor list
+    const byCabinets = (await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { scheduleMode: true } }))?.scheduleMode === 'CABINETS';
+    const slotText = byCabinets ? null : slotsInfo.text;
     // One try: a finished draft, a hand-over the model itself asked for, or the code of the check the answer did not pass.
     // A failed check is tried once more (free of charge) with a reminder, before a person is bothered.
     const attempt = async (reminder: string, billable: boolean): Promise<Draft | HandoffReason> => {

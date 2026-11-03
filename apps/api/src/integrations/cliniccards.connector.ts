@@ -316,11 +316,13 @@ export class CliniccardsConnector implements ClinicConnector {
   }
 
   async fetchProfile(): Promise<ExternalProfile> {
-    const p = await this.client.get<{ logo?: string | null }>('/clinic-profile');
+    const p = await this.client.get<{ logo?: string | null; name?: string | null }>('/clinic-profile');
+    // the name comes with HTML entities like the other texts of Cliniccards; a sane length only
+    const name = decodeEntities(p?.name ?? '').trim();
     // Только растровые форматы и разумный размер: SVG не принимаем, он может содержать скрипты
     const logo = p?.logo;
     const ok = typeof logo === 'string' && logo.length <= MAX_LOGO && /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(logo);
-    return { logo: ok ? logo : undefined };
+    return { logo: ok ? logo : undefined, ...(name && name.length <= 120 ? { name } : {}) };
   }
 
   async fetchPatients(): Promise<ExternalPatient[]> {

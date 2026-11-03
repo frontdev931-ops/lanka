@@ -25,6 +25,9 @@ export interface BookInput {
   doctorId?: string;
   note?: string;
   requestId?: string;
+  // Booking by cabinets through ONE shared account: the doctor_id is sent, but only the CABINET decides whether the place is taken
+  // (the shared account is not one physical doctor who cannot be in two cabinets at once)
+  sharedAccount?: boolean;
 }
 export interface BookingResult {
   externalVisitId: string | null;
@@ -190,7 +193,7 @@ export class BookingService {
       patientId: patient.id,
       requestId: d.requestId,
       startsAt,
-      check: () => this.assertFree(connector, { patientExternalId: patient.externalId, startsAt, endsAt, cabinetId: d.cabinetId, doctorId }),
+      check: () => this.assertFree(connector, { patientExternalId: patient.externalId, startsAt, endsAt, cabinetId: d.cabinetId, doctorId: d.sharedAccount ? undefined : doctorId }),
       reconcile: find,
       act: async () => (await connector.createVisit!({ patientExternalId: patient.externalId, cabinetId: d.cabinetId, doctorId, startsAt, endsAt, note })).externalId,
       after: async (externalId) => {

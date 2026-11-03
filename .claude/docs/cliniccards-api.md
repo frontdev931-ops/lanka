@@ -143,3 +143,4 @@ Source: the public Postman collection of the official documentation (the address
 5. How a clinic without doctor shifts (112 dental) should name a doctor: the API demands one, so the automatic mode hands such requests to an administrator.
 6. Rate limits, error texts and the behaviour on a lost answer (the mock imitates a lost answer; the real API may behave differently).
 7. The exact status and fields of a cancelled or moved visit afterwards.
+8. Booking by cabinets (one shared account as `doctor_id` in several cabinets at the same time): the documentation of POST/PUT `/visits` says nothing about overlapping visits of one doctor_id, so whether the API accepts or refuses them is unknown (LANKA's own check is per cabinet in this mode).

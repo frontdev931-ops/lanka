@@ -3,6 +3,7 @@ import { BookingRequest, Doctor, KbItem } from '@prisma/client';
 import { clinicDate } from '../common/clinic-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { AvailabilityService } from './availability.service';
+import { CabinetBookingService } from './cabinet-booking.service';
 import { DoctorsService } from './doctors.service';
 
 export type Lang = 'uk' | 'ru';
@@ -20,9 +21,12 @@ export interface RequestPatch {
   doctorId?: string | null;
   doctor?: string | null;
   doctorReason?: DoctorReason | null;
-  doctorState?: 'PROPOSED' | 'AGREED' | 'NO_CONTINUATION' | null;
+  doctorState?: 'PROPOSED' | 'AGREED' | 'NO_CONTINUATION' | 'WISH_ASKED' | 'ANY_DOCTOR' | 'WISH_ADMIN' | null;
   pendingDoctorId?: string | null;
   urgent?: boolean;
+  // Booking by cabinets: how the times were offered, and the real doctor the patient wished (only a wish, never booked through the shared account)
+  scheduleMode?: 'DOCTORS' | 'CABINETS' | null;
+  wishedDoctor?: string | null;
 }
 export type Decision =
   | { kind: 'NONE' }
@@ -86,6 +90,12 @@ const T = {
     handedDoctor: (n: string) => `Передали заявку адміністратору з побажанням: лікар ${n}. Він підбере час та напише вам. Запис ще не підтверджено.`,
     askWho: 'Гаразд. Напишіть, будь ласка, до якого лікаря ви хочете, або що вам усе одно.',
     other: 'Інший',
+    offerCabinets: 'Найближчий вільний час. Конкретного лікаря призначає клініка. Оберіть, будь ласка, зручний час кнопкою нижче. Запис підтверджує адміністратор.',
+    wishAsk: (n: string) => `Ви згадали лікаря ${n}. Окремого розкладу цього лікаря ми не бачимо, тому не можемо обіцяти запис саме до нього. Можемо записати вас на зручний час до будь-якого лікаря або передати ваше побажання адміністратору, який уточнить. Що обираєте?`,
+    wishAny: 'Будь-який лікар',
+    wishAdmin: 'Побажання адміністратору',
+    wishHanded: (n: string) => `Передали заявку адміністратору з побажанням: лікар ${n}. Напишіть, будь ласка, зручні дату й час: адміністратор уточнить, чи приймає цей лікар, і підтвердить. Запис ще не підтверджено.`,
+    handedNoSchedule: 'Не вдалося перевірити актуальний розклад. Передали заявку адміністратору: він підбере час і напише вам. Запис ще не підтверджено.',
   },
   ru: {
     ambiguous: (names: string[]) => `Уточните, пожалуйста, к какому врачу: ${names.join(' или ')}?`,
@@ -104,6 +114,12 @@ const T = {
     handedDoctor: (n: string) => `Передали заявку администратору с пожеланием: врач ${n}. Он подберёт время и напишет вам. Запись ещё не подтверждена.`,
     askWho: 'Хорошо. Напишите, пожалуйста, к какому врачу вы хотите, или что вам всё равно.',
     other: 'Другой',
+    offerCabinets: 'Ближайшее свободное время. Конкретного врача назначает клиника. Выберите, пожалуйста, удобное время кнопкой ниже. Запись подтверждает администратор.',
+    wishAsk: (n: string) => `Вы упомянули врача ${n}. Отдельного расписания этого врача мы не видим, поэтому не можем обещать запись именно к нему. Можем записать вас на удобное время к любому врачу или передать ваше пожелание администратору, который уточнит. Что выбираете?`,
+    wishAny: 'Любой врач',
+    wishAdmin: 'Пожелание администратору',
+    wishHanded: (n: string) => `Передали заявку администратору с пожеланием: врач ${n}. Напишите, пожалуйста, удобные дату и время: администратор уточнит, принимает ли этот врач, и подтвердит. Запись ещё не подтверждена.`,
+    handedNoSchedule: 'Не удалось проверить актуальное расписание. Передали заявку администратору: он подберёт время и напишет вам. Запись ещё не подтверждена.',
   },
 };
 
@@ -119,6 +135,7 @@ export class DoctorChoiceService {
     private prisma: PrismaService,
     private doctors: DoctorsService,
     private availability: AvailabilityService,
+    private cabinets: CabinetBookingService,
   ) {}
 
   // The doctors of the clinic; read from Cliniccards when nothing is stored yet (at most once per ten minutes per clinic)
@@ -201,6 +218,8 @@ export class DoctorChoiceService {
   // ---- the first decision of a booking dialogue ----
 
   async decide(c: ChoiceContext): Promise<Decision> {
+    const mode = await this.mode(c.clinicId);
+    if (mode.scheduleMode === 'CABINETS') return this.decideCabinets(c, mode.sharedDoctorId);
     const docs = await this.known(c.clinicId);
     if (!docs.length) return { kind: 'NONE' };
     const x = T[c.lang];
@@ -294,7 +313,11 @@ export class DoctorChoiceService {
 
   // ---- the answer to a question of the bot (a button or "так"/"ні") ----
 
-  async answer(c: ChoiceContext, kind: 'pick' | 'yes' | 'no', doctorId: string | null): Promise<Decision> {
+  async answer(c: ChoiceContext, kind: 'pick' | 'yes' | 'no' | 'any' | 'wish', doctorId: string | null): Promise<Decision> {
+    const x0 = T[c.lang];
+    // booking by cabinets: "any doctor" goes on with the ordinary booking by cabinets, "a wish" is passed to an administrator
+    if (kind === 'any') return this.cabinetOffer(c, { doctorState: 'ANY_DOCTOR' });
+    if (kind === 'wish') return this.cabinetHandoff(c, { doctorState: 'WISH_ADMIN' }, 'клієнт хоче конкретного лікаря: потрібно уточнити, чи він приймає', x0.wishHanded(c.request?.wishedDoctor ?? ''));
     const docs = await this.known(c.clinicId);
     const req = c.request;
     const x = T[c.lang];
@@ -332,9 +355,82 @@ export class DoctorChoiceService {
     return { kind: 'HANDOFF', reply: kept ? x.handedKeep(name(kept)) : x.handed, patch: { doctorState: kept ? 'AGREED' : null, pendingDoctorId: null }, note: 'клієнт відмовився від запропонованого лікаря' };
   }
 
+  // ---- booking by cabinets through one shared account ----
+
+  private async mode(clinicId: string) {
+    return this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { scheduleMode: true, sharedDoctorId: true } });
+  }
+
+  // A real doctor the patient named: first among the doctors of the reference (surname in any case), then "до лікаря Прізвище"
+  private async wishedDoctor(clinicId: string, texts: string[]): Promise<string | null> {
+    const kb = await this.prisma.kbItem.findMany({ where: { clinicId, kind: 'DOCTOR', active: true, approvedAt: { not: null } }, select: { id: true, title: true } });
+    const fake = kb.map((k) => ({ externalId: k.id, lastName: k.title.split(/\s+/)[0] ?? k.title, firstName: k.title.split(/\s+/).slice(1).join(' ') }));
+    for (const t of texts.slice(0, 3)) {
+      const hit = matchDoctors(t, fake)[0];
+      if (hit) return kb.find((k) => k.id === hit)!.title;
+      const m = /(?:^|[^\p{L}])(?:до|к)\s+(?:лікар(?:я|ю|і)|доктор(?:а|у)?|врач(?:а|у)?)\s+([\p{Lu}][\p{L}'’-]{2,})/u.exec(t);
+      if (m) return m[1];
+    }
+    return null;
+  }
+
+  // The reply of a hand-over in this mode: no time and no doctor are promised
+  private cabinetHandoff(c: { lang: Lang }, patch: RequestPatch, note: string, text?: string): Decision {
+    return { kind: 'HANDOFF', reply: text ?? T[c.lang].handed, patch: { scheduleMode: 'CABINETS', ...patch }, note };
+  }
+
+  // The nearest times of the cabinets for the service; a schedule that cannot be read is never replaced by an old one
+  private async cabinetOffer(c: ChoiceContext, patch: RequestPatch): Promise<Decision> {
+    const x = T[c.lang];
+    const svc = c.service;
+    try {
+      const offers = await this.cabinets.offers(c.clinicId, { minutes: svc.durationMin ?? 30, service: svc });
+      if (!offers.length) return this.cabinetHandoff(c, patch, 'немає вільного часу в кабінетах для цієї послуги');
+      return { kind: 'OFFER', reply: x.offerCabinets, options: offers.map((o) => ({ label: this.label(o.date, o.time, c.lang), date: o.date, time: o.time })), patch: { scheduleMode: 'CABINETS', ...patch } };
+    } catch {
+      return this.cabinetHandoff(c, patch, 'не вдалося оновити розклад Cliniccards', x.handedNoSchedule);
+    }
+  }
+
+  private async decideCabinets(c: ChoiceContext, sharedId: string | null): Promise<Decision> {
+    const x = T[c.lang];
+    const req = c.request;
+    // the service must be allowed for booking by cabinets and have a known length; the shared account must be one that Cliniccards lists
+    if (!c.service.onlineBooking || !c.service.durationMin) return this.cabinetHandoff(c, {}, 'послугу не дозволено для запису за кабінетами');
+    const shared = sharedId ? (await this.doctors.activeDoctors(c.clinicId)).find((d) => d.externalId === sharedId) : null;
+    if (!shared) return this.cabinetHandoff(c, {}, 'не вибрано спільний обліковий запис Cliniccards для запису за кабінетами');
+    if (req?.doctorState === 'WISH_ADMIN') return this.cabinetHandoff(c, {}, 'побажання лікаря передано адміністратору', x.wishHanded(req.wishedDoctor ?? ''));
+    if (req?.doctorState !== 'ANY_DOCTOR') {
+      // a real doctor was named: there is no separate schedule of his, so he is only a wish, and the person decides what to do with it
+      const wish = await this.wishedDoctor(c.clinicId, c.texts);
+      if (wish) {
+        return {
+          kind: 'ASK',
+          reply: x.wishAsk(wish),
+          buttons: [{ label: x.wishAny, payload: 'docany|0' }, { label: x.wishAdmin, payload: 'docwish|0' }],
+          patch: { scheduleMode: 'CABINETS', wishedDoctor: wish, doctorState: 'WISH_ASKED', doctorId: null, doctor: null, doctorReason: null },
+        };
+      }
+    }
+    return this.cabinetOffer(c, req?.doctorState === 'ANY_DOCTOR' ? { doctorState: 'ANY_DOCTOR' } : {});
+  }
+
   // ---- an urgent request ----
 
   async urgent(c: Omit<ChoiceContext, 'service'> & { service: KbItem | null }): Promise<Decision> {
+    const mode = await this.mode(c.clinicId);
+    if (mode.scheduleMode === 'CABINETS') {
+      // the cabinets the clinic allows for urgent patients; one priority request; the bot never books it by itself
+      const x = T[c.lang];
+      const patch: RequestPatch = { scheduleMode: 'CABINETS', doctorReason: 'URGENT', urgent: true };
+      try {
+        const offers = await this.cabinets.offers(c.clinicId, { minutes: c.service?.durationMin ?? 30, service: c.service, urgent: true });
+        if (!offers.length) return { kind: 'HANDOFF', reply: x.handed, patch, note: 'немає вільного часу в кабінетах для термінових звернень' };
+        return { kind: 'OFFER', reply: x.offerCabinets, options: offers.map((o) => ({ label: this.label(o.date, o.time, c.lang), date: o.date, time: o.time })), patch };
+      } catch {
+        return { kind: 'HANDOFF', reply: x.handedNoSchedule, patch, note: 'не вдалося оновити розклад Cliniccards' };
+      }
+    }
     const docs = await this.known(c.clinicId);
     if (!docs.length) return { kind: 'NONE' };
     const x = T[c.lang];

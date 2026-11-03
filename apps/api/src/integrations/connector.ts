@@ -113,6 +113,8 @@ export interface ExternalReminder {
 export interface ExternalProfile {
   // data-URI изображения (jpeg, png, webp, gif)
   logo?: string;
+  // The name of the clinic as Cliniccards has it (GET /clinic-profile)
+  name?: string;
 }
 
 // Booking in the clinic's system. Times are the clinic's local time (Europe/Kyiv), multiples of 5 minutes.

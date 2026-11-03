@@ -152,7 +152,8 @@ export class SyncService implements OnApplicationBootstrap {
       // Логотип — необязательная мелочь: если не получилось, загрузку данных это не останавливает
       const cabinets = (await connector.fetchCabinets?.().catch(() => null)) ?? [];
       const profile = await connector.fetchProfile?.().catch(() => null);
-      if (profile) await this.prisma.clinic.update({ where: { id: clinicId }, data: { logo: profile.logo ?? null } });
+      // the logo and the name of the clinic come from Cliniccards, so the cabinet and the messages to patients carry the real name
+      if (profile) await this.prisma.clinic.update({ where: { id: clinicId }, data: { logo: profile.logo ?? null, ...(profile.name ? { name: profile.name } : {}) } });
 
       const idByExternal = new Map<string, string>();
       await inBatches(patients, async (p) => {

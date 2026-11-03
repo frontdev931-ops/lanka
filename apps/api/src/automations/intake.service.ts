@@ -75,7 +75,7 @@ export class IntakeService {
     // "yes, confirm" / "no, another time" under the question of the automatic booking
     const answer = payload ? /^book(yes|no)\|([A-Za-z0-9]{10,40})$/.exec(payload) : null;
     // the doctor: one of several named, or the answer to a proposed doctor
-    const doc = payload ? /^doc(pick|yes|no)\|([A-Za-z0-9]{1,40})$/.exec(payload) : null;
+    const doc = payload ? /^doc(pick|yes|no|any|wish)\|([A-Za-z0-9]{1,40})$/.exec(payload) : null;
     if (!text && !slot && !answer && !doc) return; // photos, stickers and the like are not handled yet
 
     let ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel, externalId: chatId }, select: { patientId: true, optedOutAt: true } });
@@ -111,7 +111,7 @@ export class IntakeService {
     if (!ch && (await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN', OR: ['stop', '/stop', 'зупинити', 'остановить'].map((t) => ({ text: { equals: t, mode: 'insensitive' as const } })) }, select: { id: true } }))) return;
 
     if (doc) {
-      await this.flow.onDoctorAnswer({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, doc[1] as 'pick' | 'yes' | 'no', doc[2]);
+      await this.flow.onDoctorAnswer({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, doc[1] as 'pick' | 'yes' | 'no' | 'any' | 'wish', doc[2]);
       return;
     }
 

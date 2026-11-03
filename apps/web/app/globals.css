@@ -591,3 +591,5 @@ body { -webkit-tap-highlight-color: transparent; }
 }
 
 .doctor-card .btn, .doctor-body .btn { min-height: 44px; }
+
+.doctor-toolbar .btn, .doctor-row .btn { min-height: 44px; }
