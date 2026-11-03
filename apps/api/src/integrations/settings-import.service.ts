@@ -37,8 +37,9 @@ export class SettingsImportService {
     return 'imported';
   }
 
-  // Drafts from the price list: names, groups, prices and the ids in Cliniccards. Nothing is approved and nothing is allowed for online booking.
-  // A repeated import creates no duplicates (the id in Cliniccards is the key), refreshes drafts, and leaves an approved text, the length, the
+  // The price list: names, groups, prices and the ids in Cliniccards become services that follow Cliniccards by themselves, with no approval of
+// every position. Nothing is allowed for online booking by the import (that needs a length and the clinic's choice).
+  // A repeated import creates no duplicates (the id in Cliniccards is the key), follows the source for every field not set by hand (localFields), and leaves the length, the
   // cabinets and the permission for online booking as the clinic set them; what Cliniccards has now is kept apart (externalTitle, externalPrice)
   // so a change is visible. A hand-made service is NEVER linked to a position by the name alone: names repeat across groups, so a match is only
   // shown to the administrator (see KbService.review). A position that is no longer in a list that was read in full is marked as missing; an
@@ -64,18 +65,21 @@ export class SettingsImportService {
       const text = (s.description ?? '').slice(0, 900);
       const cur = byExternal.get(s.externalId);
       if (cur) {
+        // An imported position follows Cliniccards by itself (name, description, group, price); only what the clinic set by hand stays.
+        // A source price of 0 is "not set" in Cliniccards: the own price becomes unknown, and only the clinic can say "free".
+        const local = new Set(cur.localFields);
         const data: Prisma.KbItemUpdateInput = {};
         if (cur.externalTitle !== name) data.externalTitle = name;
         if (cur.externalPrice !== price) data.externalPrice = price;
         if (cur.missingInSourceAt) data.missingInSourceAt = null; // it is back in the price list
-        if (cur.category !== category && (!cur.category || !cur.approvedAt)) data.category = category;
+        if (cur.category !== category) data.category = category;
+        if (!local.has('title') && cur.title !== name) data.title = name;
+        if (!local.has('text') && s.description !== undefined && cur.text !== text) data.text = text;
+        const own = price !== null && price > 0 ? price : null;
+        if (!local.has('priceUah') && cur.priceUah !== own) data.priceUah = own;
         if (!cur.approvedAt) {
-          // a draft follows Cliniccards; a price typed by hand on the draft stays
-          if (cur.title !== name) data.title = name;
-          if (cur.text !== text && s.description !== undefined) data.text = text;
-          const own = price !== null && price > 0 ? price : null;
-          // a 0 on a draft was typed by the administrator ("free"), a draft never takes 0 from the source: it stays through every sync
-          if ((cur.priceUah === null || (cur.priceUah > 0 && cur.priceUah === cur.externalPrice)) && cur.priceUah !== own) data.priceUah = own;
+          data.approvedAt = new Date();
+          data.reviewedAt = new Date();
         }
         if (Object.keys(data).length) {
           await this.prisma.kbItem.update({ where: { id: cur.id }, data });
@@ -87,7 +91,7 @@ export class SettingsImportService {
         truncated = true;
         break;
       }
-      await this.prisma.kbItem.create({ data: { clinicId, kind: 'SERVICE', title: name, category, text, priceUah: price !== null && price > 0 ? price : null, source: 'CLINICCARDS', externalId: s.externalId, externalTitle: name, externalPrice: price } });
+      await this.prisma.kbItem.create({ data: { clinicId, kind: 'SERVICE', title: name, category, text, priceUah: price !== null && price > 0 ? price : null, source: 'CLINICCARDS', externalId: s.externalId, externalTitle: name, externalPrice: price, approvedAt: new Date(), reviewedAt: new Date() } });
       total++;
       added++;
     }

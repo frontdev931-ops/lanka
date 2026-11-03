@@ -15,7 +15,7 @@ interface Digest {
   botConnected: boolean;
 }
 
-// Дайджест руководителю в Telegram: частота и время, получатели привязываются ссылкой (по номеру телефона Telegram не позволяет)
+// The manager's digest in Telegram: frequency and time, recipients are linked by a link (Telegram does not allow it by phone number)
 export function DigestCard() {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();

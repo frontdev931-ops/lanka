@@ -1,8 +1,8 @@
 import { PrismaService } from '../prisma/prisma.service';
 
-// Связывает обращения с карточками по телефону. Карточка, созданная в день обращения или позже (с запасом двое суток),
-// значит «обращение стало пациентом». Если у этого телефона карточка была давно, это вернувшийся пациент: он остаётся
-// связанным, но в воронке привлечения не считается новым.
+// Links inquiries to cards by phone. A card created on the day of the inquiry or later (with two days of slack)
+// means "the inquiry became a patient". If a card with this phone existed long ago, this is a returning patient: it stays
+// linked, but in the acquisition funnel it is not counted as new.
 export async function matchInquiries(prisma: PrismaService, clinicId: string) {
   const open = await prisma.inquiry.findMany({ where: { clinicId, patientId: null, phoneNorm: { not: null } } });
   if (!open.length) return 0;

@@ -1,16 +1,16 @@
 import { BadRequestException } from '@nestjs/common';
 
-// Рабочие часы клиники по дням недели (1 — понедельник … 7 — воскресенье); null — выходной.
+// The clinic's working hours by weekday (1 is Monday … 7 is Sunday); null is a day off.
 export type Hours = { from: string; to: string } | null;
 export type WorkHours = Record<string, Hours>;
 
 const DAYS = ['1', '2', '3', '4', '5', '6', '7'];
 const HM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-// Пока клиника не настроила часы, считаем, что работают каждый день с 9:00 до 20:00
+// Until the clinic sets hours, we assume it works every day from 9:00 to 20:00
 export const DEFAULT_HOURS: WorkHours = Object.fromEntries(DAYS.map((d) => [d, { from: '09:00', to: '20:00' }]));
 
-// Из базы: недостающие или испорченные дни заменяются значениями по умолчанию
+// From the database: missing or corrupted days are replaced with the defaults
 export function readWorkHours(raw: unknown): WorkHours {
   const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   return Object.fromEntries(
@@ -25,7 +25,7 @@ export function readWorkHours(raw: unknown): WorkHours {
   );
 }
 
-// Из запроса: любая ошибка — отказ, а не молчаливая замена
+// From a request: any error is a refusal, not a silent replacement
 export function parseWorkHours(input: unknown): WorkHours {
   if (!input || typeof input !== 'object') throw new BadRequestException('bad_work_hours');
   const src = input as Record<string, unknown>;

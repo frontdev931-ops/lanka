@@ -9,18 +9,18 @@ export interface FieldDef {
   key: string;
   label: L;
   type: FieldType;
-  // Деньги: видят только руководство и аналитик
+  // Money: seen only by management and the analyst
   money?: boolean;
-  // Для enum: код -> подпись
+  // For an enum: code -> label
   values?: Record<string, L>;
-  // Колонка модели для выборки на стороне базы (ускорение); фильтрация всё равно проверяется в коде
+  // A model column for selection on the database side (speed-up); filtering is still checked in code
   db?: string;
   get: (row: any) => unknown;
 }
 export interface DatasetDef {
   id: string;
   label: L;
-  // Весь набор денежный (платежи)
+  // The whole set is money (payments)
   money?: boolean;
   model: 'patient' | 'visit' | 'planItem' | 'payment' | 'inquiry' | 'bookingRequest' | 'review';
   fields: FieldDef[];

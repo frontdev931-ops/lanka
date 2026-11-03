@@ -44,7 +44,7 @@ const NUMERIC = new Set([
   'daysSince', 'patients', 'active', 'visits', 'revenue', 'openItems', 'openSum', 'balanceIssued', 'balancePaid', 'debt',
   'invoiced', 'paid', 'paymentsCount', 'freeMinutes', 'lifetimePaid',
 ]);
-// Суммы в деньгах: показываются с разделителем тысяч
+// Sums of money: shown with a thousands separator
 const MONEY = new Set(['revenue', 'openSum', 'balanceIssued', 'balancePaid', 'debt', 'invoiced', 'paid', 'lifetimePaid']);
 
 export default function ReportsPage() {
@@ -53,11 +53,11 @@ export default function ReportsPage() {
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [days, setDays] = useState(90);
-  // Верхняя граница периода (только у отчёта «давно не бували»)
+  // The upper bound of the period (only for the "long absent" report)
   const [maxDays, setMaxDays] = useState<number | null>(null);
   const [sourceFilter, setSourceFilter] = useState('');
   const [onlyTreatment, setOnlyTreatment] = useState(false);
-  // Давность записи без итога: недавние легко вспомнить, давние закрывают пачкой по расписанию врача
+  // How old an appointment without an outcome is: recent ones are easy to remember, old ones are closed in a batch on the doctor's schedule
   const [age, setAge] = useState<'all' | 'recent' | 'mid' | 'old'>('all');
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,7 +67,7 @@ export default function ReportsPage() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [query, setQuery] = useState('');
-  // Длинные списки (сотни и тысячи строк) показываются порциями: так страница быстрая, особенно на телефоне
+  // Long lists (hundreds and thousands of rows) are shown in portions: so the page is fast, especially on a phone
   const PAGE_ROWS = 100;
   const [shown, setShown] = useState(PAGE_ROWS);
 
@@ -91,7 +91,7 @@ export default function ReportsPage() {
     : [];
   const filtered = !!q || !!sourceFilter || onlyTreatment || age !== 'all';
 
-  // График «записи без итога по неделям»: последние до 26 недель, пустые недели тоже видны (ноль, а не пропуск)
+  // The chart "appointments without an outcome by week": the last up to 26 weeks, empty weeks are visible too (zero, not a gap)
   const weekly: ChartDatum[] = (() => {
     if (currentId !== 'unclosed-visits' || !report) return [];
     const monday = (iso: string) => {
@@ -112,7 +112,7 @@ export default function ReportsPage() {
       d.setUTCDate(d.getUTCDate() - i * 7);
       const key = d.toISOString().slice(0, 10);
       const short = `${key.slice(8, 10)}.${key.slice(5, 7)}`;
-      // Последняя неделя ещё идёт: в подсказке это сказано, чтобы небольшой столбец не читали как улучшение
+      // The last week is still going: the hint says so, so a small bar is not read as an improvement
       out.push({ key, label: short, value: counts.get(key) ?? 0, tip: t('rep.weekFrom', { date: short }) + (i === 0 ? ` ${t('rep.weekRunning')}` : '') });
     }
     return out;
@@ -127,14 +127,14 @@ export default function ReportsPage() {
     [router],
   );
 
-  // Каталог приходит с сервера на выбранном языке, поэтому загружается заново при смене языка
+  // The catalogue comes from the server in the chosen language, so it is loaded again when the language changes
   useEffect(() => {
     api<CatalogItem[]>('/reports')
       .then((c) => {
         setCatalog(c);
         setCurrentId((id) => {
           if (id) return id;
-          // Ссылка вида /reports?report=unclosed-visits открывает нужный отчёт сразу
+          // A link like /reports?report=unclosed-visits opens the needed report at once
           const wanted = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('report');
           const first = c.find((x) => x.id === wanted) ?? c[0];
           setDays(first.defaultDays);
@@ -164,7 +164,7 @@ export default function ReportsPage() {
     load();
   }, [load]);
 
-  // Загрузка данных идёт в фоне; когда закончится, отчёт пересчитывается
+  // The data load runs in the background; when it is finished, the report is recalculated
   const sync = useSync(load);
 
   function pick(c: CatalogItem) {

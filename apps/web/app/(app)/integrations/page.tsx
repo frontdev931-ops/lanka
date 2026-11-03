@@ -40,9 +40,9 @@ export default function IntegrationsPage() {
   }, []);
   useEffect(load, [load]);
 
-  // Пока идёт загрузка, таблица обновляется сама
+  // While a load is running, the table refreshes by itself
   const running = runs[0]?.status === 'RUNNING';
-  // Когда загрузка закончилась, обновляем и боковую панель (логотип клиники)
+  // When the load is finished, we also refresh the side panel (the clinic's logo)
   const wasRunning = useRef(false);
   useEffect(() => {
     if (wasRunning.current && !running) window.dispatchEvent(new Event('stomat:me-changed'));
@@ -62,7 +62,7 @@ export default function IntegrationsPage() {
       setApiKey('');
       setEditingKey(false);
       load();
-      // запись о запуске появляется сразу после ответа; ещё раз обновляем и дальше следим за ней
+      // the run record appears right after the answer; we refresh once more and keep watching it
       setTimeout(load, 1500);
     } catch (e) {
       setError((e as Error).message);

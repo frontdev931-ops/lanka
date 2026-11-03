@@ -1,6 +1,6 @@
-// Телефон в едином виде «только цифры, с кодом страны». Украинские номера в любой записи
-// (0501234567, +38 (050) 123-45-67, 380501234567, 80501234567, 501234567) сводятся к 380501234567.
-// Номера других стран остаются как есть (только цифры). Слишком короткие значения не считаются телефоном.
+// A phone in one form, "digits only, with the country code". Ukrainian numbers in any notation
+// (0501234567, +38 (050) 123-45-67, 380501234567, 80501234567, 501234567) are reduced to 380501234567.
+// Numbers of other countries stay as they are (digits only). Values that are too short are not treated as a phone.
 export function normalizePhone(raw?: string | null): string | null {
   const d = (raw ?? '').replace(/\D/g, '');
   if (d.length < 9) return null;

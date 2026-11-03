@@ -68,10 +68,10 @@ describe('тарифы, лимиты и использование', () => {
     await http().post('/team/invitations').set(auth(o.token)).send({ email: `a${rnd()}@example.com`, role: 'ADMIN' }).expect(201);
     await http().post('/team/invitations').set(auth(o.token)).send({ email: `b${rnd()}@example.com`, role: 'DOCTOR' }).expect(201);
     for (let i = 0; i < 2; i++) await http().post('/team/invitations').set(auth(o.token)).send({ email: `x${i}${rnd()}@example.com`, role: 'DOCTOR' }).expect(201);
-    await http().post('/team/invitations').set(auth(o.token)).send({ email: `c${rnd()}@example.com`, role: 'DOCTOR' }).expect(400); // 1 + 4 открытых = лимит 5
+    await http().post('/team/invitations').set(auth(o.token)).send({ email: `c${rnd()}@example.com`, role: 'DOCTOR' }).expect(400); // 1 + 4 open = the limit of 5
     const admin = await invite(o.token, 'ANALYST').catch(() => null);
-    expect(admin).toBeNull(); // тоже упирается в лимит
-    // права: страницу использования видят только владелец и управляющий
+    expect(admin).toBeNull(); // also hits the limit
+    // rights: the usage page is seen only by the owner and the manager
     await prisma.clinic.update({ where: { id: o.clinicId }, data: { plan: 'PRO', limitOverrides: {} } });
     const adm = await invite(o.token, 'ADMIN');
     await http().get('/service/usage').set(auth(adm.token)).expect(403);
@@ -99,7 +99,7 @@ describe('обзор владельца сервиса', () => {
     expect(await prisma.auditLog.count({ where: { clinicId: owner.clinicId, action: 'platform.clinic_changed' } })).toBe(2);
     await http().patch('/platform/clinics/does-not-exist').set(auth(platform.token)).send({ plan: 'PRO' }).expect(404);
 
-    // приостановка
+    // suspension
     await http().patch(`/platform/clinics/${owner.clinicId}`).set(auth(platform.token)).send({ suspended: true }).expect(200);
     await http().get('/patients').set(auth(owner.token)).expect(403);
     await http().get('/service/usage').set(auth(owner.token)).expect(403);
@@ -115,7 +115,7 @@ describe('обязательная двухфакторная аутентифи
     const o = await clinic();
     await prisma.clinic.update({ where: { id: o.clinicId }, data: { plan: 'PRO' } });
     const staff = await invite(o.token, 'ADMIN');
-    await http().patch('/service/security').set(auth(o.token)).send({ require2fa: true }).expect(400); // у владельца ещё нет 2FA
+    await http().patch('/service/security').set(auth(o.token)).send({ require2fa: true }).expect(400); // the owner has no 2FA yet
     await http().patch('/service/security').set(auth(staff.token)).send({ require2fa: true }).expect(403);
     await enable2fa(o.token);
     expect((await http().patch('/service/security').set(auth(o.token)).send({ require2fa: true }).expect(200)).body.require2fa).toBe(true);
@@ -123,7 +123,7 @@ describe('обязательная двухфакторная аутентифи
     await http().get('/patients').set(auth(staff.token)).expect(403);
     const me = (await http().get('/auth/me').set(auth(staff.token)).expect(200)).body;
     expect(me.twoFactorRequired).toBe(true);
-    await http().get('/patients').set(auth(o.token)).expect(200); // у владельца 2FA есть
+    await http().get('/patients').set(auth(o.token)).expect(200); // the owner has 2FA
     await enable2fa(staff.token);
     await http().get('/patients').set(auth(staff.token)).expect(200);
     expect((await http().get('/auth/me').set(auth(staff.token))).body.twoFactorRequired).toBe(false);
@@ -138,7 +138,7 @@ describe('управление сотрудниками', () => {
     const adminUser = await invite(o.token, 'ADMIN');
     const doctor = await invite(o.token, 'DOCTOR');
     await http().patch(`/team/members/${doctor.userId}`).set(auth(adminUser.token)).send({ role: 'ANALYST' }).expect(403);
-    await http().patch(`/team/members/${doctor.userId}`).set(auth(o.token)).send({ role: 'OWNER' }).expect(400); // роль владельца не выдаётся
+    await http().patch(`/team/members/${doctor.userId}`).set(auth(o.token)).send({ role: 'OWNER' }).expect(400); // the owner role is not issued
     await http().patch(`/team/members/${ownerId}`).set(auth(o.token)).send({ role: 'ADMIN' }).expect(400);
     await http().delete(`/team/members/${ownerId}`).set(auth(o.token)).expect(400);
     await http().patch(`/team/members/${doctor.userId}`).set(auth(o.token)).send({ role: 'ANALYST' }).expect(200);
@@ -148,16 +148,16 @@ describe('управление сотрудниками', () => {
     await http().patch(`/team/members/${doctor.userId}`).set(auth(other.token)).send({ role: 'ADMIN' }).expect(404);
     await http().delete(`/team/members/${doctor.userId}`).set(auth(other.token)).expect(404);
 
-    // сброс 2FA: старые сессии закрываются, человек входит без кода и настраивает заново
+    // 2FA reset: old sessions are closed, the person signs in without a code and sets it up again
     const secret = await enable2fa(doctor.token);
     expect(secret).toBeTruthy();
-    await new Promise((r) => setTimeout(r, 1100)); // токены считаются с точностью до секунды
+    await new Promise((r) => setTimeout(r, 1100)); // tokens are counted to the second
     await http().post(`/team/members/${doctor.userId}/reset-2fa`).set(auth(o.token)).expect(200);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: doctor.userId } })).totpEnabledAt).toBeNull();
     await http().get('/auth/me').set(auth(doctor.token)).expect(401);
     expect((await http().post('/auth/login').send({ email: doctor.email, password: PASSWORD }).expect(201)).body.accessToken).toBeTruthy();
 
-    // удаление: доступ пропадает сразу, открытые задачи освобождаются
+    // deletion: access disappears at once, open tasks are released
     const task = await prisma.task.create({ data: { clinicId: o.clinicId, title: 'T', dueDate: new Date(), assigneeId: doctor.userId, createdById: ownerId, status: 'OPEN' } });
     await http().delete(`/team/members/${doctor.userId}`).set(auth(o.token)).expect(200);
     await http().get('/patients').set(auth(doctor.token)).expect(401);
@@ -204,9 +204,9 @@ describe('воронка: деньги когорты и работа коман
     expect(f.money).toMatchObject({ paid: 8500, payers: 2 });
     expect(f.money.openPlanStarted).toBe(5000);
     expect(f.money.openPlanNotStarted).toBeGreaterThanOrEqual(0);
-    expect((await http().get('/funnel?months=3').set(auth(admin.token)).expect(200)).body.money).toBeNull(); // администратору денег не показываем
+    expect((await http().get('/funnel?months=3').set(auth(admin.token)).expect(200)).body.money).toBeNull(); // we do not show money to the administrator
 
-    // команда: обращения, заявки, контакты
+    // command: inquiries, requests, contacts
     const inq = await prisma.inquiry.create({ data: { clinicId: o.clinicId, channel: 'PHONE', createdById: admin.userId, patientId: started.id, occurredAt: new Date(Date.now() - 15 * DAYMS) } });
     await prisma.inquiry.create({ data: { clinicId: o.clinicId, channel: 'INSTAGRAM', createdById: admin.userId, occurredAt: new Date(Date.now() - 3 * DAYMS) } });
     await prisma.bookingRequest.create({ data: { clinicId: o.clinicId, channel: 'TELEGRAM', chatId: 'x', kind: 'BOOKING', summary: 's', status: 'DONE', handledById: admin.userId, handledAt: new Date() } });
@@ -237,25 +237,25 @@ describe('push-уведомления сотрудникам', () => {
     for (const [token, s] of [[o.token, so], [admin.token, sa], [doctor.token, sd]] as const) await http().post('/push/subscribe').set(auth(token)).send(s).expect(200);
     await http().post('/push/subscribe').set(auth(o.token)).send({ endpoint: 'x' }).expect(400);
     expect((await http().get('/push').set(auth(o.token))).body.devices).toBe(1);
-    await http().post('/push/unsubscribe').set(auth(doctor.token)).send({ endpoint: so.endpoint }).expect(200); // чужой адрес не удаляется
+    await http().post('/push/unsubscribe').set(auth(doctor.token)).send({ endpoint: so.endpoint }).expect(200); // someone else's address is not deleted
     expect(await prisma.pushSubscription.count({ where: { endpoint: so.endpoint } })).toBe(1);
 
     const requests = app.get(RequestsService);
     pushFake.sent.length = 0;
     await requests.upsert(o.clinicId, { channel: 'TELEGRAM', chatId: 'c1', patientId: null, contactName: 'Секретне Ім’я', kind: 'BOOKING', summary: 'Секретне резюме' });
     const to = pushFake.sent.map((x) => x.endpoint).sort();
-    expect(to).toEqual([so.endpoint, sa.endpoint].sort()); // лікарю не йде
+    expect(to).toEqual([so.endpoint, sa.endpoint].sort()); // does not go to the doctor
     expect(JSON.stringify(pushFake.sent)).not.toContain('Секретне');
     expect(pushFake.sent[0].payload).toMatchObject({ title: 'Нова заявка', url: '/inbox' });
 
-    // браузер сообщил, что подписка недействительна (410): она удаляется
+    // the browser reported that the subscription is invalid (410): it is deleted
     pushFake.gone.add(sa.endpoint);
     pushFake.sent.length = 0;
     await requests.upsert(o.clinicId, { channel: 'TELEGRAM', chatId: 'c2', patientId: null, kind: 'CANCEL', summary: 'x' });
     expect(await prisma.pushSubscription.count({ where: { endpoint: sa.endpoint } })).toBe(0);
     expect(pushFake.sent.map((x) => x.endpoint)).toEqual([so.endpoint]);
 
-    // тест своему устройству; без ключей сервис молчит
+    // a test to the own device; without keys the service stays silent
     expect((await http().post('/push/test').set(auth(o.token)).expect(200)).body.sent).toBe(1);
     pushFake.configured = false;
     expect((await http().post('/push/test').set(auth(o.token)).expect(200)).body.sent).toBe(0);
@@ -277,7 +277,7 @@ describe('журнал просмотров карточек пациентов'
     await http().get(`/patients/${b.id}`).set(auth(o.token)).expect(200);
     expect(await prisma.auditLog.count({ where: { clinicId: o.clinicId, action: 'patient.viewed' } })).toBe(2);
     await http().get(`/patients/${foreign.id}`).set(auth(o.token)).expect(404);
-    expect(await prisma.auditLog.count({ where: { clinicId: o.clinicId, action: 'patient.viewed' } })).toBe(3); // попытка тоже видна
+    expect(await prisma.auditLog.count({ where: { clinicId: o.clinicId, action: 'patient.viewed' } })).toBe(3); // the attempt is also visible
     expect(await prisma.auditLog.count({ where: { clinicId: other.clinicId, action: 'patient.viewed' } })).toBe(0);
   });
 });

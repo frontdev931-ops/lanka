@@ -43,8 +43,8 @@ export interface Summary {
 
 interface Plan {
   summary: Summary;
-  badRows: number[]; // строки, которые не удалось сопоставить: для скачивания
-  extraUpdates: Map<string, Extra>; // patientId -> новые значения
+  badRows: number[]; // rows that could not be matched: for download
+  extraUpdates: Map<string, Extra>; // patientId -> new values
   contacts: Prisma.ContactLogCreateManyInput[];
 }
 
@@ -57,7 +57,7 @@ export class ImportsService {
     const batch = await this.prisma.importBatch.create({
       data: { clinicId, userId, filename: filename.slice(0, 200), columns: table.columns, rows: table.rows },
     });
-    // Не доведённые до конца загрузки старше трёх дней убираем, чтобы не копились большие таблицы
+    // Uploads that were not finished and are older than three days are removed, so large tables do not pile up
     await this.prisma.importBatch.deleteMany({ where: { clinicId, status: 'DRAFT', createdAt: { lt: new Date(Date.now() - 3 * 86_400_000) } } });
     return {
       id: batch.id,
@@ -75,7 +75,7 @@ export class ImportsService {
     return batch;
   }
 
-  // Общий расчёт для предпросмотра и записи: так предпросмотр не может разойтись с тем, что будет записано
+  // The shared calculation for the preview and the write: so the preview cannot differ from what will be written
   private async plan(clinicId: string, columns: string[], rows: string[][], m: Mapping, batchId: string): Promise<Plan> {
     const col = (name?: string) => (name ? columns.indexOf(name) : -1);
     const keyIdx = col(m.matchColumn);
@@ -120,7 +120,7 @@ export class ImportsService {
     const outcomeIdx = col(m.outcomeColumn);
     const noteIdx = col(m.noteColumn);
 
-    // Уже существующие контакты нужны, чтобы повторная загрузка того же файла не создавала дублей
+    // Existing contacts are needed so that uploading the same file again creates no duplicates
     const existingKeys = new Set<string>();
     if (m.type === 'CONTACTS') {
       const old = await this.prisma.contactLog.findMany({ where: { clinicId }, select: { patientId: true, contactedAt: true, note: true } });
@@ -128,7 +128,7 @@ export class ImportsService {
     }
 
     rows.forEach((row, i) => {
-      const rowNumber = i + 2; // строка 1 — заголовки
+      const rowNumber = i + 2; // row 1 is the headers
       const raw = row[keyIdx] ?? '';
       const key = keyOf(raw);
       if (!key) {
@@ -155,12 +155,12 @@ export class ImportsService {
       seenKeys.add(key);
 
       if (m.type === 'PATIENT_EXTRA') {
-        // Для одного пациента строки накапливаются: более поздняя строка файла важнее ранней
+        // Rows accumulate for one patient: a later row of the file wins over an earlier one
         const current = (patient.extra ?? {}) as Extra;
         const next = extraUpdates.get(patient.id) ?? {};
         for (const f of m.fields!) {
           const value = (row[col(f.column)] ?? '').trim();
-          if (!value) continue; // пустое значение ничего не стирает
+          if (!value) continue; // an empty value erases nothing
           const label = (f.label ?? f.column).trim();
           const filled = (next[label] ?? current[label])?.v;
           if (filled && !m.overwrite && !next[label]) {
@@ -182,7 +182,7 @@ export class ImportsService {
       const outcomeText = outcomeIdx >= 0 ? (row[outcomeIdx] ?? '').trim() : '';
       const outcome: TaskResult | null = parseOutcome(outcomeText);
       const noteText = noteIdx >= 0 ? (row[noteIdx] ?? '').trim() : '';
-      // Непонятный результат не теряем: он сохраняется в заметке
+      // We do not lose an unclear result: it is saved in the note
       const note = [outcome ? '' : outcomeText, noteText].filter(Boolean).join(' · ').slice(0, 1000) || null;
       const dupKey = `${patient.id}|${when.toISOString().slice(0, 10)}|${note ?? ''}`;
       if (existingKeys.has(dupKey) || contactKeys.has(dupKey)) {
@@ -198,7 +198,7 @@ export class ImportsService {
     if (m.type === 'PATIENT_EXTRA') {
       s.patientsToUpdate = extraUpdates.size;
       for (const u of extraUpdates.values()) s.fieldsToSet += Object.keys(u).length;
-      // значения, совпадающие с уже сохранёнными, не считаем изменением
+      // values equal to the ones already saved are not counted as a change
       for (const [id, u] of extraUpdates) {
         const current = (byId.get(id)?.extra ?? {}) as Extra;
         for (const [k, v] of Object.entries(u)) if (current[k]?.v === v.v) {
@@ -229,7 +229,7 @@ export class ImportsService {
     const m = validateMapping(mapping, batch.columns as string[]);
     const plan = await this.plan(clinicId, batch.columns as string[], batch.rows as string[][], m, batch.id);
 
-    // Занимаем загрузку до записи: два одновременных запроса не применят её дважды
+    // We claim the upload before writing: two simultaneous requests will not apply it twice
     const claimed = await this.prisma.importBatch.updateMany({ where: { id, clinicId, status: 'DRAFT' }, data: { status: 'DONE', appliedAt: new Date(), type: m.type } });
     if (!claimed.count) throw new ConflictException('import_done');
 
@@ -256,7 +256,7 @@ export class ImportsService {
         }
       }
     } catch (e) {
-      // Запись не удалась: возвращаем загрузку в черновики, чтобы её можно было повторить
+      // The write failed: we return the upload to drafts so it can be repeated
       await this.prisma.importBatch.update({ where: { id }, data: { status: 'DRAFT', appliedAt: null } });
       throw e;
     }
@@ -323,7 +323,7 @@ export class ImportsService {
     return { ok: true };
   }
 
-  // Строки файла, которые не удалось применить (нет пациента, неоднозначно, пустой ключ, плохая дата)
+  // File rows that could not be applied (no patient, ambiguous, empty key, bad date)
   async unmatchedCsv(clinicId: string, id: string) {
     const batch = await this.load(clinicId, id);
     if (batch.status !== 'DONE') throw new BadRequestException('bad_mapping');

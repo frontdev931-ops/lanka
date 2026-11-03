@@ -9,18 +9,18 @@ export interface Mapping {
   type: ImportType;
   matchBy: MatchBy;
   matchColumn: string;
-  // PATIENT_EXTRA: какие столбцы сохранить как дополнительные поля пациента и под каким названием
+  // PATIENT_EXTRA: which columns to save as the patient's extra fields and under which name
   fields?: { column: string; label?: string }[];
-  // CONTACTS: столбцы с датой, результатом и заметкой
+  // CONTACTS: columns with the date, the result and a note
   dateColumn?: string;
   outcomeColumn?: string;
   noteColumn?: string;
   channel?: string;
-  // PATIENT_EXTRA: перезаписывать ли уже заполненные значения (по умолчанию нет)
+  // PATIENT_EXTRA: whether to overwrite values already filled in (no by default)
   overwrite?: boolean;
 }
 
-// Проверка настроек, пришедших с клиента: столбцы должны существовать в файле
+// Checking settings that came from the client: the columns must exist in the file
 export function validateMapping(raw: unknown, columns: string[]): Mapping {
   const bad = () => new BadRequestException('bad_mapping');
   if (!raw || typeof raw !== 'object') throw bad();
@@ -48,7 +48,7 @@ export function validateMapping(raw: unknown, columns: string[]): Mapping {
   return m;
 }
 
-// ---------- значения ----------
+// ---------- values ----------
 
 const OUTCOME_WORDS: [TaskResult, string[]][] = [
   ['BOOKED', ['записав', 'записан', 'записал', 'booked', 'запис']],
@@ -57,11 +57,11 @@ const OUTCOME_WORDS: [TaskResult, string[]][] = [
   ['CALL_LATER', ['передзвон', 'перетелефон', 'перезвон', 'пізніше', 'позже', 'call later', 'later']],
 ];
 
-// Результат контакта из свободного текста таблицы; если не узнали — null (текст всё равно попадёт в заметку)
+// The result of a contact from the free text of the table; if not recognised it is null (the text still goes into the note)
 export function parseOutcome(text: string): TaskResult | null {
   const t = text.toLowerCase();
   if (!t.trim()) return null;
-  // «не відповів» содержит «відпов…», но не «запис…»: проверяем в порядке от более специфичных
+  // "не відповів" (did not answer) contains "відпов…" but not "запис…": we check in order from the more specific
   for (const key of ['NO_ANSWER', 'DECLINED', 'CALL_LATER', 'BOOKED'] as const) {
     const words = OUTCOME_WORDS.find(([k]) => k === key)![1];
     if (words.some((w) => t.includes(w))) return key;
@@ -69,7 +69,7 @@ export function parseOutcome(text: string): TaskResult | null {
   return null;
 }
 
-// Даты из таблиц: 2026-10-28, 28.10.2026, 28/10/26, серийный номер Excel (46000)
+// Dates from tables: 2026-10-28, 28.10.2026, 28/10/26, an Excel serial number (46000)
 export function parseDate(text: string): Date | null {
   const s = text.trim();
   if (!s) return null;
@@ -79,17 +79,17 @@ export function parseDate(text: string): Date | null {
   else if ((m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/))) {
     const year = m[3].length === 2 ? 2000 + +m[3] : +m[3];
     d = new Date(Date.UTC(year, +m[2] - 1, +m[1], +(m[4] ?? 0), +(m[5] ?? 0)));
-    if (d.getUTCMonth() !== +m[2] - 1) return null; // 31.02 и подобное
+    if (d.getUTCMonth() !== +m[2] - 1) return null; // 31.02 and the like
   } else if (/^\d{5}$/.test(s)) {
     d = new Date(Date.UTC(1899, 11, 30) + Number(s) * 86_400_000);
   }
   if (!d || Number.isNaN(d.getTime())) return null;
   const year = d.getUTCFullYear();
-  if (year < 2000 || d.getTime() > Date.now() + 86_400_000) return null; // контакт в будущем — скорее всего ошибка в данных
+  if (year < 2000 || d.getTime() > Date.now() + 86_400_000) return null; // a contact in the future is most likely an error in the data
   return d;
 }
 
-// «Іваненко Олег» и «Олег Іваненко» — один и тот же ключ: слова без знаков препинания, по алфавиту
+// "Іваненко Олег" and "Олег Іваненко" give the same key: words without punctuation, in alphabetical order
 export function nameKey(text: string): string {
   return text
     .toLowerCase()
@@ -100,7 +100,7 @@ export function nameKey(text: string): string {
     .join(' ');
 }
 
-// Подсказки: какой столбец, вероятно, содержит телефон, ФИО, дату и т.д.
+// Hints: which column most likely holds a phone, a full name, a date and so on
 export function suggest(columns: string[]) {
   const find = (re: RegExp) => columns.find((c) => re.test(c));
   return {

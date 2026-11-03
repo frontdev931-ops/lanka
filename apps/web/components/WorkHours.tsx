@@ -18,7 +18,7 @@ const DAY_KEYS = [
   ['7', 'wh.d7'],
 ] as const;
 
-// Рабочие часы клиники по дням недели: по ним считаются свободные окна, когда в Cliniccards нет смен врачей
+// The clinic's working hours by weekday: free windows are calculated from them when Cliniccards has no doctor shifts
 interface Info {
   configured: boolean;
   source: 'CLINICCARDS' | 'MANUAL' | null;

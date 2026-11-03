@@ -48,7 +48,7 @@ export class ReportBuilderController {
     return this.builder.run(u.clinicId, u.role, lang, { ...dto.spec, limit: Math.min(Number(dto.spec?.limit) || 500, 1000) }, dto.title, await this.updatedAt(u.clinicId));
   }
 
-  // Выгрузка: тот же расчёт, но без ограничения экрана; пишется в историю действий (в файл уходят данные пациентов)
+  // Export: the same calculation but without the screen limit; it is written to the action history (patients' data goes into the file)
   @Post('export')
   @HttpCode(200)
   async export(@CurrentUser() u: AuthUser, @ReqLang() lang: Lang, @Body() dto: ExportDto, @Res() res: Response) {
@@ -76,7 +76,7 @@ export class ReportBuilderController {
 
   @Post('saved')
   async save(@CurrentUser() u: AuthUser, @ReqLang() lang: Lang, @Body() dto: SaveDto) {
-    // проверяем описание сразу, чтобы в базу не попадали заведомо неверные отчёты
+    // we check the description at once, so that obviously wrong reports do not get into the database
     await this.builder.run(u.clinicId, u.role, lang, { ...dto.spec, limit: 1 });
     if ((await this.prisma.savedReport.count({ where: { clinicId: u.clinicId } })) >= 100) throw new BadRequestException('too_many_saved');
     return this.prisma.savedReport.create({ data: { clinicId: u.clinicId, name: dto.name.trim(), spec: dto.spec as object, createdById: u.userId }, select: { id: true, name: true, spec: true, createdAt: true } });

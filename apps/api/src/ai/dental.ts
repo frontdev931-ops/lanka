@@ -16,16 +16,21 @@ export const DENTAL_GLOSSARY = `СЛОВНИК ПАЦІЄНТІВ (розумі�
 
 // Extra words for searching the clinic's reference: the patient says "чистка", the price list says "гігієна"
 const SEARCH: [RegExp, string][] = [
-  [/чистк|гігієн|гигиен|наліт|камін|камен/i, 'гігієна професійна чистка ультразвук'],
+  [/чист[кі]|чистит|почист|гігієн|гигиен|наліт|камін|камен/i, 'гігієна професійна чистка ультразвук'],
   [/вісімк|восьмер|мудрост|8-?ка/i, 'зуб мудрості видалення хірург консультація'],
   [/панорам|оптг|рентген|приціл|прицел|кт\b|томограф|3d/i, 'рентген панорамний знімок кт діагностика'],
   [/лікува|лечен|карієс|кариес|пломб|нерв|канал|пульпіт|пульпит/i, 'лікування терапія карієс пломба каналів ендодонтія'],
-  [/видал|вирва|удал|вырв/i, 'видалення хірургія'],
+  [/видал|вирва|удал|вырв|рвать|рвати|екстракц|экстракц/i, 'видалення хірургія'],
   [/імплант|имплант|коронк|протез|вінір|винир/i, 'імплант коронка протезування ортопедія'],
   [/брекет|елайнер|элайнер|капи|прикус|прикус/i, 'ортодонтія брекети елайнери'],
   [/відбілю|отбелив|отбелю/i, 'відбілювання'],
   [/дитин|ребен|ребён|дитяч|детск/i, 'дитяча стоматологія'],
 ];
+// Russian and Ukrainian spellings are folded to one form so that «гигиена» finds «гігієна» and «кариес» finds «карієс»
+export const fold = (t: string): string =>
+  t.toLowerCase().replace(/ё/g, 'е').replace(/ы/g, 'и').replace(/э/g, 'е').replace(/[іїи]/g, 'и').replace(/є/g, 'е').replace(/ґ/g, 'г').replace(/[ъь'’`ʼ]/g, '');
+// The significant words of a text as stems (the first 5 letters of words of 4 or more letters, folded); n = 4 for a looser search
+export const stemsOf = (t: string, n = 5): string[] => [...new Set((fold(t).match(/[\p{L}\d]{4,}/gu) ?? []).map((w) => w.slice(0, n)))];
 export const expandForSearch = (text: string): string => SEARCH.filter(([re]) => re.test(text)).map(([, extra]) => extra).join(' ');
 
 // A sudden health problem. The AI does not evaluate it: the code offers the nearest time and tells the staff at once.

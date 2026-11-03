@@ -8,7 +8,7 @@ const DAY = 86_400_000;
 const HOUR = 3_600_000;
 const ACTIVE_VISIT = ['PLANNED', 'CONFIRMED', 'NOT_CONFIRMED'];
 const CLOSED_BAD = ['CANCELLED', 'DID_NOT_COME', 'MOVED'];
-// Маркетинговые сообщения одному пациенту не чаще, чем раз в столько дней (поздравление с днём рождения не считается)
+// Marketing messages to one patient no more often than once in this many days (a birthday greeting does not count)
 export const MARKETING_GAP_DAYS = 14;
 
 interface Candidate {
@@ -23,13 +23,13 @@ interface Candidate {
 export interface RuleReport {
   key: string;
   enabled: boolean;
-  candidates: number; // сколько подходит по условию
-  alreadyQueued: number; // для скольких сообщение уже создано
-  toQueue: number; // сколько будет поставлено в очередь
-  noChannel: number; // нет подключённого мессенджера
-  blockedConsent: number; // для маркетинга нет согласия
-  paused: number; // пациент отказался или на паузе
-  tooSoon: number; // маркетинговое сообщение этому пациенту уже было недавно
+  candidates: number; // how many match the condition
+  alreadyQueued: number; // for how many a message is already created
+  toQueue: number; // how many will be queued
+  noChannel: number; // no messenger connected
+  blockedConsent: number; // no consent for marketing
+  paused: number; // the patient opted out or is paused
+  tooSoon: number; // a marketing message to this patient was already sent recently
   sample: { patient: string; channel: string; text: string }[];
 }
 
@@ -53,7 +53,7 @@ export class PlannerService {
     });
   }
 
-  // Подбирает кандидатов сценария на текущий момент
+  // Picks the candidates of a scenario for the current moment
   private async candidates(clinicId: string, s: Scenario, params: Record<string, unknown>, now: Date): Promise<Candidate[]> {
     if (s.key === 'visit-reminder') {
       const hours = (Array.isArray(params.hoursBefore) ? params.hoursBefore : [24]).map(Number).filter((h) => h > 0 && h <= 72);
@@ -65,7 +65,7 @@ export class PlannerService {
       for (const v of visits) {
         for (const h of hours) {
           const at = new Date(v.startsAt.getTime() - h * HOUR);
-          // Напоминание создаётся, когда до записи осталось не больше h часов; записанным позже этого момента оно не нужно
+          // A reminder is created when no more than h hours are left before the appointment; for those booked later than that moment it is not needed
           if (at.getTime() > now.getTime()) continue;
           if (v.bookedAt && v.bookedAt.getTime() > at.getTime()) continue;
           out.push({ patientId: v.patientId, visitId: v.id, dedupeKey: `visit-reminder:${v.id}:${h}`, vars: { date: clinicDate(v.startsAt).slice(5).split('-').reverse().join('.'), time: clinicHm(v.startsAt) }, scheduledFor: now, expiresAt: v.startsAt });
@@ -81,7 +81,7 @@ export class PlannerService {
       });
       const out: Candidate[] = [];
       for (const v of visits) {
-        // Если пациент уже записан заново, спрашивать «когда вам удобно» незачем
+        // If the patient has already booked again, asking "when is convenient for you" is pointless
         const rebooked = await this.prisma.visit.count({ where: { patientId: v.patientId, status: { notIn: CLOSED_BAD }, startsAt: { gt: now } } });
         if (rebooked) continue;
         out.push({ patientId: v.patientId, visitId: v.id, dedupeKey: `no-show:${v.id}`, vars: { date: clinicDate(v.startsAt).slice(5).split('-').reverse().join('.') }, scheduledFor: now, expiresAt: new Date(v.startsAt.getTime() + 3 * DAY) });
@@ -91,7 +91,7 @@ export class PlannerService {
 
     if (s.key === 'hygiene-recall') {
       const months = Math.max(1, Math.min(24, Number(params.months) || 6));
-      // Срок наступил за последние 14 дней: так при включении сценария не рассылается вся история
+      // The due date fell within the last 14 days: so that turning a scenario on does not send to the whole history
       const dueTo = new Date(now.getTime() - months * 30 * DAY);
       const dueFrom = new Date(dueTo.getTime() - 14 * DAY);
       const done = await this.prisma.planItem.findMany({
@@ -129,7 +129,7 @@ export class PlannerService {
     }
 
     if (s.key === 'post-visit-thanks') {
-      // Поблагодарить на следующий день после состоявшегося визита (не чаще раза в день на пациента)
+      // Thank the patient the day after a visit that took place (no more than once a day per patient)
       const visits = await this.prisma.visit.findMany({
         where: { clinicId, status: 'VISITED', startsAt: { gte: new Date(now.getTime() - 48 * HOUR), lte: new Date(now.getTime() - 18 * HOUR) }, patient: { removedAt: null } },
         select: { id: true, patientId: true, startsAt: true },
@@ -146,7 +146,7 @@ export class PlannerService {
     }
 
     if (s.key === 'visit-review') {
-      // Просим оценку через несколько часов после визита и не позже следующего дня; один раз в день на пациента
+      // We ask for a rating a few hours after the visit and not later than the next day; once a day per patient
       const visits = await this.prisma.visit.findMany({
         where: { clinicId, status: 'VISITED', startsAt: { gte: new Date(now.getTime() - 30 * HOUR), lte: new Date(now.getTime() - 3 * HOUR) }, patient: { removedAt: null } },
         select: { id: true, patientId: true, startsAt: true },
@@ -163,13 +163,13 @@ export class PlannerService {
     }
 
     if (s.key === 'continue-treatment' || s.key === 'lapsed') {
-      // Срок «без визита» наступил за последние 14 дней: при включении сценария не рассылается вся история
+      // The "no visit" due date fell within the last 14 days: turning a scenario on does not send to the whole history
       const days = Math.max(7, Math.min(1095, Number(params.days) || (s.key === 'lapsed' ? 180 : 30)));
       const dueTo = new Date(now.getTime() - days * DAY);
       const dueFrom = new Date(dueTo.getTime() - 14 * DAY);
       let onlyIds: string[] | undefined;
       if (s.key === 'continue-treatment') {
-        // лечение начато (есть выполненные пункты) и остались невыполненные
+        // treatment started (there are completed items) and incomplete ones remain
         const open = await this.prisma.planItem.findMany({ where: { clinicId, status: { in: ['NEW', 'PLANNED_TO_DO'] } }, select: { patientId: true }, distinct: ['patientId'] });
         const started = await this.prisma.planItem.findMany({ where: { clinicId, status: { in: ['DONE', 'INVOICED'] }, patientId: { in: open.map((o) => o.patientId) } }, select: { patientId: true }, distinct: ['patientId'] });
         onlyIds = started.map((x) => x.patientId);
@@ -190,7 +190,7 @@ export class PlannerService {
     }
 
     if (s.key === 'birthday') {
-      // Сегодняшний день рождения по времени клиники; сообщение действует до конца суток
+      // Today's birthday in the clinic's time; the message is valid until the end of the day
       const [, mm, dd] = clinicDate(now).split('-');
       const rows = await this.prisma.patient.findMany({ where: { clinicId, removedAt: null, birthDate: { not: null } }, select: { id: true, birthDate: true } });
       const year = clinicDate(now).slice(0, 4);
@@ -201,7 +201,7 @@ export class PlannerService {
     return [];
   }
 
-  // Пациенты, которым маркетинговое сообщение (сценарий или рассылка) уже создано за последние дни: чтобы не писать слишком часто
+  // Patients who already have a marketing message (scenario or campaign) created in the last days: so as not to write too often
   async recentlyContacted(clinicId: string, patientIds: string[], now: Date): Promise<Set<string>> {
     if (!patientIds.length) return new Set();
     const marketingKeys = SCENARIOS.filter((x) => x.kind === 'marketing' && x.key !== 'birthday').map((x) => x.key);
@@ -218,7 +218,7 @@ export class PlannerService {
     return new Set(rows.map((r) => r.patientId));
   }
 
-  // Строит очередь. dryRun только считает и показывает примеры, ничего не записывая.
+  // Builds the queue. dryRun only counts and shows examples, writing nothing.
   async plan(clinicId: string, opts: { dryRun: boolean; includeDisabled?: boolean; now?: Date }): Promise<RuleReport[]> {
     const now = opts.now ?? new Date();
     if ((await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { suspendedAt: true } })).suspendedAt) return [];
@@ -265,7 +265,7 @@ export class PlannerService {
             row.tooSoon++;
             continue;
           }
-          // Сейчас подключён только Telegram; SMS добавится как запасной канал
+          // Only Telegram is connected now; SMS will be added as a fallback channel
           if (!p.channels.length) {
             row.noChannel++;
             continue;
@@ -279,7 +279,7 @@ export class PlannerService {
             ruleKey: r.key,
             channel: 'TELEGRAM',
             text,
-            // Служебные сообщения уходят сразу, если клиника это разрешила; остальные ждут подтверждения сотрудника
+            // Service messages go out at once if the clinic allowed it; the others wait for the staff's confirmation
             status: sc.kind === 'service' && clinic.autoSendService ? 'APPROVED' : 'PENDING_APPROVAL',
             scheduledFor: c.scheduledFor,
             expiresAt: c.expiresAt,

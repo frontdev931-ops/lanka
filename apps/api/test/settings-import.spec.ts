@@ -133,12 +133,12 @@ describe('робочі години з Cliniccards', () => {
 });
 
 describe('прайс з Cliniccards у «Послуги»', () => {
-  it('після синхронізації послуги з’являються чернетками з назвою, ціною, групою й id; нічого не затверджено й не дозволено для запису; довжини немає', async () => {
+  it('після синхронізації послуги з’являються самі (без затвердження кожної) з назвою, ціною, групою й id; для запису нічого не дозволено; довжини немає', async () => {
     const c = await clinic();
     const rows = await services(c);
     expect(rows.map((r) => r.title).sort()).toEqual(['Консультація', 'Лікування карієсу', 'Професійна гігєна "Air flow" 1 ступеня'].sort());
     const caries = rows.find((r) => r.title === 'Лікування карієсу')!;
-    expect(caries).toMatchObject({ externalId: '1002', category: 'Терапія', priceUah: 1800, source: 'CLINICCARDS', approvedAt: null, onlineBooking: false, durationMin: null, cabinetIds: [], externalTitle: 'Лікування карієсу', externalPrice: 1800 });
+    expect(caries).toMatchObject({ externalId: '1002', category: 'Терапія', priceUah: 1800, source: 'CLINICCARDS', approvedAt: expect.any(Date), onlineBooking: false, durationMin: null, cabinetIds: [], localFields: [], externalTitle: 'Лікування карієсу', externalPrice: 1800 });
     expect(rows.find((r) => r.externalId === '1001')!.text).toContain('AirFlow');
     // the price list of Cliniccards gives no length of a visit: none is invented
     expect(rows.every((r) => r.durationMin === null)).toBe(true);
@@ -173,31 +173,50 @@ describe('прайс з Cliniccards у «Послуги»', () => {
     expect(await prisma.kbItem.count({ where: { clinicId: c.clinicId, kind: 'SERVICE' } })).toBe(6);
   });
 
-  it('повторна синхронізація зберігає довжину, дозвіл на онлайн-запис і кабінети; затверджені назва й ціна не змінюються самі, зміна в Cliniccards видна; чернетка слідує за Cliniccards', async () => {
+  it('повторна синхронізація: назва, опис і ціна імпортованих послуг оновлюються самі; довжина, дозвіл на онлайн-запис і кабінети зберігаються; ручні винятки не перезаписуються', async () => {
     const c = await clinic();
     const caries = (await services(c)).find((r) => r.externalId === '1002')!;
     const consult = (await services(c)).find((r) => r.externalId === '1003')!;
-    // the clinic approves the caries (name and price are now the clinic's), sets its length, allows it online in cabinet 801 only
-    await http().post(`/knowledge/${caries.id}/approve`).set(auth(c.token)).expect(200);
+    const air = (await services(c)).find((r) => r.externalId === '1001')!;
+    // the clinic sets the length of the caries and allows it online in cabinet 801 only; no approval is needed for any of it
     await prisma.cabinet.updateMany({ where: { clinicId: c.clinicId }, data: { onlineBooking: true } });
     await putServices(c, [{ id: caries.id, onlineBooking: true, cabinetIds: ['801'], durationMin: 45 }]).expect(200);
-    // Cliniccards renames and reprices both positions
+    // and keeps its own text of the air flow (a local exception)
+    await http().patch(`/knowledge/${air.id}`).set(auth(c.token)).send({ text: 'Наш опис' }).expect(200);
+    expect((await prisma.kbItem.findUniqueOrThrow({ where: { id: air.id } })).localFields).toEqual(['text']);
+    // Cliniccards renames, reprices and re-describes the positions
     for (const r of mock.data.prices) {
       if (r.item_id === '1002') Object.assign(r, { item_name: 'Лікування карієсу (нова назва)', item_price: '2100' });
       if (r.item_id === '1003') Object.assign(r, { item_name: 'Консультація лікаря', item_price: '350' });
+      if (r.item_id === '1001') Object.assign(r, { item_additional: 'Новий опис' });
     }
     await sync(c);
     const after = (await services(c)).find((r) => r.id === caries.id)!;
-    expect(after).toMatchObject({ title: 'Лікування карієсу', priceUah: 1800, durationMin: 45, onlineBooking: true, cabinetIds: ['801'], externalTitle: 'Лікування карієсу (нова назва)', externalPrice: 2100 });
+    expect(after).toMatchObject({ title: 'Лікування карієсу (нова назва)', priceUah: 2100, durationMin: 45, onlineBooking: true, cabinetIds: ['801'], externalTitle: 'Лікування карієсу (нова назва)', externalPrice: 2100 });
     expect(after.approvedAt).not.toBeNull();
     const s = await settings(c);
-    expect(s.services.find((x: { id: string }) => x.id === caries.id)).toMatchObject({ onlineBooking: true, cabinetIds: ['801'], durationMin: 45, changedInSource: true });
-    // the draft was not approved: it follows Cliniccards
-    expect(await prisma.kbItem.findUniqueOrThrow({ where: { id: consult.id } })).toMatchObject({ title: 'Консультація лікаря', priceUah: 350, approvedAt: null });
-    expect(s.services.find((x: { id: string }) => x.id === consult.id).changedInSource).toBe(false);
-    // the warnings match what is saved: one approved service with a length is allowed, so "no services" is gone
+    expect(s.services.find((x: { id: string }) => x.id === caries.id)).toMatchObject({ onlineBooking: true, cabinetIds: ['801'], durationMin: 45, changedInSource: false, priceDivergence: null });
+    expect(await prisma.kbItem.findUniqueOrThrow({ where: { id: consult.id } })).toMatchObject({ title: 'Консультація лікаря', priceUah: 350 });
+    expect((await prisma.kbItem.findUniqueOrThrow({ where: { id: air.id } })).text).toBe('Наш опис'); // the local exception stays
+    // the warnings match what is saved: one service with a length is allowed, so "no services" is gone
     expect(s.problems).not.toContain('no_services');
     expect(s.missingLength).toBe(2);
+    // a price taken from the list that is gone (0 or empty) becomes unknown, not a stale number
+    mock.data.prices.find((r) => r.item_id === '1003')!.item_price = '0';
+    await sync(c);
+    expect((await prisma.kbItem.findUniqueOrThrow({ where: { id: consult.id } })).priceUah).toBeNull();
+  });
+
+  it('старі чернетки з Cliniccards переходять на нову поведінку: імпорт сам їх затверджує й далі вони слідують за прайсом; явні локальні значення лишаються', async () => {
+    const c = await clinic();
+    const [caries, air] = [(await services(c)).find((r) => r.externalId === '1002')!, (await services(c)).find((r) => r.externalId === '1001')!];
+    // the old state: an unapproved draft, and an approved position with a price typed by hand
+    await prisma.kbItem.update({ where: { id: caries.id }, data: { approvedAt: null, priceUah: 1000 } });
+    await prisma.kbItem.update({ where: { id: air.id }, data: { priceUah: 999, localFields: ['priceUah'] } });
+    mock.data.prices.find((r) => r.item_id === '1002')!.item_price = '1900';
+    await sync(c);
+    expect(await prisma.kbItem.findUniqueOrThrow({ where: { id: caries.id } })).toMatchObject({ approvedAt: expect.any(Date), priceUah: 1900 });
+    expect(await prisma.kbItem.findUniqueOrThrow({ where: { id: air.id } })).toMatchObject({ priceUah: 999 }); // the explicit local price stays
   });
 
   it('довжина запитується лише там, де її бракує: без неї послугу не дозволити, з довжиною (5–480) і затвердженням — можна', async () => {
@@ -207,11 +226,9 @@ describe('прайс з Cliniccards у «Послуги»', () => {
     await putServices(c, [{ id: item.id, onlineBooking: true, cabinetIds: [] }]).expect(400); // no length, not approved
     await putServices(c, [{ id: item.id, onlineBooking: false, cabinetIds: [], durationMin: 3 }]).expect(400);
     await putServices(c, [{ id: item.id, onlineBooking: false, cabinetIds: [], durationMin: 500 }]).expect(400);
-    // the length alone (without allowing) is saved and keeps the draft a draft
+    // the length alone (without allowing) is saved
     await putServices(c, [{ id: item.id, onlineBooking: false, cabinetIds: [], durationMin: 30 }]).expect(200);
-    expect(await prisma.kbItem.findUniqueOrThrow({ where: { id: item.id } })).toMatchObject({ durationMin: 30, approvedAt: null, onlineBooking: false });
-    await putServices(c, [{ id: item.id, onlineBooking: true, cabinetIds: [] }]).expect(400); // still not approved
-    await http().post(`/knowledge/${item.id}/approve`).set(auth(c.token)).expect(200);
+    expect(await prisma.kbItem.findUniqueOrThrow({ where: { id: item.id } })).toMatchObject({ durationMin: 30, approvedAt: expect.any(Date), onlineBooking: false });
     const ok = await putServices(c, [{ id: item.id, onlineBooking: true, cabinetIds: [] }]).expect(200);
     expect(ok.body.missingLength).toBe(2);
     expect(await prisma.kbItem.findUniqueOrThrow({ where: { id: item.id } })).toMatchObject({ durationMin: 30, onlineBooking: true });
@@ -269,7 +286,6 @@ describe('ціна: невідома, безкоштовна, змінена', (
     const list = (await http().get('/knowledge').set(auth(c.token)).expect(200)).body.items as { id: string; priceState: string; priceDivergence: unknown }[];
     expect(list.find((i) => i.id === consult.id)).toMatchObject({ priceState: 'UNKNOWN' });
     // approving with an unknown price works, and the model is told not to name a price
-    await http().post(`/knowledge/${consult.id}/approve`).set(auth(c.token)).expect(200);
     const { KbService } = await import('../src/kb/kb.service');
     const unknown = await app.get(KbService).factsFor(c.clinicId);
     expect(unknown.text).toMatch(/Консультація[^\n]*ціна: не називати/);
@@ -293,45 +309,53 @@ describe('ціна: невідома, безкоштовна, змінена', (
   it('«безкоштовно», вказане адміністратором на чернетці, переживає повторну синхронізацію, навіть коли Cliniccards теж віддає 0', async () => {
     const c = await clinic();
     const consult = (await services(c)).find((r) => r.externalId === '1003')!; // "0" in the price list, a draft
-    expect(consult).toMatchObject({ priceUah: null, externalPrice: 0, approvedAt: null });
+    expect(consult).toMatchObject({ priceUah: null, externalPrice: 0, localFields: [] });
     await http().patch(`/knowledge/${consult.id}`).set(auth(c.token)).send({ priceUah: 0 }).expect(200);
     await sync(c);
     await sync(c);
     expect(await prisma.kbItem.findUniqueOrThrow({ where: { id: consult.id } })).toMatchObject({ priceUah: 0, externalPrice: 0 });
   });
 
-  it('зміна ціни в Cliniccards видна адміністратору, стару ціну бот не називає до рішення; прийняти нову або залишити свою', async () => {
+  it('ціна імпортованої послуги слідує за Cliniccards сама; розбіжність виникає лише з ціною, яку клініка задала вручну, і стара ціна не називається до рішення', async () => {
     const c = await clinic();
     const { KbService } = await import('../src/kb/kb.service');
     const caries = (await services(c)).find((r) => r.externalId === '1002')!;
-    await http().post(`/knowledge/${caries.id}/approve`).set(auth(c.token)).expect(200);
     expect((await app.get(KbService).factsFor(c.clinicId)).allowedAmounts).toContain(1800);
+    // no local exception: a change in Cliniccards simply applies, and nothing is asked of the administrator
+    mock.data.prices.find((r) => r.item_id === '1002')!.item_price = '2000';
+    await sync(c);
+    expect((await app.get(KbService).factsFor(c.clinicId)).allowedAmounts).toEqual(expect.arrayContaining([2000]));
     expect((await http().get('/knowledge/review').set(auth(c.token)).expect(200)).body.priceChanges).toEqual([]);
-
+    // the clinic sets its own price on purpose: a local exception
+    await http().patch(`/knowledge/${caries.id}`).set(auth(c.token)).send({ priceUah: 1800 }).expect(200);
+    expect((await prisma.kbItem.findUniqueOrThrow({ where: { id: caries.id } })).localFields).toEqual(['priceUah']);
     mock.data.prices.find((r) => r.item_id === '1002')!.item_price = '2100';
     await sync(c);
     const rev = (await http().get('/knowledge/review').set(auth(c.token)).expect(200)).body;
     expect(rev.priceChanges).toEqual([{ id: caries.id, title: 'Лікування карієсу', category: 'Терапія', own: 1800, source: 2100 }]);
     expect((await settings(c)).services.find((x: { id: string }) => x.id === caries.id)).toMatchObject({ priceDivergence: { own: 1800, source: 2100 }, changedInSource: true });
-    // until the decision the old price is not told as current, and no price is invented from the new one either
+    // until the decision neither price is told
     const meanwhile = await app.get(KbService).factsFor(c.clinicId);
     expect(meanwhile.allowedAmounts).not.toContain(1800);
     expect(meanwhile.allowedAmounts).not.toContain(2100);
     expect(meanwhile.text).toMatch(/Лікування карієсу[^\n]*ціна: не називати/);
-
-    // accept the new price: it is told from now on
+    // accept the source price: the position follows Cliniccards again
     await http().post(`/knowledge/${caries.id}/price-source`).set(auth(c.token)).send({ action: 'accept' }).expect(200);
+    expect((await prisma.kbItem.findUniqueOrThrow({ where: { id: caries.id } })).localFields).toEqual([]);
     expect((await app.get(KbService).factsFor(c.clinicId)).allowedAmounts).toContain(2100);
-    expect((await http().get('/knowledge/review').set(auth(c.token))).body.priceChanges).toEqual([]);
-    // Cliniccards changes it again; the administrator keeps the clinic's own price: no discrepancy until the source changes once more
+    mock.data.prices.find((r) => r.item_id === '1002')!.item_price = '2300';
+    await sync(c);
+    expect((await app.get(KbService).factsFor(c.clinicId)).allowedAmounts).toContain(2300);
+    // a local exception again, kept after the next change of the source ("keep my price"): not asked again until the source changes once more
+    await http().patch(`/knowledge/${caries.id}`).set(auth(c.token)).send({ priceUah: 2000 }).expect(200);
     mock.data.prices.find((r) => r.item_id === '1002')!.item_price = '2500';
     await sync(c);
     expect((await http().get('/knowledge/review').set(auth(c.token))).body.priceChanges).toHaveLength(1);
     await http().post(`/knowledge/${caries.id}/price-source`).set(auth(c.token)).send({ action: 'keep' }).expect(200);
     expect((await http().get('/knowledge/review').set(auth(c.token))).body.priceChanges).toEqual([]);
-    expect((await app.get(KbService).factsFor(c.clinicId)).allowedAmounts).toContain(2100);
+    expect((await app.get(KbService).factsFor(c.clinicId)).allowedAmounts).toContain(2000);
     await sync(c);
-    expect((await http().get('/knowledge/review').set(auth(c.token))).body.priceChanges).toEqual([]); // the same source price: still decided
+    expect((await http().get('/knowledge/review').set(auth(c.token))).body.priceChanges).toEqual([]);
     mock.data.prices.find((r) => r.item_id === '1002')!.item_price = '2600';
     await sync(c);
     expect((await http().get('/knowledge/review').set(auth(c.token))).body.priceChanges).toHaveLength(1);
@@ -365,7 +389,9 @@ describe('позиція зникла з прайсу', () => {
     expect((await http().get('/knowledge/review').set(auth(c.token))).body.missing.map((m: { id: string }) => m.id)).toEqual([caries.id]);
     // the bot does not talk the position into a booking: the service is out of its knowledge, and the booking path refuses it
     const { KbService } = await import('../src/kb/kb.service');
-    expect((await app.get(KbService).factsFor(c.clinicId)).text ?? '').not.toContain('Лікування карієсу');
+    const vanished = await app.get(KbService).factsFor(c.clinicId, new Date(), 'карієс');
+    expect(vanished.text).toMatch(/Лікування карієсу[^\n]*ціна: не називати, цієї позиції вже немає в актуальному прайсі/); // told to ask the administrator, no old price
+    expect(vanished.allowedAmounts).not.toContain(1800);
     const { DoctorChoiceService } = await import('../src/booking/doctor-choice.service');
     const decision = await app.get(DoctorChoiceService).decide({ clinicId: c.clinicId, patientId: null, service: gone, texts: ['хочу лікування карієсу'], lang: 'uk', request: null });
     expect(decision).toMatchObject({ kind: 'HANDOFF' });

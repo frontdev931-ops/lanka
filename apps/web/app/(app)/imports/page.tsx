@@ -58,7 +58,7 @@ export default function ImportsPage() {
   const [batch, setBatch] = useState<Batch | null>(null);
   const [matchBy, setMatchBy] = useState<MatchBy>('PHONE');
   const [matchColumn, setMatchColumn] = useState('');
-  const [fields, setFields] = useState<Record<string, string | null>>({}); // столбец -> название поля (null: не сохранять)
+  const [fields, setFields] = useState<Record<string, string | null>>({}); // column -> field name (null: do not save)
   const [dateColumn, setDateColumn] = useState('');
   const [outcomeColumn, setOutcomeColumn] = useState('');
   const [noteColumn, setNoteColumn] = useState('');
@@ -91,7 +91,7 @@ export default function ImportsPage() {
     try {
       const b = await upload<Batch>('/imports', file);
       setBatch(b);
-      // Подсказки сервера: какой столбец похож на телефон, ФИО, дату, результат и комментарий
+      // Server hints: which column looks like a phone, a full name, a date, a result and a comment
       const s = b.suggestions;
       if (s.phone) { setMatchBy('PHONE'); setMatchColumn(s.phone); }
       else if (s.name) { setMatchBy('NAME'); setMatchColumn(s.name); }

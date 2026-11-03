@@ -11,7 +11,7 @@ import { WaitlistService } from './waitlist.service';
 import { CustomAutomationsService } from './custom-automations.service';
 
 const ACTIVE_VISIT = ['PLANNED', 'CONFIRMED', 'NOT_CONFIRMED'];
-// Окно отправки по часовому поясу клиники: ночью пациентам не пишем
+// Sending window in the clinic's time zone: we do not write to patients at night
 const SEND_FROM = '08:00';
 const SEND_TO = '22:00';
 
@@ -74,7 +74,7 @@ export class OutboxService {
     return { cancelled: r.count };
   }
 
-  // Отправляет одобренные сообщения, срок которых наступил. Перед отправкой всё проверяется заново: данные могли измениться.
+  // Sends approved messages whose time has come. Everything is re-checked before sending: the data may have changed.
   async process(now = new Date()): Promise<{ sent: number; failed: number; skipped: number }> {
     const out = { sent: 0, failed: 0, skipped: 0 };
     const due = await this.prisma.outboundMessage.findMany({ where: { status: 'APPROVED', scheduledFor: { lte: now }, clinic: { sendingEnabled: true, suspendedAt: null } }, orderBy: { scheduledFor: 'asc' }, take: 200 });
@@ -99,7 +99,7 @@ export class OutboxService {
         continue;
       }
       if (!inWindow) {
-        out.skipped++; // ночью ждём утра
+        out.skipped++; // at night we wait for the morning
         continue;
       }
       if ((left.get(m.clinicId) ?? 0) <= 0) {
@@ -147,7 +147,7 @@ export class OutboxService {
         continue;
       }
       try {
-        // Просьба об оценке приходит с кнопками 1-5; нажатие обрабатывает бот (TelegramService.handleRating)
+        // The rating request comes with buttons 1-5; a press is handled by the bot (TelegramService.handleRating)
         // A reminder can carry "I confirm / I want to reschedule" buttons when the clinic turned that on for the scenario
         if (m.ruleKey === 'visit-reminder' && m.visitId && !confirmFor.has(m.clinicId)) {
           const rule = await this.prisma.automationRule.findUnique({ where: { clinicId_key: { clinicId: m.clinicId, key: 'visit-reminder' } }, select: { params: true } });
@@ -171,7 +171,7 @@ export class OutboxService {
         left.set(m.clinicId, (left.get(m.clinicId) ?? 1) - 1);
         out.sent++;
       } catch (e) {
-        // 403: пациент заблокировал бота: больше не пишем
+        // 403: the patient blocked the bot: we do not write any more
         if (e instanceof TelegramError && e.code === 403) await this.prisma.patientChannel.update({ where: { id: ch.id }, data: { optedOutAt: new Date() } });
         await mark('FAILED', e instanceof TelegramError ? e.message.slice(0, 200) : 'Не вдалося надіслати');
         out.failed++;

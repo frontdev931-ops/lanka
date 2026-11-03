@@ -3,7 +3,7 @@ import { Role } from '@prisma/client';
 import { AuthGuard, AuthUser, CurrentUser, Roles } from '../common/auth.guard';
 import { FunnelService, REASONS, Reason } from './funnel.service';
 
-// Воронка пациента. В ней нет денежных сумм клиники, но есть оплаты и долги пациентов: врачу закрыта, как и финансовые отчёты.
+// The patient funnel. It has no money sums of the clinic, but it has patients' payments and debts: closed to the doctor, like the financial reports.
 const ALLOWED = [Role.OWNER, Role.MANAGER, Role.ADMIN, Role.ANALYST];
 
 const months = (v?: string) => Math.min(36, Math.max(1, Number.parseInt(v ?? '', 10) || 12));
@@ -20,7 +20,7 @@ export class FunnelController {
     return this.funnel.overview(u.clinicId, { months: months(m), source: source || undefined, direction: direction || undefined }, ([Role.OWNER, Role.MANAGER, Role.ANALYST] as Role[]).includes(u.role));
   }
 
-  // Верх воронки: обращения → карточка → запись → пришёл
+  // Top of the funnel: inquiries → card → appointment → came
   @Get('inquiries')
   inquiries(@CurrentUser() u: AuthUser, @Query('months') m?: string, @Query('channel') channel?: string) {
     return this.funnel.inquiryFunnel(u.clinicId, months(m), channel || undefined);

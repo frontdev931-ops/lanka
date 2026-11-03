@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Database backup into a compressed file. Usage:
-#   DATABASE_URL=postgresql://... ./scripts/backup.sh [папка]
+#   DATABASE_URL=postgresql://... ./scripts/backup.sh [folder]
 # A copy contains patient data: keep it somewhere closed, do not commit it, do not send it by email.
 set -euo pipefail
 : "${DATABASE_URL:?DATABASE_URL is required}"

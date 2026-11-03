@@ -7,7 +7,7 @@ import { AuthService } from '../auth/auth.service';
 
 class ConnectDto {
   @IsString() @MinLength(8) apiKey: string;
-  // Сразу запустить первую загрузку данных (ответ не ждёт её окончания)
+  // Starts the first data load at once (the answer does not wait for it to finish)
   @IsOptional() @IsBoolean() sync?: boolean;
 }
 
@@ -27,11 +27,11 @@ export class IntegrationsController {
   @Put('key')
   @Roles(Role.OWNER)
   async connect(@CurrentUser() u: AuthUser, @Body() dto: ConnectDto) {
-    // Подключать данные клиники может только владелец с подтверждённой почтой
+    // Only the owner with a confirmed email can connect the clinic's data
     await this.auth.assertEmailVerified(u.userId);
     await this.auth.assertTermsAccepted(u.clinicId);
     const status = await this.sync.connect(u.clinicId, u.userId, dto.apiKey);
-    // Ошибка загрузки фиксируется в истории синхронизаций, здесь её не ждём
+    // A load error is recorded in the sync history, we do not wait for it here
     if (dto.sync) void this.sync.run(u.clinicId, u.userId).catch(() => {});
     return status;
   }
@@ -39,7 +39,7 @@ export class IntegrationsController {
   @Post('sync')
   @Roles(Role.OWNER, Role.MANAGER, Role.ADMIN)
   async run(@CurrentUser() u: AuthUser, @Query('background') background?: string) {
-    // Из интерфейса запуск идёт в фоне: загрузка занимает минуты, запрос столько ждать не должен
+    // From the interface the start runs in the background: a load takes minutes, the request must not wait that long
     if (background === '1') {
       if (!(await this.sync.hasActiveRun(u.clinicId))) void this.sync.run(u.clinicId, u.userId).catch(() => {});
       return { started: true };

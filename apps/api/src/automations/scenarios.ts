@@ -1,6 +1,6 @@
-// Сценарии сообщений пациентам. Служебные (service) относятся к уже оформленной записи: напоминание, неявка.
-// Маркетинговые (marketing) приглашают вернуться и требуют согласия пациента (поле consent = GIVEN).
-// В тексте нет медицинских подробностей: сообщение идёт через сторонний мессенджер.
+// Message scenarios for patients. Service ones relate to an appointment already made: a reminder, a no-show.
+// Marketing ones invite the patient to come back and need the patient's consent (field consent = GIVEN).
+// The text has no medical details: the message goes through a third-party messenger.
 export type Kind = 'service' | 'marketing';
 
 export interface Scenario {
@@ -71,7 +71,7 @@ export const scenario = (key: string) => SCENARIOS.find((s) => s.key === key);
 
 const nameOf = (full: string) => {
   const parts = full.trim().split(/\s+/);
-  // У Cliniccards прізвище стоїть першим: звертаємося на ім'я (друге слово), якщо воно є
+  // In Cliniccards the surname comes first: we address by the first name (the second word) if there is one
   return parts[1] ?? parts[0] ?? '';
 };
 

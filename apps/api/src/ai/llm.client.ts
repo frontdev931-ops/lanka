@@ -8,8 +8,8 @@ export interface LlmResult {
 
 export class LlmError extends Error {}
 
-// Тонкая обёртка над Messages API. Ключ один на весь сервис и берётся только из окружения сервера;
-// в сообщения об ошибках он не попадает. Класс подменяется в тестах.
+// A thin wrapper over the Messages API. There is one key for the whole service and it is taken only from the server environment;
+// it never gets into error messages. The class is replaced in tests.
 @Injectable()
 export class LlmClient {
   private readonly log = new Logger('Llm');

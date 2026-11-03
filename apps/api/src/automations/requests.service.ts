@@ -14,9 +14,9 @@ export class RequestsService {
     private push: PushService,
   ) {}
 
-  // Одна открытая заявка на чат и вид: новое сообщение обновляет её, а не плодит дубли
+  // One open request per chat and kind: a new message updates it instead of making duplicates
   // silent: save without telling the staff (the bot is still collecting the person's data; the staff is told when the request is complete)
-  // notifyUpdate: сообщить сотрудникам и об обновлении существующей заявки (например, пациент выбрал время). Новая заявка сообщается всегда.
+  // notifyUpdate: tell the staff also about an update of an existing request (for example the patient chose a time). A new request is always reported.
   async upsert(clinicId: string, d: { channel: string; chatId: string; patientId: string | null; contactName?: string | null; kind: RequestKind; summary: string; service?: string | null; patch?: RequestPatch }, notifyUpdate = false, silent = false) {
     const open = await this.prisma.bookingRequest.findFirst({ where: { clinicId, channel: d.channel, chatId: d.chatId, kind: d.kind, status: 'NEW' } });
     const row = open

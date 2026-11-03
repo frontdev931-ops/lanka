@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
-// Временные одноразовые коды по RFC 6238 (SHA-1, 6 цифр, шаг 30 секунд): совместимы с Google Authenticator, Microsoft Authenticator, Authy.
+// Time-based one-time codes per RFC 6238 (SHA-1, 6 digits, 30-second step): compatible with Google Authenticator, Microsoft Authenticator, Authy.
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 export const STEP_SECONDS = 30;
 
@@ -51,7 +51,7 @@ export function hotp(secret: string, counter: number): string {
 
 export const stepOf = (t = Date.now()) => Math.floor(t / 1000 / STEP_SECONDS);
 
-// Возвращает номер шага, на котором код подошёл (с запасом ±1 шаг на расхождение часов), либо null
+// Returns the step at which the code matched (with ±1 step of clock drift allowed), or null
 export function verifyTotp(secret: string, code: string, t = Date.now()): number | null {
   if (!/^\d{6}$/.test(code)) return null;
   const step = stepOf(t);
@@ -65,7 +65,7 @@ export function verifyTotp(secret: string, code: string, t = Date.now()): number
 
 export const otpauthUrl = (secret: string, email: string, issuer = 'LANKA') => `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=${STEP_SECONDS}`;
 
-// Резервные коды: 10 символов, группами по 5 («ABCDE-FGHJK»), без похожих букв
+// Backup codes: 10 characters in groups of 5 ("ABCDE-FGHJK"), without look-alike letters
 export const newRecoveryCode = () => {
   const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const bytes = randomBytes(10);

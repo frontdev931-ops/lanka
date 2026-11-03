@@ -11,27 +11,27 @@ import { CliniccardsClient } from './cliniccards.client';
 import { CliniccardsConnector } from './cliniccards.connector';
 
 const DAY = 86_400_000;
-// Окна синхронизации: прошлое нужно отчётам, будущее — поиску следующих визитов и свободных окон.
-// История записей нужна воронке пациента (первый визит, повторные визиты): три года
+// Sync windows: the past is needed by reports, the future by the search for next visits and free windows.
+// The history of appointments is needed by the patient funnel (first visit, repeat visits): three years
 const VISITS_PAST = 1095;
 const VISITS_FUTURE = 90;
-// Пункты плана фильтруются по дате создания и меняют статус, поэтому читаем три года каждый раз:
-// старый план с невыполненными пунктами иначе выпадает из «Незавершённого лечения»
+// Plan items are filtered by creation date and change status, so we read three years each time:
+// otherwise an old plan with incomplete items drops out of "Unfinished treatment"
 const TREATMENT_PAST = 1095;
-const FINANCE_FIRST = 365; // платежи и акты почти не меняются: первый раз год, потом только последние дни
+const FINANCE_FIRST = 365; // payments and acts hardly change: a year the first time, then only the last days
 const FINANCE_REGULAR = 45;
-const REMINDERS_FUTURE = 365; // читаем напоминания от сегодняшнего дня на год вперёд
+const REMINDERS_FUTURE = 365; // we read reminders from today a year ahead
 const SCHEDULE_PAST = 7;
 const SCHEDULE_FUTURE = 30;
 
-// Пишем в базу порциями параллельно: быстрее последовательной записи, но без перегрузки пула соединений.
+// We write to the database in portions in parallel: faster than sequential writing, but without overloading the connection pool.
 async function inBatches<T>(items: T[], fn: (item: T) => Promise<void>, size = 20) {
   for (let i = 0; i < items.length; i += size) {
     await Promise.all(items.slice(i, i + size).map(fn));
   }
 }
 
-// Какие ID из списка существующих отсутствуют в свежей выгрузке (их удалили в Cliniccards)
+// Which IDs of the existing list are missing from the fresh export (they were deleted in Cliniccards)
 const missing = (existing: { externalId: string }[], fresh: Set<string>) =>
   existing.map((r) => r.externalId).filter((id) => !fresh.has(id));
 
@@ -42,15 +42,15 @@ export class SyncService implements OnApplicationBootstrap {
     private imports: SettingsImportService,
   ) {}
 
-  // Перезапуск сервера обрывает загрузку на полпути, а запись о ней остаётся «идёт» навсегда.
-  // Сервер один, поэтому при старте любая запись «идёт» точно осиротела. (Если серверов станет несколько,
-  // здесь нужно будет смотреть только на давно не обновлявшиеся записи.)
+  // A server restart cuts a load off halfway, and the record of it stays "running" forever.
+  // There is one server, so at start any "running" record is certainly orphaned. (If there are several servers,
+  // only records that have not been updated for a long time should be looked at here.)
   async onApplicationBootstrap() {
     await this.failStale(0);
   }
 
-  // Создаёт запись о загрузке, если у клиники нет другой идущей. Проверка и создание идут под блокировкой базы:
-  // автообновление и ручной запуск не могут стартовать одновременно (иначе двойная нагрузка на лимит 60 запросов в минуту).
+  // Creates a load record if the clinic has no other running one. The check and creation run under a database lock:
+  // auto-refresh and a manual start cannot start at the same time (otherwise a double load on the limit of 60 requests per minute).
   private async startRun(clinicId: string, integrationId: string) {
     await this.failStale(30 * 60_000, clinicId);
     return this.prisma.$transaction(async (tx) => {
@@ -61,7 +61,7 @@ export class SyncService implements OnApplicationBootstrap {
     });
   }
 
-  // Записи «идёт» старше olderThanMs считаются прерванными
+  // "Running" records older than olderThanMs are considered interrupted
   private failStale(olderThanMs: number, clinicId?: string) {
     return this.prisma.syncRun.updateMany({
       where: { status: SyncStatus.RUNNING, startedAt: { lt: new Date(Date.now() - olderThanMs) }, ...(clinicId ? { clinicId } : {}) },
@@ -99,8 +99,8 @@ export class SyncService implements OnApplicationBootstrap {
     return { connected: !!i.apiKeyEnc, mode: i.apiKeyEnc ? 'cliniccards' : 'demo', lastSyncAt: i.lastSyncAt, lastRun };
   }
 
-  // Проверяет ключ запросом списка сотрудников, затем сохраняет его зашифрованным
-  // и удаляет демо-данные клиники, чтобы они не смешались с реальными.
+  // Checks the key with a request for the list of staff, then stores it encrypted
+  // and deletes the clinic's demo data so that it does not mix with the real data.
   async connect(clinicId: string, userId: string, apiKey: string) {
     try {
       await new CliniccardsClient(apiKey).get('/staff');
@@ -122,7 +122,7 @@ export class SyncService implements OnApplicationBootstrap {
     return this.status(clinicId);
   }
 
-  // userId = null для автоматического запуска по расписанию
+  // userId = null for an automatic start on schedule
   async run(clinicId: string, userId: string | null) {
     const integration = await this.ensureIntegration(clinicId);
     const run = await this.startRun(clinicId, integration.id);
@@ -134,9 +134,9 @@ export class SyncService implements OnApplicationBootstrap {
       const visitsWin = win(VISITS_PAST, VISITS_FUTURE);
       const scheduleWin = win(SCHEDULE_PAST, SCHEDULE_FUTURE);
 
-      // Сначала читаем всё: если любой запрос упадёт, в базе ничего не меняется и ничего не удаляется
-      // Проценты примерно соответствуют времени этапов: чтение из Cliniccards занимает секунды (около 20 запросов),
-      // основное время уходит на запись в базу
+      // We read everything first: if any request fails, nothing in the database changes and nothing is deleted
+      // The percentages roughly match the time of the stages: reading from Cliniccards takes seconds (about 20 requests),
+      // most of the time goes into writing to the database
       const step = (progress: number, stage: string) => this.prisma.syncRun.update({ where: { id: run.id }, data: { progress, stage } });
       await step(2, 'patients');
       const patients = await connector.fetchPatients();
@@ -149,11 +149,11 @@ export class SyncService implements OnApplicationBootstrap {
       const finance = await connector.fetchFinance(win(integration.lastSyncAt ? FINANCE_REGULAR : FINANCE_FIRST, 0));
       await step(21, 'schedule');
       const schedule = await connector.fetchSchedule(scheduleWin);
-      // Напоминания нужны отчётам только как «о пациенте уже помнят»: с сегодняшнего дня и дальше
+      // Reminders are needed by reports only as "the patient is already remembered": from today onwards
       const remindersWin = { from: new Date(new Date().setUTCHours(0, 0, 0, 0)), to: new Date(now + REMINDERS_FUTURE * DAY) };
       const reminders = (await connector.fetchReminders?.(remindersWin)) ?? [];
       await step(24, 'saving');
-      // Логотип — необязательная мелочь: если не получилось, загрузку данных это не останавливает
+      // The logo is an optional detail: if it did not work, the data load is not stopped
       const cabinets = (await connector.fetchCabinets?.().catch(() => null)) ?? [];
       const profile = await connector.fetchProfile?.().catch(() => null);
       // the logo and the name of the clinic come from Cliniccards, so the cabinet and the messages to patients carry the real name
@@ -179,14 +179,14 @@ export class SyncService implements OnApplicationBootstrap {
         const row = await this.prisma.patient.upsert({
           where: { clinicId_externalId: { clinicId, externalId: p.externalId } },
           create: { clinicId, externalId: p.externalId, ...data },
-          // Пациент снова пришёл из Cliniccards (например, удаление отменили): возвращается в списки
+          // The patient came back from Cliniccards (for example a deletion was undone): returns to the lists
           update: { ...data, removedAt: null },
         });
         idByExternal.set(p.externalId, row.id);
       });
 
-      // Пациенты, которых в Cliniccards больше нет (удалены или объединены), скрываются, а не удаляются: задачи, согласия
-      // и история контактов остаются. Защита от сбоя: если пришёл пустой или резко меньший список, ничего не скрываем.
+      // Patients that Cliniccards no longer has (deleted or merged) are hidden, not deleted: tasks, consents
+      // and the contact history stay. Protection against a failure: if an empty or sharply smaller list came, we hide nothing.
       const fresh = new Set(patients.map((p) => p.externalId));
       const known = await this.prisma.patient.findMany({ where: { clinicId, removedAt: null }, select: { externalId: true } });
       const gone = known.map((k) => k.externalId).filter((id) => !fresh.has(id));
@@ -198,7 +198,7 @@ export class SyncService implements OnApplicationBootstrap {
       }
 
       await step(34, 'saving');
-      // Записи
+      // Appointments
       let visitCount = 0;
       const freshVisits = new Set<string>();
       await inBatches(visits, async (v) => {
@@ -224,7 +224,7 @@ export class SyncService implements OnApplicationBootstrap {
         freshVisits.add(v.externalId);
         visitCount++;
       });
-      // Записи, удалённые в Cliniccards, пропадают и у нас (в пределах прочитанного окна)
+      // Appointments deleted in Cliniccards disappear for us too (within the window that was read)
       const staleVisits = missing(
         await this.prisma.visit.findMany({ where: { clinicId, startsAt: { gte: visitsWin.from, lte: visitsWin.to } }, select: { externalId: true } }),
         freshVisits,
@@ -232,7 +232,7 @@ export class SyncService implements OnApplicationBootstrap {
       if (staleVisits.length) await this.prisma.visit.deleteMany({ where: { clinicId, externalId: { in: staleVisits } } });
 
       await step(44, 'saving');
-      // Планы лечения (пункты неизвестных пациентов, например архивных, пропускаем)
+      // Treatment plans (items of unknown patients, for example archived ones, are skipped)
       let planCount = 0;
       await inBatches(plan, async (i) => {
         const patientId = idByExternal.get(i.patientExternalId);
@@ -265,7 +265,7 @@ export class SyncService implements OnApplicationBootstrap {
       }
 
       await step(80, 'saving');
-      // Итоги планов (нужны, чтобы остаток лечения считался в валюте клиники)
+      // Plan totals (needed so that the remaining treatment is counted in the clinic's currency)
       await inBatches(plans, async (pl) => {
         const data = { total: pl.total, totalDone: pl.totalDone, createdAtExt: pl.createdAt };
         await this.prisma.treatmentPlan.upsert({
@@ -276,7 +276,7 @@ export class SyncService implements OnApplicationBootstrap {
       });
 
       await step(84, 'saving');
-      // Финансы
+      // Finance
       await inBatches(finance.payments, async (p) => {
         const data = { patientId: (p.patientExternalId && idByExternal.get(p.patientExternalId)) || null, paidAt: p.paidAt, amount: p.amount, type: p.type };
         await this.prisma.payment.upsert({
@@ -295,7 +295,7 @@ export class SyncService implements OnApplicationBootstrap {
       });
 
       await step(92, 'saving');
-      // Расписание: смены и блоки времени в окне заменяются свежими
+      // Schedule: shifts and time blocks in the window are replaced with fresh ones
       await inBatches(schedule.shifts, async (s) => {
         const data = { doctorId: s.doctorId, doctorName: s.doctorName, cabinetId: s.cabinetId, cabinetName: s.cabinetName, startsAt: s.startsAt, endsAt: s.endsAt };
         await this.prisma.shift.upsert({
@@ -325,7 +325,7 @@ export class SyncService implements OnApplicationBootstrap {
       if (staleBlocks.length) await this.prisma.reservedBlock.deleteMany({ where: { clinicId, externalId: { in: staleBlocks } } });
 
       await step(96, 'saving');
-      // Напоминания: свежие записываются, исчезнувшие из прочитанного окна удаляются
+      // Reminders: fresh ones are written, those that vanished from the window that was read are deleted
       await inBatches(reminders, async (r) => {
         const data = { patientId: (r.patientExternalId && idByExternal.get(r.patientExternalId)) || null, dueDate: r.dueDate, note: r.note, status: r.status };
         await this.prisma.reminder.upsert({
@@ -342,7 +342,7 @@ export class SyncService implements OnApplicationBootstrap {
         if (staleReminders.length) await this.prisma.reminder.deleteMany({ where: { clinicId, externalId: { in: staleReminders } } });
       }
 
-      // Новые карточки: обращения, внесённые администратором, привязываются к ним по телефону
+      // New cards: inquiries entered by the administrator are linked to them by phone
       await matchInquiries(this.prisma, clinicId);
 
       const extra = {
@@ -377,14 +377,14 @@ export class SyncService implements OnApplicationBootstrap {
     }
   }
 
-  // Запуск, начатый менее 30 минут назад и не завершённый: второй параллельно не стартуем
+  // A run that started less than 30 minutes ago and has not finished: we do not start a second one in parallel
   async hasActiveRun(clinicId: string) {
     const since = new Date(Date.now() - 30 * 60_000);
     return !!(await this.prisma.syncRun.findFirst({ where: { clinicId, status: SyncStatus.RUNNING, startedAt: { gte: since } } }));
   }
 
   async lastRuns(clinicId: string) {
-    // Загрузка дольше 30 минут не бывает: так застрявшая запись не будет вечно «идти» и блокировать новый запуск
+    // A load never lasts longer than 30 minutes: so a stuck record does not "run" forever and block a new start
     await this.failStale(30 * 60_000, clinicId);
     return this.prisma.syncRun.findMany({
       where: { clinicId },

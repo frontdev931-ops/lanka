@@ -1,9 +1,9 @@
 const DEFAULT_BASE = 'https://cliniccards.com/api';
 
-// Белый список: клиент умеет только GET и только эти пути. Любая запись и удаление
-// (создание платежей и счетов, удаление пациентов и записей) технически невозможны.
-// Платежи и акты (/payments, /invoices) — это только чтение финансовых данных для отчётов;
-// доступ к ним в приложении ограничен ролями.
+// Whitelist: the client can only do GET and only these paths. Any write and delete
+// (creating payments and invoices, deleting patients and appointments) is technically impossible.
+// Payments and acts (/payments, /invoices) are read-only financial data for reports;
+// access to them in the app is limited by roles.
 const ALLOWED_GET = new Set([
   '/visits',
   '/patients',
@@ -49,13 +49,13 @@ interface Envelope<T> {
 
 export interface ClientOptions {
   baseUrl?: string;
-  // Лимит Cliniccards — 60 запросов в минуту на ключ: по умолчанию держим запас
+  // Cliniccards' limit is 60 requests per minute per key: by default we keep a margin
   minIntervalMs?: number;
   retryDelayMs?: number;
 }
 
-// Адрес API можно подменить (для имитации сервера при разработке) только вне продакшена,
-// иначе ключ клиники можно было бы отправить на чужой адрес через переменную окружения.
+// The API address can be replaced (to imitate the server in development) only outside production,
+// otherwise a clinic's key could be sent to a foreign address through an environment variable.
 export function resolveBaseUrl(explicit?: string) {
   if (explicit) return explicit;
   if (process.env.NODE_ENV !== 'production' && process.env.CLINICCARDS_BASE_URL) return process.env.CLINICCARDS_BASE_URL;
@@ -73,7 +73,7 @@ export class CliniccardsClient {
     opts: ClientOptions = {},
   ) {
     this.base = resolveBaseUrl(opts.baseUrl);
-    // Для имитации сервера при разработке и в тестах паузу между запросами можно убрать (вне продакшена)
+    // To imitate the server in development and in tests the pause between requests can be removed (outside production)
     const envInterval = process.env.NODE_ENV !== 'production' ? process.env.CLINICCARDS_MIN_INTERVAL_MS : undefined;
     this.minInterval = opts.minIntervalMs ?? (envInterval !== undefined ? Number(envInterval) : 1100);
     this.retryDelay = opts.retryDelayMs ?? 15_000;
@@ -94,7 +94,7 @@ export class CliniccardsClient {
           signal: AbortSignal.timeout(60_000),
         });
       } catch (e) {
-        // В сообщение не попадают ни ключ, ни полный URL с параметрами; только код причины.
+        // Neither the key nor the full URL with parameters gets into the message; only the reason code.
         const cause = (e as { cause?: { code?: string } }).cause?.code ?? (e as Error).name;
         throw new CliniccardsError(`Cliniccards ${path}: нет связи с сервером (${cause})`);
       }
@@ -146,7 +146,7 @@ export class CliniccardsClient {
     return this.write<T>('PUT', path, body);
   }
 
-  // Простая очередь: запросы идут не чаще одного в minInterval мс.
+  // A simple queue: requests go no more often than one per minInterval ms.
   private async wait() {
     if (!this.minInterval) return;
     const now = Date.now();

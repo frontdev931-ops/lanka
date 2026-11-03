@@ -24,7 +24,7 @@ export class TwoFactorService {
     return { enabled: !!u.totpEnabledAt, recoveryLeft: u.totpEnabledAt ? ((u.recoveryHashes as string[] | null) ?? []).length : 0 };
   }
 
-  // Шаг 1: секрет создаётся и сохраняется зашифрованным, но защита включится только после подтверждения кодом
+  // Step 1: the secret is created and stored encrypted, but protection turns on only after confirmation with a code
   async setup(userId: string) {
     const u = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true, totpEnabledAt: true } });
     if (u.totpEnabledAt) throw new BadRequestException('twofa_already');
@@ -33,7 +33,7 @@ export class TwoFactorService {
     return { secret, otpauthUrl: otpauthUrl(secret, u.email) };
   }
 
-  // Шаг 2: подтверждение кодом из приложения; резервные коды показываются один раз
+  // Step 2: confirmation with a code from the app; backup codes are shown once
   async enable(userId: string, code: string) {
     await this.limits.consume(`2fa:${userId}`, ATTEMPTS, 15 * MIN);
     const u = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { totpSecretEnc: true, totpEnabledAt: true } });
@@ -47,14 +47,14 @@ export class TwoFactorService {
     return { recoveryCodes: codes };
   }
 
-  // Проверка второго фактора при входе: код из приложения или одноразовый резервный. Счётчик попыток общий с входом по почте.
+  // Checking the second factor at sign-in: a code from the app or a single-use backup code. The attempt counter is shared with the email sign-in.
   async verifyLogin(userId: string, input: string): Promise<'totp' | 'recovery'> {
     const u = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { totpSecretEnc: true, totpEnabledAt: true, totpLastStep: true, recoveryHashes: true } });
     if (!u.totpEnabledAt || !u.totpSecretEnc) return 'totp';
     const code = input.trim();
     if (/^\d{6}$/.test(code)) {
       const step = verifyTotp(decrypt(u.totpSecretEnc), code);
-      // один и тот же шаг второй раз не принимается: подсмотренный код нельзя использовать повторно
+      // the same step is not accepted a second time: a code that was peeked at cannot be reused
       if (step !== null && (u.totpLastStep === null || step > u.totpLastStep)) {
         const r = await this.prisma.user.updateMany({ where: { id: userId, OR: [{ totpLastStep: null }, { totpLastStep: { lt: step } }] }, data: { totpLastStep: step } });
         if (r.count) return 'totp';
@@ -66,7 +66,7 @@ export class TwoFactorService {
     const i = hashes.indexOf(h);
     if (i < 0) throw new UnauthorizedException('twofa_bad_code');
     hashes.splice(i, 1);
-    // резервный код действует один раз
+    // a backup code works once
     const r = await this.prisma.user.updateMany({ where: { id: userId, recoveryHashes: { equals: u.recoveryHashes as never } }, data: { recoveryHashes: hashes } });
     if (!r.count) throw new UnauthorizedException('twofa_bad_code');
     return 'recovery';
@@ -83,7 +83,7 @@ export class TwoFactorService {
     return { ok: true };
   }
 
-  // Новые резервные коды (старые перестают работать); нужен действующий код
+  // New backup codes (the old ones stop working); a valid code is required
   async regenerate(userId: string, code: string) {
     await this.limits.consume(`2fa:${userId}`, ATTEMPTS, 15 * MIN);
     await this.verifyLogin(userId, code);

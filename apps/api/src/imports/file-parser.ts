@@ -16,7 +16,7 @@ function cellText(v: unknown): string {
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   if (typeof v === 'object') {
     const o = v as Record<string, unknown>;
-    if ('result' in o) return cellText(o.result); // формула: берём вычисленное значение
+    if ('result' in o) return cellText(o.result); // formula: we take the computed value
     if (Array.isArray(o.richText)) return (o.richText as { text: string }[]).map((t) => t.text).join('').trim();
     if ('text' in o) return String(o.text ?? '').trim();
     if ('error' in o) return '';
@@ -28,7 +28,7 @@ function cellText(v: unknown): string {
 function decodeCsv(buf: Buffer): string {
   const utf8 = buf.toString('utf8');
   if (!utf8.includes('�')) return utf8;
-  // Excel в кириллической Windows часто сохраняет CSV в windows-1251
+  // Excel on a Cyrillic Windows often saves CSV as windows-1251
   try {
     return new TextDecoder('windows-1251').decode(buf);
   } catch {
@@ -41,7 +41,7 @@ function pickDelimiter(firstLine: string): string {
   return counts.sort((a, b) => b[1] - a[1])[0][0];
 }
 
-// Первая непустая строка — заголовки. Пустые заголовки получают имя «Колонка N», повторы — номер.
+// The first non-empty row is the headers. Empty headers get the name "Column N", repeats get a number.
 function finish(raw: string[][]): ParsedTable {
   const rows = raw.map((r) => r.map((c) => c.trim()));
   while (rows.length && rows[rows.length - 1].every((c) => !c)) rows.pop();
@@ -64,7 +64,7 @@ function finish(raw: string[][]): ParsedTable {
 
 export async function parseTable(buffer: Buffer): Promise<ParsedTable> {
   if (buffer.length === 0 || buffer.length > MAX_BYTES) throw new BadRequestException('bad_file');
-  const isXlsx = buffer[0] === 0x50 && buffer[1] === 0x4b; // «PK»: xlsx — это zip-архив
+  const isXlsx = buffer[0] === 0x50 && buffer[1] === 0x4b; // "PK": xlsx is a zip archive
   try {
     if (isXlsx) {
       const wb = new ExcelJS.Workbook();
@@ -73,7 +73,7 @@ export async function parseTable(buffer: Buffer): Promise<ParsedTable> {
       if (!ws) throw new BadRequestException('bad_file');
       const raw: string[][] = [];
       ws.eachRow({ includeEmpty: true }, (row) => {
-        const values = (row.values as unknown[]).slice(1); // у exceljs первая ячейка массива пустая
+        const values = (row.values as unknown[]).slice(1); // in exceljs the first cell of the array is empty
         raw.push(values.map(cellText));
         if (raw.length > MAX_ROWS + 2) throw new BadRequestException('file_too_big');
       });

@@ -19,14 +19,14 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const RESET_TTL = HOUR;
 const VERIFY_TTL = 72 * HOUR;
-// Неудачные входы: по почте (защита конкретного аккаунта) и по адресу (защита от перебора многих аккаунтов)
+// Failed sign-ins: by email (protects one account) and by address (protects against guessing many accounts)
 const LOGIN_MAX_BY_EMAIL = 10;
 const LOGIN_MAX_BY_IP = 40;
 const LOGIN_WINDOW = 15 * MIN;
 
 export const MIN_PASSWORD = 10;
 
-// Пароль не короче 10 символов и не равен почте: остальное (сложность) даёт длина, а не требования к символам
+// The password is at least 10 characters and not equal to the email: the rest (strength) comes from length, not from character requirements
 export function assertPasswordOk(password: string, email?: string) {
   if (password.length < MIN_PASSWORD || (email && password.toLowerCase() === email.toLowerCase())) throw new BadRequestException('weak_password');
 }
@@ -45,7 +45,7 @@ export class AuthService {
   ) {}
 
   async register(dto: { clinicName: string; name: string; email: string; password: string }, ip: string, lang: Lang) {
-    // Не больше 5 регистраций в час с одного адреса: иначе базу забьют пустыми клиниками
+    // No more than 5 registrations per hour from one address: otherwise the database fills with empty clinics
     await this.limits.consume(`register:ip:${ip}`, 5, HOUR);
     const email = dto.email.toLowerCase();
     assertPasswordOk(dto.password, email);
@@ -75,7 +75,7 @@ export class AuthService {
     return this.token(user.id, m.clinicId, m.role);
   }
 
-  // Если у пользователя несколько клиник и clinicId не указан, возвращаем список для выбора.
+  // If the user has several clinics and clinicId is not given, a list to choose from is returned.
   async login(email: string, password: string, clinicId: string | undefined, ip: string, code?: string) {
     const key = `login:email:${email.toLowerCase()}`;
     const ipKey = `login:ip:${ip}`;
@@ -97,7 +97,7 @@ export class AuthService {
     let m = clinicId ? user.memberships.find((x) => x.clinicId === clinicId) : undefined;
     if (clinicId && !m) throw new UnauthorizedException('no_clinic_access');
     if (!m) {
-      // Выбор клиники и второй фактор спрашиваются вместе одним запросом: резервный код одноразовый, второй раз его не принять
+      // The clinic choice and the second factor are asked together in one request: a backup code is single-use and cannot be accepted a second time
       if (user.memberships.length > 1) return { clinics: user.memberships.map((x) => ({ id: x.clinic.id, name: x.clinic.name })), ...(twoFactor ? { twoFactorRequired: true } : {}) };
       m = user.memberships[0];
     }
@@ -168,7 +168,7 @@ export class AuthService {
     };
   }
 
-  // Сброс пароля. Ответ всегда одинаковый: он не должен выдавать, есть ли такой email в системе.
+  // Password reset. The answer is always the same: it must not reveal whether such an email exists in the system.
   async forgotPassword(email: string, ip: string, lang: Lang) {
     const e = email.toLowerCase();
     await this.limits.consume(`forgot:ip:${ip}`, 10, HOUR);
@@ -191,7 +191,7 @@ export class AuthService {
     await this.prisma.$transaction([
       this.prisma.user.update({
         where: { id: row.userId },
-        // Все выданные ранее сессии перестают действовать: если пароль украли, вход злоумышленника закрывается
+        // All sessions issued earlier stop working: if the password was stolen, the intruder's access is closed
         data: { passwordHash, sessionsValidAfter: new Date(), emailVerifiedAt: row.user.emailVerifiedAt ?? new Date() },
       }),
       this.prisma.authToken.updateMany({ where: { userId: row.userId, type: 'RESET', usedAt: null }, data: { usedAt: new Date() } }),
@@ -220,7 +220,7 @@ export class AuthService {
       for (const m of memberships) await this.audit(m.clinicId, user.id, 'auth.email_changed');
       return { ok: true };
     }
-    // Повторное открытие ссылки не ошибка: почта уже подтверждена
+    // Opening the link again is not an error: the email is already confirmed
     await this.prisma.$transaction([
       this.prisma.user.updateMany({ where: { id: row.userId, emailVerifiedAt: null }, data: { emailVerifiedAt: new Date() } }),
       this.prisma.authToken.update({ where: { id: row.id }, data: { usedAt: row.usedAt ?? new Date() } }),
@@ -278,14 +278,14 @@ export class AuthService {
     return { ok: true };
   }
 
-  // Для действий, которые открывают в приложение данные клиники (подключение ключа Cliniccards)
+  // For actions that open the clinic's data in the app (connecting the Cliniccards key)
   async assertEmailVerified(userId: string) {
     if (process.env.REQUIRE_EMAIL_VERIFICATION === 'false') return;
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { emailVerifiedAt: true } });
     if (!user?.emailVerifiedAt) throw new ForbiddenException('email_not_verified');
   }
 
-  // Подключать данные клиники можно только после принятия соглашения об обработке данных
+  // The clinic's data can be connected only after the data processing agreement is accepted
   async assertTermsAccepted(clinicId: string) {
     const c = await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { termsVersion: true } });
     if (c?.termsVersion !== TERMS_VERSION) throw new ForbiddenException('terms_not_accepted');
@@ -296,7 +296,7 @@ export class AuthService {
     await this.mail.send({ to: email, ...mailText('verify', lang, `${this.webOrigin()}/verify/${token}`) });
   }
 
-  // Новая ссылка отзывает старые неиспользованные того же типа
+  // A new link revokes older unused ones of the same type
   private async issueToken(userId: string, type: 'RESET' | 'VERIFY' | 'EMAIL_CHANGE', ttlMs: number) {
     const token = newToken();
     await this.prisma.$transaction([

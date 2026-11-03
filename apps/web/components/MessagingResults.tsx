@@ -26,7 +26,7 @@ interface Results {
   requests: { total: number; done: number; dismissed: number; open: number };
 }
 
-// Что происходило с пациентами после сообщений бота: ответили, записались, пришли. Для Instagram добавится тот же столбец «Канал».
+// What happened to patients after the bot's messages: they replied, booked, came. For Instagram the same "Channel" column will be added.
 export function MessagingResults({ months }: { months: number }) {
   const { t } = useI18n();
   const [data, setData] = useState<Results | null>(null);

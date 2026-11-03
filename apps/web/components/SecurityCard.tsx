@@ -12,7 +12,7 @@ interface Status {
   recoveryLeft: number;
 }
 
-// Двухфакторный вход: включение с QR, резервные коды (показываются один раз), выключение по паролю и коду
+// Two-factor sign-in: turning on with a QR, backup codes (shown once), turning off with a password and a code
 export function SecurityCard() {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();

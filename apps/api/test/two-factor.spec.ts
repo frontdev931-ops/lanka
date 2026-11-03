@@ -30,7 +30,7 @@ async function owner() {
   const res = await http().post('/auth/register').send({ acceptTerms: true, clinicName: `Клініка ${rnd()}`, name: 'Власниця', email, password: PASSWORD }).expect(201);
   return { email, token: res.body.accessToken as string };
 }
-// включает двухфакторный вход и возвращает секрет и резервные коды
+// turns on two-factor sign-in and returns the secret and the backup codes
 async function enable(token: string) {
   const { secret } = (await http().post('/auth/2fa/setup').set(auth(token)).expect(200)).body;
   const { recoveryCodes } = (await http().post('/auth/2fa/enable').set(auth(token)).send({ code: codeAt(secret, stepOf()) }).expect(200)).body;
@@ -43,9 +43,9 @@ describe('TOTP: алгоритм', () => {
     expect(secret).toBe('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
     expect(base32Decode(secret).toString()).toBe('12345678901234567890');
     expect([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => hotp(secret, i))).toEqual(['755224', '287082', '359152', '969429', '338314', '254676', '287922', '162583', '399871', '520489']);
-    expect(verifyTotp(secret, '287082', 59_000)).toBe(1); // RFC 6238: время 59 с, шаг 1
-    expect(verifyTotp(secret, '287082', 59_000 + 30_000)).toBe(1); // запас на шаг вперёд
-    expect(verifyTotp(secret, '287082', 59_000 + 90_000)).toBeNull(); // а через 3 шага уже нет
+    expect(verifyTotp(secret, '287082', 59_000)).toBe(1); // RFC 6238: time 59 s, step 1
+    expect(verifyTotp(secret, '287082', 59_000 + 30_000)).toBe(1); // slack of one step forward
+    expect(verifyTotp(secret, '287082', 59_000 + 90_000)).toBeNull(); // and after 3 steps it is no longer accepted
     expect(verifyTotp(secret, '12345', 59_000)).toBeNull();
     expect(verifyTotp(secret, 'abcdef', 59_000)).toBeNull();
   });
@@ -55,13 +55,13 @@ describe('двухфакторный вход', () => {
   it('включение: ключ → подтверждение кодом → резервные коды; без подтверждения вход остаётся прежним', async () => {
     const u = await owner();
     expect((await http().get('/auth/2fa').set(auth(u.token)).expect(200)).body).toEqual({ enabled: false, recoveryLeft: 0 });
-    await http().post('/auth/2fa/enable').set(auth(u.token)).send({ code: '123456' }).expect(400); // ключ ещё не создан
+    await http().post('/auth/2fa/enable').set(auth(u.token)).send({ code: '123456' }).expect(400); // the key is not created yet
     const { secret, otpauthUrl } = (await http().post('/auth/2fa/setup').set(auth(u.token)).expect(200)).body;
     expect(otpauthUrl).toContain(`secret=${secret}`);
     expect(otpauthUrl).toContain('issuer=LANKA');
-    // ключ создан, но не подтверждён: вход без кода работает
+    // the key is created but not confirmed: sign-in without a code works
     await http().post('/auth/login').send({ email: u.email, password: PASSWORD }).expect(201);
-    // ключ в базе зашифрован
+    // the key is encrypted in the database
     const row = await prisma.user.findUniqueOrThrow({ where: { email: u.email } });
     expect(row.totpSecretEnc).toBeTruthy();
     expect(row.totpSecretEnc).not.toContain(secret);
@@ -69,10 +69,10 @@ describe('двухфакторный вход', () => {
     const ok = await http().post('/auth/2fa/enable').set(auth(u.token)).send({ code: codeAt(secret, stepOf()) }).expect(200);
     expect(ok.body.recoveryCodes).toHaveLength(8);
     expect(ok.body.recoveryCodes[0]).toMatch(/^[A-Z2-9]{5}-[A-Z2-9]{5}$/);
-    expect((await prisma.user.findUniqueOrThrow({ where: { email: u.email } })).recoveryHashes).not.toContain(ok.body.recoveryCodes[0]); // в базе только хэши
+    expect((await prisma.user.findUniqueOrThrow({ where: { email: u.email } })).recoveryHashes).not.toContain(ok.body.recoveryCodes[0]); // only hashes in the database
     expect((await http().get('/auth/2fa').set(auth(u.token))).body).toEqual({ enabled: true, recoveryLeft: 8 });
     expect((await http().get('/auth/me').set(auth(u.token))).body.twoFactorEnabled).toBe(true);
-    await http().post('/auth/2fa/setup').set(auth(u.token)).expect(400); // уже включён
+    await http().post('/auth/2fa/setup').set(auth(u.token)).expect(400); // already on
   });
 
   it('вход: пароль без кода токена не даёт; верный код пускает; тот же код второй раз не принимается; чужой пароль не раскрывает признак', async () => {
@@ -84,14 +84,14 @@ describe('двухфакторный вход', () => {
     expect(first.headers['set-cookie']).toBeUndefined();
 
     await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code: '000000' }).expect(401);
-    // код следующего шага (запас ±1): принимается, и им же второй раз войти нельзя
+    // the code of the next step (slack ±1): it is accepted, and the same one cannot be used to sign in a second time
     const code = codeAt(secret, stepOf() + 1);
     const ok = await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code }).expect(201);
     expect(ok.body.accessToken).toBeTruthy();
     await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code }).expect(401);
-    // более ранний шаг после использования более позднего тоже не принимается
+    // an earlier step after a later one was used is not accepted either
     await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code: codeAt(secret, stepOf()) }).expect(401);
-    // неверный пароль: обычный отказ, без намёка на второй фактор
+    // a wrong password: an ordinary refusal, no hint of a second factor
     const wrong = await http().post('/auth/login').send({ email: u.email, password: 'wrong-password-123', code: codeAt(secret, stepOf() + 1) }).expect(401);
     expect(JSON.stringify(wrong.body)).not.toContain('twoFactor');
   });
@@ -100,7 +100,7 @@ describe('двухфакторный вход', () => {
     const u = await owner();
     const { secret, recoveryCodes } = await enable(u.token);
     const used = recoveryCodes[0];
-    expect((await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code: used.toLowerCase() }).expect(201)).body.accessToken).toBeTruthy(); // регистр и пробелы не важны
+    expect((await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code: used.toLowerCase() }).expect(201)).body.accessToken).toBeTruthy(); // case and spaces do not matter
     await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code: used }).expect(401);
     const me = await prisma.user.findUniqueOrThrow({ where: { email: u.email }, include: { memberships: true } });
     expect(await prisma.auditLog.count({ where: { userId: me.id, action: 'auth.login.recovery_code' } })).toBe(1);
@@ -108,7 +108,7 @@ describe('двухфакторный вход', () => {
 
     const fresh = (await http().post('/auth/2fa/recovery-codes').set(auth(u.token)).send({ code: codeAt(secret, stepOf() + 1) }).expect(200)).body.recoveryCodes as string[];
     expect(fresh).toHaveLength(8);
-    await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code: recoveryCodes[1] }).expect(401); // старые отменены
+    await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code: recoveryCodes[1] }).expect(401); // the old ones are cancelled
     expect((await http().post('/auth/login').send({ email: u.email, password: PASSWORD, code: fresh[0] }).expect(201)).body.accessToken).toBeTruthy();
   });
 
@@ -133,7 +133,7 @@ describe('двухфакторный вход', () => {
   it('несколько клиник: список клиник приходит вместе с запросом кода, а вход проверяет код один раз', async () => {
     const a = await owner();
     const b = await owner();
-    // добавляем пользователя a во вторую клинику
+    // we add user a to a second clinic
     const clinicB = (await prisma.membership.findFirstOrThrow({ where: { user: { email: b.email } } })).clinicId;
     const userA = await prisma.user.findUniqueOrThrow({ where: { email: a.email } });
     await prisma.membership.create({ data: { userId: userA.id, clinicId: clinicB, role: 'MANAGER' } });
@@ -142,7 +142,7 @@ describe('двухфакторный вход', () => {
     expect(step1.body.twoFactorRequired).toBe(true);
     expect(step1.body.clinics).toHaveLength(2);
     const code = codeAt(secret, stepOf() + 1);
-    // код без выбора клиники токена не даёт и не тратится
+    // a code without a clinic choice gives no token and is not spent
     const noClinic = await http().post('/auth/login').send({ email: a.email, password: PASSWORD, code }).expect(201);
     expect(noClinic.body.accessToken).toBeUndefined();
     const final = await http().post('/auth/login').send({ email: a.email, password: PASSWORD, code, clinicId: clinicB }).expect(201);

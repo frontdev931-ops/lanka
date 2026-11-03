@@ -43,7 +43,7 @@ export default function Dashboard() {
     <>
       <PageHeader title={t('dash.title')} subtitle={t('dash.updated', { date: updated })} />
 
-      {/* Что показать в пустом кабинете: демо-данные, пустую клинику без подключения или подключённую, но ещё не загруженную */}
+      {/* What to show in an empty workspace: demo data, an empty clinic without a connection, or a connected one that is not loaded yet */}
       {integration?.mode === 'demo' && integration.lastSyncAt && (
         <Alert tone="warn">
           {t('dash.demo1')}

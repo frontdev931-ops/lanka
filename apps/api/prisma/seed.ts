@@ -6,7 +6,7 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { SyncService } from '../src/integrations/sync.service';
 
-// Тестовая клиника с демо-данными. Безопасно запускать повторно.
+// Test clinic with demo data. Safe to run repeatedly.
 const EMAIL = 'demo@stomat.test';
 const PASSWORD = 'demo12345';
 
@@ -37,7 +37,7 @@ async function main() {
       await prisma.membership.create({ data: { userId: u.id, clinicId: user.memberships[0].clinicId, role } });
     }
   }
-  // название демо-клиники приводим к украинскому, если аккаунт создан раньше
+  // the demo clinic's name is changed to Ukrainian if the account was created earlier
   await prisma.clinic.update({ where: { id: user.memberships[0].clinicId }, data: { name: 'Демо-клініка «Усмішка»' } });
   await sync.run(user.memberships[0].clinicId, null);
   console.log(`Готово. Вход: ${EMAIL} / ${PASSWORD} (также admin@stomat.test и doctor@stomat.test с тем же паролем)`);

@@ -43,7 +43,7 @@ const T: Record<Lang, Record<string, string>> = {
 const fmt = (n: number) => Math.round(n).toLocaleString('uk-UA').replace(/ /g, ' ');
 const dm = (iso: string) => iso.slice(8, 10) + '.' + iso.slice(5, 7);
 
-// Дайджест руководителю: итоги периода, считает код (ИИ тут не участвует). Деньги в нём есть, поэтому получатели — только владелец и управляющий.
+// The manager's digest: totals of a period, calculated by the code (the AI takes no part). It contains money, so the recipients are only the owner and the manager.
 @Injectable()
 export class DigestService {
   private readonly log = new Logger(DigestService.name);
@@ -76,7 +76,7 @@ export class DigestService {
     return this.settings(clinicId);
   }
 
-  // Ссылка для привязки: руководитель открывает её в Telegram, бот запоминает его чат
+  // Linking link: the manager opens it in Telegram, the bot remembers their chat
   async link(clinicId: string, userId: string) {
     const st = await this.bot(clinicId);
     if (!st.connected) throw new BadRequestException('bot_not_connected');
@@ -85,7 +85,7 @@ export class DigestService {
     return { url: `https://t.me/${st.username}?start=owner_${token}`, expiresAt: new Date(Date.now() + LINK_TTL) };
   }
 
-  // Вызывается ботом по ссылке «owner_…»
+  // Called by the bot from the "owner_…" link
   async bind(clinicId: string, payload: string, chat: { id: string; name: string; lang: string }): Promise<boolean> {
     const link = await this.prisma.channelLink.findUnique({ where: { tokenHash: hashToken(payload) } });
     if (!link || link.clinicId !== clinicId || link.purpose !== 'DIGEST' || link.usedAt || link.expiresAt < new Date()) return false;
@@ -105,7 +105,7 @@ export class DigestService {
     return { ok: true };
   }
 
-  // Цифры за период [from, to) по времени клиники и за такой же предыдущий период
+  // Figures for the period [from, to) in clinic time and for the same previous period
   async numbers(clinicId: string, kind: 'DAILY' | 'WEEKLY', now = new Date()): Promise<DigestNumbers> {
     const to = startOfClinicDay(now);
     const len = (kind === 'WEEKLY' ? 7 : 1) * DAY;
@@ -153,7 +153,7 @@ export class DigestService {
     };
   }
 
-  // Текст дайджеста (без разметки: приходит обычным сообщением)
+  // Digest text (no markup: it arrives as a plain message)
   format(n: DigestNumbers, clinicName: string, kind: 'DAILY' | 'WEEKLY', lang: Lang, link: string): string {
     const t = T[lang];
     const was = (cur: number, prev: number, money = false) => ` (${t.was} ${money ? fmt(prev) : prev})`;
@@ -181,7 +181,7 @@ export class DigestService {
     return i?.apiKeyEnc ? decrypt(i.apiKeyEnc) : null;
   }
 
-  // Отправляет дайджест всем получателям клиники. Возвращает число доставленных.
+  // Sends the digest to all recipients of the clinic. Returns the number delivered.
   async send(clinicId: string, kind: 'DAILY' | 'WEEKLY', only?: string[]): Promise<number> {
     const token = await this.token(clinicId);
     if (!token) return 0;
@@ -203,7 +203,7 @@ export class DigestService {
     return ok;
   }
 
-  // Раз в минуту: если у клиники наступил час дайджеста и сегодня он ещё не отправлялся, отправляем
+  // Once a minute: if the clinic's digest hour has come and it has not been sent today yet, we send it
   async tick(now = new Date()) {
     const clinics = await this.prisma.clinic.findMany({ where: { digestFrequency: { in: ['DAILY', 'WEEKLY'] }, suspendedAt: null }, select: { id: true, digestFrequency: true, digestHour: true, digestWeekday: true, lastDigestAt: true } });
     for (const c of clinics) {
@@ -212,7 +212,7 @@ export class DigestService {
       if (Number(clinicHm(now).slice(0, 2)) < c.digestHour) continue;
       const weekday = new Date(`${today}T00:00:00Z`).getUTCDay() || 7;
       if (c.digestFrequency === 'WEEKLY' && weekday !== c.digestWeekday) continue;
-      // сначала отмечаем, чтобы сбой отправки не превратился в повторные дайджесты каждую минуту
+      // we mark it first, so that a sending failure does not turn into repeated digests every minute
       await this.prisma.clinic.update({ where: { id: c.id }, data: { lastDigestAt: now } });
       await this.send(c.id, c.digestFrequency as 'DAILY' | 'WEEKLY').catch((e) => this.log.warn(`Дайджест: ${(e as Error).message}`));
     }

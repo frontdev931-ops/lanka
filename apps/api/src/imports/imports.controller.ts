@@ -24,7 +24,7 @@ export class ImportsController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_BYTES, files: 1 } }))
   upload(@CurrentUser() u: AuthUser, @UploadedFile() file?: Express.Multer.File) {
     if (!file) throw new BadRequestException('bad_file');
-    // Имя файла приходит в кодировке latin1 из multipart: возвращаем в UTF-8 для кириллицы
+    // The file name comes in latin1 from multipart: we convert it back to UTF-8 for Cyrillic
     const name = Buffer.from(file.originalname, 'latin1').toString('utf8');
     return this.imports.upload(u.clinicId, u.userId, name, file.buffer);
   }

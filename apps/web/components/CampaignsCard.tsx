@@ -26,8 +26,8 @@ interface Audience {
   sample: { patient: string; text: string }[];
 }
 
-// Своя рассылка (акция и т. п.): текст, фильтр аудитории, предпросмотр «сколько человек получат», затем постановка в очередь
-// на подтверждение. Только пациентам с согласием.
+// A custom campaign (a promotion and the like): the text, the audience filter, a preview "how many people will receive it", then putting it in the queue
+// for confirmation. Only to patients with consent.
 export function CampaignsCard({ onChanged }: { onChanged: () => void }) {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();

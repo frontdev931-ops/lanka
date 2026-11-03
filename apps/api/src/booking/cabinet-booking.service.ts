@@ -62,7 +62,7 @@ export class CabinetBookingService {
     const [clinic, cabinets, services, doctors] = await Promise.all([
       this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { scheduleMode: true, sharedDoctorId: true, sharedDoctorName: true, workHours: true, workHoursExceptions: true, workHoursSource: true, workHoursUpdatedAt: true, workHoursHolidays: true, priceListSyncedAt: true, priceListCount: true } }),
       this.prisma.cabinet.findMany({ where: { clinicId }, orderBy: { name: 'asc' }, select: { externalId: true, name: true, onlineBooking: true, acceptsUrgent: true } }),
-      this.prisma.kbItem.findMany({ where: { clinicId, kind: 'SERVICE', active: true }, orderBy: [{ category: 'asc' }, { title: 'asc' }], select: { id: true, title: true, category: true, priceUah: true, durationMin: true, onlineBooking: true, cabinetIds: true, approvedAt: true, source: true, externalId: true, externalTitle: true, externalPrice: true, externalPriceAcked: true, missingInSourceAt: true } }),
+      this.prisma.kbItem.findMany({ where: { clinicId, kind: 'SERVICE', active: true }, orderBy: [{ category: 'asc' }, { title: 'asc' }], select: { id: true, title: true, category: true, priceUah: true, durationMin: true, onlineBooking: true, cabinetIds: true, approvedAt: true, source: true, externalId: true, externalTitle: true, externalPrice: true, externalPriceAcked: true, missingInSourceAt: true, localFields: true } }),
       this.doctors.activeDoctors(clinicId),
     ]);
     const hoursSet = !!clinic.workHours && typeof clinic.workHours === 'object' && Object.keys(clinic.workHours as object).length > 0;

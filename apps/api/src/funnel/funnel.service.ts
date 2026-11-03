@@ -3,9 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { clinicDate, clinicMonth, localToUtc } from '../common/clinic-time';
 
 const DAY = 86_400_000;
-// Пациент считается ушедшим, если не был дольше этого срока (решение владелицы, 28.10.2026)
+// A patient is considered gone if they have not been for longer than this period (the owner's decision, 28.10.2026)
 export const LOST_AFTER_DAYS = 180;
-// Группы прайса, выполнение которых не считается началом лечения (диагностика, осмотр, материалы, седация, гигиена)
+// Price-list groups whose completion does not count as the start of treatment (diagnostics, examination, materials, sedation, hygiene)
 const NOT_TREATMENT = /^(обстеження|огляди|матеріали|седація|профілактика)/i;
 const NO_SOURCE = '(не вказано)';
 const NO_DIRECTION = '(без лікування)';
@@ -13,27 +13,27 @@ const DONE_ITEM = ['DONE', 'INVOICED'];
 const CLOSED_BAD = ['CANCELLED', 'DID_NOT_COME', 'MOVED'];
 const OPEN_PAST = ['PLANNED', 'CONFIRMED', 'NOT_CONFIRMED', 'IN_CLINIC', 'IN_CHAIR'];
 
-// Этапы пути к лечению (каждый следующий включает предыдущий) и ветка возвращения (от «пришёл»)
+// Stages of the path to treatment (each next one includes the previous) and the return branch (from "came")
 export const PATH = ['card', 'booked', 'came', 'started', 'paid'] as const;
 export const RETURN = ['came', 'repeat', 'active'] as const;
 export type StageKey = (typeof PATH)[number] | (typeof RETURN)[number];
 
-// Причины, по которым пациент остановился (нужны для списка «кого вернуть»)
+// Reasons why a patient stopped (needed for the "who to bring back" list)
 export const REASONS = [
-  'no-booking', // карточка есть, записи нет
-  'upcoming', // записан, приём ещё впереди
-  'unclosed', // запись прошла, итог не выставлен
-  'cancelled', // последняя запись отменена
-  'no-show', // не пришёл
-  'moved', // перенесена
-  'not-started', // пришёл, лечение не начал
-  'not-paid', // начал, ничего не оплатил
-  'no-return', // был один раз
-  'lost', // пришёл, но дальше не появлялся дольше срока
+  'no-booking', // there is a card, no appointment
+  'upcoming', // booked, the visit is still ahead
+  'unclosed', // the appointment has passed, no outcome set
+  'cancelled', // the last appointment was cancelled
+  'no-show', // did not come
+  'moved', // rescheduled
+  'not-started', // came, did not start treatment
+  'not-paid', // started, paid nothing
+  'no-return', // came once
+  'lost', // came, but did not appear again for longer than the period
 ] as const;
 export type Reason = (typeof REASONS)[number];
 
-// Направление лечения по группе услуг: две группы эндодонтии и две хирургии объединяем
+// Treatment direction by service group: the two endodontics groups and the two surgery groups are merged
 export function directionOf(group?: string | null): string | null {
   const g = (group ?? '').trim();
   if (!g || NOT_TREATMENT.test(g)) return null;
@@ -69,7 +69,7 @@ interface P {
   lastStatusEnded?: boolean;
   direction: string;
   openPlanSum: number;
-  // этапы
+  // stages
   booked: boolean;
   came: boolean;
   started: boolean;
@@ -89,7 +89,7 @@ const days = (a?: Date, b?: Date) => (a && b ? Math.round((b.getTime() - a.getTi
 export class FunnelService {
   constructor(private prisma: PrismaService) {}
 
-  // Начало первого месяца когорты (по часовому поясу клиники)
+  // Start of the cohort's first month (in the clinic's time zone)
   private from(months: number) {
     const [y, m] = clinicDate(new Date()).split('-').map(Number);
     const d = new Date(Date.UTC(y, m - 1 - (months - 1), 1));
@@ -98,7 +98,7 @@ export class FunnelService {
 
   private readonly patientSelect = { id: true, fullName: true, phone: true, source: true, createdAtExt: true, lastVisitAt: true, balancePaid: true } as const;
 
-  // Загружает когорту (карточки, созданные за период) и считает этапы каждого пациента
+  // Loads the cohort (cards created in the period) and computes each patient's stages
   private async load(clinicId: string, months: number): Promise<P[]> {
     const patients = await this.prisma.patient.findMany({
       where: { clinicId, removedAt: null, createdAtExt: { gte: this.from(months) } },
@@ -107,7 +107,7 @@ export class FunnelService {
     return this.compute(clinicId, patients);
   }
 
-  // Этапы пути для конкретных пациентов (нужны журналу обращений: дошло ли обращение до записи и прихода)
+  // Path stages for specific patients (needed by the inquiries journal: did the inquiry reach an appointment and a visit)
   async stagesOf(clinicId: string, ids: string[]): Promise<Map<string, P>> {
     if (!ids.length) return new Map();
     const patients = await this.prisma.patient.findMany({ where: { clinicId, id: { in: ids } }, select: this.patientSelect });
@@ -137,7 +137,7 @@ export class FunnelService {
       const doneTreat = its.filter((i) => DONE_ITEM.includes(i.status) && i.markedDoneAt && !NOT_TREATMENT.test(i.groupName ?? ''));
       const doneAny = its.filter((i) => DONE_ITEM.includes(i.status));
       const paid = Number(p.balancePaid ?? 0);
-      // Направление: группа с наибольшей суммой цен среди лечебных
+      // Direction: the group with the largest sum of prices among the treatment ones
       const sums = new Map<string, number>();
       for (const i of its) {
         const d = directionOf(i.groupName);
@@ -148,8 +148,8 @@ export class FunnelService {
 
       const visitedDays = new Set(visited.map((v) => clinicDate(v.startsAt))).size;
       const lastVisited = visited.length ? visited[visited.length - 1].startsAt : undefined;
-      // «Пришёл» подтверждается любым из признаков: визит со статусом «был», выполненная услуга или оплата.
-      // Так незакрытые администратором записи не выбрасывают из воронки тех, кто на самом деле лечится.
+      // "Came" is confirmed by any of the signs: a visit with the status "was", a completed service, or a payment.
+      // So appointments the administrator never closed do not drop from the funnel those who are actually being treated.
       const came = visited.length > 0 || doneAny.length > 0 || paid > 0;
       const booked = came || vs.length > 0;
       const started = came && doneTreat.length > 0;
@@ -204,7 +204,7 @@ export class FunnelService {
     };
   }
 
-  // Пациенты, остановившиеся по причине reason. Считается только по пациентам когорты.
+  // Patients who stopped for the reason `reason`. Counted only over the cohort's patients.
   private whoStopped(ps: P[], reason: Reason): P[] {
     switch (reason) {
       case 'no-booking':
@@ -235,7 +235,7 @@ export class FunnelService {
     const ps = this.pick(all, f);
     const counts = this.stageCounts(ps);
 
-    // Время между этапами (медиана, дней)
+    // Time between stages (median, days)
     const gap = (fn: (p: P) => number | undefined) => median(ps.map(fn).filter((x): x is number => x !== undefined && x >= 0));
     const medians = {
       cardToBooked: gap((p) => days(p.createdAt, p.firstBookedAt)),
@@ -243,7 +243,7 @@ export class FunnelService {
       cameToStarted: gap((p) => days(p.firstVisitedAt, p.firstDoneAt)),
     };
 
-    // По месяцам создания карточки (когорты)
+    // By month the card was created (cohorts)
     const byMonth = new Map<string, P[]>();
     for (const p of ps) {
       const k = clinicMonth(p.createdAt);
@@ -251,7 +251,7 @@ export class FunnelService {
     }
     const cohorts = [...byMonth].sort((a, b) => b[0].localeCompare(a[0])).map(([month, list]) => ({ month, ...this.stageCounts(list) }));
 
-    // Сравнение источников и направлений (по всей когорте периода, без выбранного среза)
+    // Comparison of sources and directions (over the whole cohort of the period, without the selected slice)
     const groupBy = (key: (p: P) => string, base: P[]) => {
       const m = new Map<string, P[]>();
       for (const p of base) (m.get(key(p)) ?? m.set(key(p), []).get(key(p))!).push(p);
@@ -287,7 +287,7 @@ export class FunnelService {
     };
   }
 
-  // Верх воронки: обращения за период → карточка → запись → пришёл. Вернувшиеся (пациент уже был) считаются отдельно.
+  // Top of the funnel: inquiries in the period → card → appointment → came. Returning ones (the patient already existed) are counted separately.
   async inquiryFunnel(clinicId: string, months: number, channel?: string) {
     const inquiries = await this.prisma.inquiry.findMany({
       where: { clinicId, occurredAt: { gte: this.from(months) }, ...(channel ? { channel } : {}) },
@@ -314,7 +314,7 @@ export class FunnelService {
     };
   }
 
-  // Конкретные люди, остановившиеся на переходе (до 300 самых свежих карточек)
+  // Specific people who stopped at a transition (up to the 300 newest cards)
   async people(clinicId: string, f: FunnelFilter, reason: Reason) {
     const ps = this.pick(await this.load(clinicId, f.months), f);
     const list = this.whoStopped(ps, reason).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());

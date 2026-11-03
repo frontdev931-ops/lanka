@@ -22,7 +22,7 @@ const midnight = (offsetDays: number) => {
 };
 const at = (d: Date, h: number, m = 0) => new Date(d.getTime() + (h * 60 + m) * 60_000);
 
-// Демо-данные, чтобы вся цепочка (синхронізація → звіт) працювала без ключа Cliniccards.
+// Demo data, so that the whole chain (sync → report) works without a Cliniccards key.
 export class DemoConnector implements ClinicConnector {
   // Made-up people: the names are invented and the phones are in a block that is not used by real subscribers
   private static readonly NAMES = [
@@ -39,7 +39,7 @@ export class DemoConnector implements ClinicConnector {
     phone: `+38050000${String(1000 + i)}`,
     source: DemoConnector.SOURCES[i % DemoConnector.SOURCES.length],
     lastVisitAt: new Date(Date.now() - (5 + i * 4) * DAY),
-    // у кожного п'ятого є заборгованість
+    // every fifth has a debt
     balanceIssued: 1000 + (i % 5) * 400,
     balancePaid: i % 5 === 0 ? 400 : 1000 + (i % 5) * 400,
   }));
@@ -81,7 +81,7 @@ export class DemoConnector implements ClinicConnector {
     return visits;
   }
 
-  // План лікування: у кожного четвертого пацієнта частина пунктів виконана, частина чекає
+  // Treatment plan: for every fourth patient some items are done and some are waiting
   async fetchTreatment() {
     const items: ExternalPlanItem[] = [];
     this.patients.forEach((p, i) => {
@@ -116,7 +116,7 @@ export class DemoConnector implements ClinicConnector {
     return { payments, invoices };
   }
 
-  // Зміни лікарів на найближчі тижні: будні, 9:00–18:00, з обідньою перервою в першому кабінеті
+  // Doctors' shifts for the coming weeks: weekdays, 9:00–18:00, with a lunch break in the first cabinet
   async fetchSchedule() {
     const shifts: ExternalShift[] = [];
     const blocks: ExternalBlock[] = [];

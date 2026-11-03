@@ -7,8 +7,8 @@ import { CustomAutomationsService } from './custom-automations.service';
 import { OutboxService } from './outbox.service';
 import { PlannerService } from './planner.service';
 
-// Раз в минуту отправляет одобренные сообщения, раз в пять минут пополняет очередь по включённым сценариям.
-// AUTOMATIONS_TICK_SECONDS=0 выключает (в тестах).
+// Once a minute sends approved messages, once in five minutes fills the queue for the scenarios that are on.
+// AUTOMATIONS_TICK_SECONDS=0 turns it off (in tests).
 @Injectable()
 export class AutomationScheduler implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly log = new Logger(AutomationScheduler.name);

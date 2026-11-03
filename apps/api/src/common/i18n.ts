@@ -3,7 +3,7 @@ import { ArgumentsHost, Catch, ExceptionFilter, HttpException, createParamDecora
 export type Lang = 'uk' | 'ru' | 'en';
 export const DEFAULT_LANG: Lang = 'uk';
 
-// Язык берётся из заголовка Accept-Language, который отправляет веб-клиент (uk | ru | en)
+// The language is taken from the Accept-Language header that the web client sends (uk | ru | en)
 export function langFromHeader(h?: string | string[]): Lang {
   const v = (Array.isArray(h) ? h[0] : h ?? '').toLowerCase().slice(0, 2);
   return v === 'ru' || v === 'en' || v === 'uk' ? v : DEFAULT_LANG;
@@ -13,8 +13,8 @@ export const ReqLang = createParamDecorator((_: unknown, ctx: ExecutionContext):
   langFromHeader(ctx.switchToHttp().getRequest().headers['accept-language']),
 );
 
-// ---------- ошибки ----------
-// В коде бросаются ключи (например 'bad_api_key'), фильтр подменяет их текстом на языке запроса.
+// ---------- errors ----------
+// The code throws keys (for example 'bad_api_key'); the filter replaces them with text in the language of the request.
 const ERRORS: Record<string, Record<Lang, string>> = {
   email_taken: {
     uk: 'Користувач з таким email вже існує',
@@ -594,7 +594,7 @@ export class I18nExceptionFilter implements ExceptionFilter {
     const body = ex.getResponse();
     const payload: Record<string, unknown> =
       typeof body === 'string' ? { statusCode: status, message: body } : { ...(body as object) };
-    // Стандартные английские тексты Nest и multer подменяем нашими ключами
+    // The standard English texts of Nest and multer are replaced with our keys
     const standard: Record<string, string> = { 'File too large': 'file_too_big', 'Forbidden resource': 'forbidden', Unauthorized: 'unauthorized' };
     const key = typeof payload.message === 'string' && standard[payload.message] ? standard[payload.message] : payload.message;
     if (typeof key === 'string' && ERRORS[key]) {
@@ -604,7 +604,7 @@ export class I18nExceptionFilter implements ExceptionFilter {
   }
 }
 
-// ---------- отчёты ----------
+// ---------- reports ----------
 export type ReportId =
   | 'no-next-visit'
   | 'missed-visits'

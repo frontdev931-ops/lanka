@@ -7,7 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Каждая сущность с данными клиники несёт clinicId: изоляция данных по клиникам с первого дня.
+// Every entity with clinic data carries clinicId: data isolation between clinics from day one.
 
 enum Role {
   OWNER
@@ -32,7 +32,7 @@ enum TaskStatus {
   CANCELLED
 }
 
-// Результат контакта с пациентом по задаче
+// The result of a contact with a patient on a task
 enum TaskResult {
   BOOKED
   CALL_LATER
@@ -40,7 +40,7 @@ enum TaskResult {
   DECLINED
 }
 
-// Согласие пациента на коммуникацию: хранится только у нас, в Cliniccards его нет
+// The patient's consent to communication: stored only by us, Cliniccards does not have it
 enum ContactConsent {
   UNKNOWN
   GIVEN
@@ -56,14 +56,14 @@ enum SyncStatus {
 model Clinic {
   id                  String               @id @default(cuid())
   name                String
-  // Логотип из профиля клиники в Cliniccards (data-URI изображения, проверяется при загрузке)
+  // The logo from the clinic's profile in Cliniccards (an image data URI, checked on load)
   logo                String?
-  // Соглашение об обработке данных, принятое владельцем от имени клиники
+  // The data processing agreement accepted by the owner on behalf of the clinic
   termsVersion        String?
   termsAcceptedAt     DateTime?
   termsAcceptedById   String?
-  // Рабочие часы клиники по дням недели: { "1": {"from":"09:00","to":"20:00"}, ..., "7": null }.
-  // 1 — понедельник, null — выходной. Нужны для свободных окон, когда в Cliniccards нет смен врачей.
+  // The clinic's working hours by weekday: { "1": {"from":"09:00","to":"20:00"}, ..., "7": null }.
+  // 1 is Monday, null is a day off. Needed for free windows when Cliniccards has no doctor shifts.
   workHours           Json?
   createdAt           DateTime             @default(now())
   memberships         Membership[]
@@ -94,16 +94,16 @@ model Clinic {
   treatmentPlans      TreatmentPlan[]
   cabinets            Cabinet[]
   inquiries           Inquiry[]
-  // Служебные сообщения (напоминания о записи, неявка) уходят без подтверждения сотрудника. Маркетинг всегда через подтверждение.
+  // Service messages (appointment reminders, a no-show) go out without the staff's confirmation. Marketing always goes through confirmation.
   autoSendService     Boolean              @default(false)
-  // Главный предохранитель: пока выключен, ни одно сообщение пациенту не уходит (настройка, очередь и подтверждение работают)
+  // The master safety switch: while it is off, no message to a patient goes out (setup, queue and confirmation work)
   sendingEnabled      Boolean              @default(false)
-  // ИИ-помощник: ключ один на весь сервис (AI_API_KEY на сервере), клиника только включает и получает месячный лимит ответов
+  // The AI assistant: one key for the whole service (AI_API_KEY on the server), the clinic only turns it on and gets a monthly limit of replies
   aiEnabled           Boolean              @default(false)
   aiMonthlyLimit      Int                  @default(500)
-  // Разрешить ИИ самому создавать запись на приём. Выключено всегда по умолчанию; включить нельзя, пока коннектор не умеет записывать в систему клиники
+  // Allow the AI to create an appointment itself. Always off by default; it cannot be turned on until the connector can write to the clinic's system
   aiAutoBooking       Boolean              @default(false)
-  // ШІ сам отвечает пациентам на безопасные темы (запись, перенос, отмена, история); остальное передаёт человеку. По умолчанию выключено
+  // The AI replies to patients itself on safe topics (booking, reschedule, cancel, history); anything else it hands to a person. Off by default
   // What patients may be told about the clinic in a chat: set by the clinic itself (Cliniccards does not give them to us)
   // The doctor a new patient without preferences is booked to (the id in Cliniccards, and the name as it was when it was chosen)
   // HOW the schedule is organised: DOCTORS (by the doctors) or CABINETS (by the cabinets, through ONE shared account of Cliniccards used as doctor_id).
@@ -133,16 +133,16 @@ model Clinic {
   // How many AI replies one chat gets per day (a guard against loops and cost), and how long the AI stays silent after a person answered (0: no pause)
   aiRepliesPerChatDay Int                  @default(20)
   aiPauseMinutes      Int                  @default(30)
-  // Владелец подтверждает: стандартное согласие пациентов клиники охватывает информационные и рекламные сообщения. Тогда «Невідомо» считается согласием; «Відкликано» блокирует всегда
+  // The owner confirms that the clinic's standard patient consent covers informational and advertising messages. Then "Unknown" counts as consent; "Withdrawn" always blocks
   assumeConsent       Boolean              @default(false)
-  // Дайджест руководителю в Telegram: OFF, DAILY или WEEKLY, час по Киеву, день недели (1 = понедельник) для WEEKLY
+  // The manager's digest in Telegram: OFF, DAILY or WEEKLY, the hour in Kyiv time, the weekday (1 = Monday) for WEEKLY
   digestFrequency     String               @default("OFF")
   digestHour          Int                  @default(9)
   digestWeekday       Int                  @default(1)
   lastDigestAt        DateTime?
-  // Ссылка, куда вести довольных пациентов оставить публичный отзыв (Google и т. п.)
+  // A link where to send satisfied patients to leave a public review (Google and the like)
   reviewUrl           String?
-  // Тариф (TRIAL, START, PRO, CUSTOM), индивидуальные пределы поверх тарифа и приостановка клиники владельцем сервиса
+  // Plan (TRIAL, START, PRO, CUSTOM), individual limits on top of the plan and suspension of the clinic by the service owner
   plan                String               @default("START")
   limitOverrides      Json?
   // Billing: AWAITING_PAYMENT (registered, not paid: no access to real data), ACTIVE, PAST_DUE (paid period ended, grace days), LAPSED (grace over: blocked, data kept)
@@ -169,9 +169,9 @@ model Clinic {
   aiPurchased         Int                  @default(0)
   aiPackCapPerMonth   Int                  @default(5)
   suspendedAt         DateTime?
-  // Владелец требует двухфакторный вход от всех сотрудников клиники
+  // The owner requires two-factor sign-in from all the clinic's staff
   require2fa          Boolean              @default(false)
-  // ШІ-помічник для керівника: вільні запитання до даних клініки, відповідь звітом. Окремо від відповідей пацієнтам
+  // The AI assistant for the manager: free questions about the clinic's data, answered with a report. Separate from replies to patients
   aiAssistantEnabled  Boolean              @default(false)
   channelLinks        ChannelLink[]
   patientChannels     PatientChannel[]
@@ -192,7 +192,7 @@ model Clinic {
   doctorAvailability DoctorAvailability[]
 }
 
-// Приглашение сотрудника по ссылке. В базе только хэш токена: по базе ссылку не восстановить.
+// A staff invitation by link. Only the token's hash is in the database: the link cannot be recovered from it.
 model Invitation {
   id          String    @id @default(cuid())
   clinicId    String
@@ -208,7 +208,7 @@ model Invitation {
   @@index([clinicId])
 }
 
-// Контакт с пациентом: результат задачи, ручная заметка или строка импорта
+// A contact with a patient: a task result, a manual note or an import row
 model ContactLog {
   id            String      @id @default(cuid())
   clinicId      String
@@ -229,13 +229,13 @@ model ContactLog {
   @@index([clinicId, patientId, contactedAt])
 }
 
-// Загруженная таблица (Excel/CSV): строки хранятся для предпросмотра и для скачивания несопоставленных
+// An uploaded table (Excel/CSV): the rows are stored for the preview and for downloading the unmatched ones
 model ImportBatch {
   id        String    @id @default(cuid())
   clinicId  String
   userId    String?
   filename  String
-  type      String? // PATIENT_EXTRA или CONTACTS (выбирается при применении)
+  type      String? // PATIENT_EXTRA or CONTACTS (chosen at apply time)
   columns   Json
   rows      Json
   status    String    @default("DRAFT") // DRAFT, DONE
@@ -250,7 +250,7 @@ model ImportBatch {
   @@index([clinicId, createdAt])
 }
 
-// Пункт плана лечения из Cliniccards (GET /planItems)
+// A treatment plan item from Cliniccards (GET /planItems)
 model PlanItem {
   id             String    @id @default(cuid())
   clinicId       String
@@ -263,7 +263,7 @@ model PlanItem {
   status         String
   createdAtExt   DateTime
   markedDoneAt   DateTime?
-  // Группа услуги в прайсе Cliniccards («Терапія», «Імплантація»…): направление лечения в воронке
+  // The service group in the Cliniccards price list ("Therapy", "Implantation"…): the treatment direction in the funnel
   groupName      String?
   doneByDoctorId String?
   clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
@@ -289,7 +289,7 @@ model Payment {
   @@index([clinicId, paidAt])
 }
 
-// Акт выполненных работ (GET /invoices)
+// An act of completed work (GET /invoices)
 model Invoice {
   id         String   @id @default(cuid())
   clinicId   String
@@ -305,7 +305,7 @@ model Invoice {
   @@index([clinicId, issuedAt])
 }
 
-// Кабинет (GET /cabinets): нужен, чтобы подписывать свободные окна названием, а не номером
+// A cabinet (GET /cabinets): needed to label free windows with a name, not a number
 model Cabinet {
   id         String @id @default(cuid())
   clinicId   String
@@ -319,9 +319,9 @@ model Cabinet {
   @@unique([clinicId, externalId])
 }
 
-// Итоги плана лечения (GET /plans). Суммы приходят в основной валюте клиники уже с учётом
-// фиксированного курса: цены отдельных пунктов могут быть в другой валюте, поэтому «сколько осталось
-// выполнить» берётся отсюда, а не суммой цен пунктов.
+// Treatment plan totals (GET /plans). The sums come in the clinic's main currency already with
+// the fixed rate: the prices of single items may be in another currency, so "how much is left
+// to do" is taken from here, not as the sum of item prices.
 model TreatmentPlan {
   id           String   @id @default(cuid())
   clinicId     String
@@ -335,8 +335,8 @@ model TreatmentPlan {
   @@index([clinicId, createdAtExt])
 }
 
-// Обращение до создания карточки или до записи (звонок, сообщение, заявка с сайта). Его вносит администратор;
-// по телефону обращение само связывается с карточкой пациента, когда она появляется. Верх воронки пациента.
+// An inquiry before a card exists or before an appointment (a call, a message, a request from the site). The administrator enters it;
+// by phone the inquiry links itself to the patient's card when it appears. The top of the patient funnel.
 model Inquiry {
   id          String   @id @default(cuid())
   clinicId    String
@@ -347,10 +347,10 @@ model Inquiry {
   phoneNorm   String?
   name        String?
   note        String?
-  // OPEN или LOST (человек отказался или не записался: отмечает администратор)
+  // OPEN or LOST (the person declined or did not book: marked by the administrator)
   status      String   @default("OPEN")
   patientId   String?
-  // Пациент с этим телефоном уже был до обращения: это не новый пациент и в воронке привлечения не считается
+  // A patient with this phone already existed before the inquiry: this is not a new patient and is not counted in the acquisition funnel
   returning   Boolean  @default(false)
   // Where it came from: the campaign marks of the address (UTM), the page of the form, and the id of the lead in the ad system
   utmSource   String?
@@ -368,8 +368,8 @@ model Inquiry {
   @@index([clinicId, phoneNorm])
 }
 
-// Подключённый мессенджер пациента: чат, в который бот может писать. Один пациент — один чат на канал.
-// Один чат может быть связан с несколькими карточками (семья с одним номером).
+// A patient's connected messenger: a chat the bot can write to. One patient, one chat per channel.
+// One chat can be linked to several cards (a family with one number).
 model PatientChannel {
   id         String    @id @default(cuid())
   clinicId   String
@@ -379,7 +379,7 @@ model PatientChannel {
   externalId String
   username   String?
   linkedAt   DateTime  @default(now())
-  // Пациент написал «Зупинити» или заблокировал бота: больше не пишем
+  // The patient wrote "Stop" or blocked the bot: we do not write any more
   optedOutAt DateTime?
   clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   patient    Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -388,11 +388,11 @@ model PatientChannel {
   @@index([clinicId, channel, externalId])
 }
 
-// Одноразовая ссылка «Подключить напоминания»: в базе только хэш. С patientId привязывает чат к конкретной карточке.
+// A one-time "Connect reminders" link: only the hash is stored. With patientId it links the chat to a specific card.
 model ChannelLink {
   id          String    @id @default(cuid())
   clinicId    String
-  // PATIENT (привязка пациента) или DIGEST (привязка получателя дайджеста: владелец открывает ссылку и бот запоминает его чат)
+  // PATIENT (linking a patient) or DIGEST (linking a digest recipient: the owner opens the link and the bot remembers their chat)
   purpose     String    @default("PATIENT")
   createdById String?
   patientId   String?
@@ -403,7 +403,7 @@ model ChannelLink {
   clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 }
 
-// Настройка сценария рассылки клиники (включён ли, сроки, тексты). Список сценариев задан в коде.
+// A clinic's mailing scenario setting (whether it is on, due dates, texts). The list of scenarios is set in code.
 model AutomationRule {
   id        String  @id @default(cuid())
   clinicId  String
@@ -416,19 +416,19 @@ model AutomationRule {
   @@unique([clinicId, key])
 }
 
-// Сообщение пациенту: от «ждёт подтверждения» до «отправлено». dedupeKey не даёт создать одно и то же дважды.
+// A message to a patient: from "waiting for confirmation" to "sent". dedupeKey prevents creating the same one twice.
 model OutboundMessage {
   id           String    @id @default(cuid())
   clinicId     String
   patientId    String
   ruleKey      String
-  // TELEGRAM или SMS
+  // TELEGRAM or SMS
   channel      String
   text         String
   // PENDING_APPROVAL, APPROVED, SENT, FAILED, CANCELLED, EXPIRED
   status       String    @default("PENDING_APPROVAL")
   scheduledFor DateTime
-  // После этого момента отправлять уже нельзя (например, приём начался)
+  // After this moment sending is no longer allowed (for example the visit has started)
   expiresAt    DateTime?
   sentAt       DateTime?
   error        String?
@@ -445,14 +445,14 @@ model OutboundMessage {
   @@index([patientId, createdAt])
 }
 
-// Напоминание сотруднику о пациенте (GET /reminders). Это не запись на приём: используется,
-// чтобы не показывать в списках «вернуть пациента» тех, о ком уже есть запланированный контакт.
+// A reminder for staff about a patient (GET /reminders). This is not an appointment: it is used
+// so that patients with an already planned contact are not shown in the "bring the patient back" lists.
 model Reminder {
   id         String   @id @default(cuid())
   clinicId   String
   externalId String
   patientId  String?
-  // День напоминания (дата без времени, полночь UTC)
+  // Reminder day (a date without time, midnight UTC)
   dueDate    DateTime
   note       String?
   // NEW, DONE, CANCELLED, MOVED
@@ -465,7 +465,7 @@ model Reminder {
   @@index([patientId])
 }
 
-// Смена врача в кабинете (GET /schedule-shifts)
+// A doctor's shift in a cabinet (GET /schedule-shifts)
 model Shift {
   id          String   @id @default(cuid())
   clinicId    String
@@ -482,7 +482,7 @@ model Shift {
   @@index([clinicId, startsAt])
 }
 
-// Зарезервированное время в кабинете (GET /schedule-spaces)
+// Reserved time in a cabinet (GET /schedule-spaces)
 model ReservedBlock {
   id         String   @id @default(cuid())
   clinicId   String
@@ -503,18 +503,18 @@ model User {
   name               String
   passwordHash       String
   createdAt          DateTime     @default(now())
-  // Почта подтверждена переходом по ссылке из письма
+  // Email confirmed by following the link from the letter
   emailVerifiedAt    DateTime?
   // A new address waiting for confirmation by the link sent to it; the sign-in email changes only after the link is opened
   pendingEmail       String?
-  // Сессии (токены), выданные до этого момента, недействительны: меняется при сбросе пароля
+  // Sessions (tokens) issued before this moment are invalid: changes on a password reset
   sessionsValidAfter DateTime?
-  // Двухфакторный вход (TOTP). Секрет хранится зашифрованным; включён, когда задан totpEnabledAt
+  // Two-factor sign-in (TOTP). The secret is stored encrypted; it is on when totpEnabledAt is set
   totpSecretEnc      String?
   totpEnabledAt      DateTime?
-  // Последний принятый временной шаг: один и тот же код второй раз не принимается
+  // The last accepted time step: the same code is not accepted a second time
   totpLastStep       Int?
-  // Хэши неиспользованных резервных кодов
+  // Hashes of unused backup codes
   recoveryHashes     Json?
   authTokens         AuthToken[]
   memberships        Membership[]
@@ -523,7 +523,7 @@ model User {
   contactLogs        ContactLog[]
 }
 
-// Одноразовые ссылки из писем: сброс пароля и подтверждение почты. В базе только хэш токена.
+// One-time links from emails: password reset and email confirmation. Only the token's hash is in the database.
 model AuthToken {
   id        String    @id @default(cuid())
   userId    String
@@ -538,7 +538,7 @@ model AuthToken {
   @@index([userId, type])
 }
 
-// Счётчики попыток (вход, регистрация, сброс пароля). В базе, а не в памяти: работает на нескольких серверах.
+// Attempt counters (sign-in, registration, password reset). In the database, not in memory: they work across several servers.
 model RateLimit {
   key         String   @id
   count       Int
@@ -551,10 +551,10 @@ model Task {
   patientId   String?
   title       String
   note        String?
-  // Откуда задача: manual или код отчёта (например report:no-next-visit); по нему не создаём дубли
+  // Where the task comes from: manual or a report code (for example report:no-next-visit); duplicates are not created by it
   source      String      @default("manual")
   dueDate     DateTime
-  priority    Int         @default(1) // 1 обычный, 2 высокий
+  priority    Int         @default(1) // 1 normal, 2 high
   status      TaskStatus  @default(OPEN)
   result      TaskResult?
   assigneeId  String?
@@ -585,9 +585,9 @@ model Integration {
   id         String    @id @default(cuid())
   clinicId   String
   provider   Provider
-  // Параметры подключения (токен, адрес, режим). Структура уточнится после изучения API Cliniccards.
+  // Connection parameters (token, address, mode). The structure will be refined after studying the Cliniccards API.
   config     Json      @default("{}")
-  // Ключ API Cliniccards, зашифрованный (AES-256-GCM, см. common/crypto.ts). Никогда не отдаётся наружу и не логируется.
+  // The Cliniccards API key, encrypted (AES-256-GCM, see common/crypto.ts). Never returned outside and never logged.
   apiKeyEnc  String?
   lastSyncAt DateTime?
   clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
@@ -599,29 +599,29 @@ model Integration {
 model Patient {
   id               String            @id @default(cuid())
   clinicId         String
-  externalId       String // id пациента в Cliniccards
+  externalId       String // the patient's id in Cliniccards
   fullName         String
   phone            String?
-  source           String? // источник обращения
+  source           String? // the source of the inquiry
   preferredContact String?
   lastVisitAt      DateTime?
   balanceIssued    Decimal?          @db.Decimal(12, 2)
   balancePaid      Decimal?          @db.Decimal(12, 2)
-  // Пациента больше нет в Cliniccards (удалён или объединён с другим): скрыт из списков и отчётов, но данные у нас сохранены
+  // The patient is no longer in Cliniccards (deleted or merged with another): hidden from lists and reports, but our data is kept
   removedAt        DateTime?
-  // Когда создана карточка в Cliniccards и когда был первый визит: вход и этапы воронки пациента
+  // When the card was created in Cliniccards and when the first visit was: the entry and stages of the patient funnel
   createdAtExt     DateTime?
   firstVisitAt     DateTime?
-  // Дата рождения из Cliniccards (только для поздравления)
+  // Date of birth from Cliniccards (only for the greeting)
   birthDate        DateTime?
-  // Телефон только из цифр в едином виде (380...): по нему сопоставляются строки импорта
+  // A phone of digits only in one form (380...): import rows are matched by it
   phoneNorm        String?
-  // Данные, которых нет в Cliniccards. Синхронизация эти поля не трогает.
+  // Data that Cliniccards does not have. Sync does not touch these fields.
   consent          ContactConsent    @default(UNKNOWN)
   consentNote      String?
   consentUpdatedAt DateTime?
   automationPaused Boolean           @default(false)
-  // Дополнительные поля из импорта: { "ключ": { "v": "значение", "b": "id загрузки" } }
+  // Extra fields from an import: { "key": { "v": "value", "b": "upload id" } }
   extra            Json              @default("{}")
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
@@ -654,12 +654,12 @@ model Visit {
   doctorId           String?
   doctorName         String?
   cabinetId          String?
-  // Когда запись создана (а не когда приём): время «обращение → запись» в воронке
+  // When the appointment was created (not when the visit is): the "inquiry → appointment" time in the funnel
   bookedAt           DateTime?
   serviceName        String?
   startsAt           DateTime
   endsAt             DateTime?
-  // Статус Cliniccards как есть: PLANNED, CONFIRMED, NOT_CONFIRMED, VISITED, MOVED,
+  // The Cliniccards status as is: PLANNED, CONFIRMED, NOT_CONFIRMED, VISITED, MOVED,
   // DID_NOT_COME, IN_CLINIC, BOOKING, CANCELLED, IN_CHAIR
   status             String
   amount             Decimal?  @db.Decimal(12, 2)
@@ -682,10 +682,10 @@ model SyncRun {
   status        SyncStatus  @default(RUNNING)
   patients      Int         @default(0)
   visits        Int         @default(0)
-  // Ход загрузки для индикатора: процент и этап (patients, visits, treatment, finance, schedule, saving)
+  // The load progress for the indicator: percent and stage (patients, visits, treatment, finance, schedule, saving)
   progress      Int         @default(0)
   stage         String?
-  // Остальные счётчики: планы лечения, платежи, акты, смены и т.д.
+  // Other counters: treatment plans, payments, acts, shifts and so on.
   extra         Json        @default("{}")
   error         String?
   clinic        Clinic      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
@@ -717,8 +717,8 @@ model ChatBotResume {
   @@unique([clinicId, channel, chatId])
 }
 
-// Переписка с пациентом в мессенджере (входящие и ответы сотрудников). Не путать с OutboundMessage: то автоматические сообщения по сценариям.
-// patientId пуст, пока чат не привязан к карточке. chatId — идентификатор чата во внешнем канале.
+// A conversation with a patient in a messenger (incoming messages and staff replies). Not to be confused with OutboundMessage: those are automatic scenario messages.
+// patientId is empty until the chat is linked to a card. chatId is the chat identifier in the external channel.
 model ChatMessage {
   id           String    @id @default(cuid())
   clinicId     String
@@ -727,14 +727,14 @@ model ChatMessage {
   channel      String
   chatId       String
   contactName  String?
-  // IN от пациента, OUT от клиники
+  // IN from the patient, OUT from the clinic
   direction    String
   text         String
-  // Для OUT: сотрудник, написавший ответ; пусто для автоответа системы
+  // For OUT: the staff member who wrote the reply; empty for an automatic system reply
   authorUserId String?
-  // Ответ отправил ШІ автоматически
+  // The reply was sent by the AI automatically
   byAi         Boolean   @default(false)
-  // Для IN: когда сотрудник открыл диалог
+  // For IN: when a staff member opened the dialogue
   readAt       DateTime?
   // Id of the message in the messenger (Instagram resends webhooks; this makes handling idempotent)
   externalId   String?
@@ -751,7 +751,7 @@ model ChatMessage {
   @@index([patientId, createdAt])
 }
 
-// Журнал вызовов ИИ: только счётчики для лимита и расчёта расходов. Текст сообщений пациентов здесь не хранится.
+// A log of AI calls: only counters for the limit and cost calculation. The text of patients' messages is not stored here.
 model AiUsage {
   id           String   @id @default(cuid())
   clinicId     String
@@ -767,8 +767,8 @@ model AiUsage {
   @@index([clinicId, createdAt])
 }
 
-// Заявка администратору из переписки: запись, перенос, отмена или вопрос, который ШІ передал человеку.
-// Запись в Cliniccards вносит администратор вручную. Статус NEW, DONE (внесено) или DISMISSED (не нужно).
+// A request to the administrator from a conversation: a booking, reschedule, cancellation or a question the AI handed to a person.
+// The administrator enters the appointment in Cliniccards by hand. Status NEW, DONE (entered) or DISMISSED (not needed).
 model BookingRequest {
   id          String    @id @default(cuid())
   clinicId    String
@@ -836,8 +836,8 @@ model BookingRequest {
   @@index([clinicId, channel, chatId, status])
 }
 
-// Своя рассылка: например, акция. Всегда маркетинг: только пациентам с согласием и только с подтверждением сотрудника.
-// filters: { monthsSinceVisitMin?, monthsSinceVisitMax?, noFutureVisit? }. Статус DRAFT или QUEUED (сообщения созданы в очереди).
+// A custom campaign: for example a promotion. Always marketing: only to patients with consent and only with the staff's confirmation.
+// filters: { monthsSinceVisitMin?, monthsSinceVisitMax?, noFutureVisit? }. Status DRAFT or QUEUED (messages are created in the queue).
 model Campaign {
   id          String    @id @default(cuid())
   clinicId    String
@@ -854,7 +854,7 @@ model Campaign {
   @@index([clinicId, createdAt])
 }
 
-// Сохранённый пользовательский отчёт: описание (spec) пересчитывается заново при каждом открытии, поэтому данные всегда свежие
+// A saved custom report: the description (spec) is recalculated on every open, so the data is always fresh
 model SavedReport {
   id          String   @id @default(cuid())
   clinicId    String
@@ -867,7 +867,7 @@ model SavedReport {
   @@index([clinicId, createdAt])
 }
 
-// Получатель дайджеста: чат руководителя в Telegram. Привязывается ссылкой из настроек, не по номеру телефона.
+// A digest recipient: the manager's chat in Telegram. Linked by a link from the settings, not by phone number.
 model DigestRecipient {
   id        String   @id @default(cuid())
   clinicId  String
@@ -880,7 +880,7 @@ model DigestRecipient {
   @@unique([clinicId, chatId])
 }
 
-// Оценка пациента после визита (1-5), собирается ботом кнопками. Одна на визит. Низкая оценка ждёт комментарий (awaitingUntil).
+// The patient's rating after a visit (1-5), collected by the bot with buttons. One per visit. A low rating waits for a comment (awaitingUntil).
 model Review {
   id            String    @id @default(cuid())
   clinicId      String
@@ -1043,6 +1043,9 @@ model KbItem {
   missingInSourceAt DateTime?
   // The administrator saw the price Cliniccards has and chose to keep the clinic's own: that source price is no longer a discrepancy
   externalPriceAcked Int?
+  // Fields of an imported position that the clinic set by hand on purpose (title, text, priceUah): an import never overwrites them. Every other
+  // field follows the price list of Cliniccards by itself. A price set by hand is also how "free" (0) is kept.
+  localFields  String[]  @default([])
   // A hand-made service whose name equals an imported position was left separate on purpose
   matchDismissed Boolean @default(false)
   // Approved price in hryvnias (whole); the currency of the clinic's system is not trusted, so a person confirms it

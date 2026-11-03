@@ -21,7 +21,7 @@ interface Summary {
   settings: { reviewUrl: string | null; collecting: boolean };
 }
 
-// Оценки пациентов после визита: собирает бот кнопками 1-5, администратор ничего не вводит
+// Patients' ratings after a visit: the bot collects them with buttons 1-5, the administrator enters nothing
 export default function QualityPage() {
   const { t } = useI18n();
   const [months, setMonths] = useState(3);

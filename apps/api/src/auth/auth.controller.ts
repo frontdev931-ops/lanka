@@ -11,7 +11,7 @@ class RegisterDto {
   @IsString() @MinLength(2) @MaxLength(120) name: string;
   @IsEmail() @MaxLength(200) email: string;
   @IsString() @MinLength(MIN_PASSWORD) @MaxLength(200) password: string;
-  // Владелец принимает соглашение об обработке данных от имени клиники
+  // The owner accepts the data processing agreement on behalf of the clinic
   @IsBoolean() @Equals(true) acceptTerms: boolean;
 }
 
@@ -19,7 +19,7 @@ class LoginDto {
   @IsEmail() email: string;
   @IsString() @MaxLength(200) password: string;
   @IsOptional() @IsString() clinicId?: string;
-  // Код из приложения-аутентификатора или резервный код (если включён двухфакторный вход)
+  // A code from the authenticator app or a backup code (if two-factor sign-in is on)
   @IsOptional() @IsString() @MaxLength(32) code?: string;
 }
 
@@ -64,7 +64,7 @@ class TokenDto {
 
 export function setSessionCookie(res: Response, token: string) {
   res.cookie(SESSION_COOKIE, token, {
-    httpOnly: true, // скрипты страницы токен не читают
+    httpOnly: true, // page scripts do not read the token
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     maxAge: SESSION_MAX_AGE_MS,
@@ -117,7 +117,7 @@ export class AuthController {
     return r;
   }
 
-  // Двухфакторный вход (TOTP)
+  // Two-factor sign-in (TOTP)
   @Get('2fa')
   @UseGuards(AuthGuard)
   twoFactorStatus(@CurrentUser() u: AuthUser) {

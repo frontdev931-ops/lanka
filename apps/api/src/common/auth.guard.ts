@@ -24,7 +24,7 @@ export const SESSION_MAX_AGE_MS = 12 * 3600_000;
 
 export const Roles = (...roles: Role[]) => SetMetadata('roles', roles);
 
-// Все запросы к данным клиники берут clinicId только из токена, не из параметров запроса.
+// All requests to the clinic's data take clinicId only from the token, not from request parameters.
 export const CurrentUser = createParamDecorator(
   (_: unknown, ctx: ExecutionContext): AuthUser => ctx.switchToHttp().getRequest().user,
 );
@@ -52,11 +52,11 @@ export class AuthGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest();
     const header: string | undefined = req.headers.authorization;
     const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
-    // Браузер авторизуется httpOnly-cookie (скрипты страницы токен не видят), внешние клиенты и тесты — заголовком
+    // The browser authenticates with an httpOnly cookie (page scripts do not see the token), external clients and tests use the header
     const token = bearer ?? readCookie(req.headers.cookie, SESSION_COOKIE);
     if (!token) throw new UnauthorizedException();
 
-    // Защита от подделки запросов с чужих сайтов: действие по cookie допускается только с нашего сайта
+    // Protection against forged requests from other sites: an action by cookie is allowed only from our site
     if (!bearer && !SAFE_METHODS.has(req.method)) {
       const origin: string | undefined = req.headers.origin;
       const allowed = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
@@ -71,8 +71,8 @@ export class AuthGuard implements CanActivate {
     }
     // A token the person signed out of is refused even though it has not expired yet
     if (payload.jti && (await this.prisma.revokedToken.findUnique({ where: { jti: payload.jti }, select: { jti: true } }))) throw new UnauthorizedException();
-    // Членство и роль берём из базы на каждый запрос: уволенный сотрудник теряет доступ сразу,
-    // а не когда истечёт токен; смена роли тоже действует сразу. После сброса пароля старые токены недействительны.
+    // Membership and role are taken from the database on every request: a dismissed employee loses access at once,
+    // not when the token expires; a role change also takes effect at once. After a password reset old tokens are invalid.
     const m = await this.prisma.membership.findUnique({
       where: { userId_clinicId: { userId: payload.sub, clinicId: payload.clinicId } },
       select: { role: true, clinic: { select: { suspendedAt: true, require2fa: true, billingStatus: true, paidUntil: true, isDemo: true, demoExpiresAt: true } }, user: { select: { sessionsValidAfter: true, totpEnabledAt: true } } },
@@ -97,7 +97,7 @@ export class AuthGuard implements CanActivate {
     // Before the first payment (and after the grace days) only sign-in, the payment page and the plan page are open; data is kept
     if (billingEnforced() && accessBlocked(m.clinic) && !(authOnly || path.startsWith('/billing') || path.startsWith('/service/'))) throw new ForbiddenException('payment_required');
     if (m.clinic.require2fa && !m.user.totpEnabledAt && !authOnly) throw new ForbiddenException('twofa_required');
-    // Ограничение ролей читается и с метода, и с контроллера целиком (метод главнее)
+    // The role restriction is read from both the method and the whole controller (the method wins)
     const roles = this.reflector.getAllAndOverride<Role[] | undefined>('roles', [ctx.getHandler(), ctx.getClass()]);
     if (roles && !roles.includes(req.user.role)) throw new ForbiddenException();
     return true;

@@ -31,7 +31,7 @@ const bad = (detail: string): never => {
   throw new BadRequestException({ message: 'bad_spec', detail });
 };
 
-// Значение даты в фильтре: «2026-01-31» или «-30d» (30 дней назад от сегодня; удобно для сохранённых отчётов)
+// A date value in a filter: "2026-01-31" or "-30d" (30 days back from today; convenient for saved reports)
 function parseDay(v: unknown): string {
   const s = String(v ?? '');
   const rel = /^([+-]?\d{1,4})d$/.exec(s);
@@ -44,7 +44,7 @@ function parseDay(v: unknown): string {
 export class ReportBuilderService {
   constructor(private prisma: PrismaService) {}
 
-  // Что доступно роли: наборы данных и поля (деньги скрыты от тех, кому их видеть нельзя)
+  // What is available to a role: datasets and fields (money is hidden from those who must not see it)
   catalog(role: Role, lang: Lang) {
     const money = MONEY_ROLES.includes(role);
     return DATASETS.filter((d) => money || !d.money).map((d) => ({
@@ -98,7 +98,7 @@ export class ReportBuilderService {
     return { d, cols, limit };
   }
 
-  // Условия для выборки из базы: ускорение; точная проверка выполняется в коде ниже
+  // Conditions for selecting from the database: a speed-up; the exact check is done in the code below
   private where(d: DatasetDef, clinicId: string, spec: ReportSpec) {
     const where: Record<string, unknown> = { clinicId };
     if (d.model === 'patient') where.removedAt = null;
@@ -208,7 +208,7 @@ export class ReportBuilderService {
       });
     } else {
       columns = cols.map((x) => ({ key: x.key, label: x.label[lang] }));
-      // сортируем по сырым значениям (даты по дате, числа по числу), затем подписываем
+      // we sort by raw values (dates by date, numbers by number), then add labels
       let sorted = rows;
       const sx = spec.sort && field(d, spec.sort.field);
       if (spec.sort && !sx) bad(`sort: ${spec.sort.field}`);
@@ -267,7 +267,7 @@ const OP_WORD: Record<Op, Record<Lang, string>> = {
   notNull: l3('заповнено', 'заполнено', 'is filled'),
 };
 
-// Правило отчёта человеческим языком: каждый отчёт показывает, как он посчитан
+// The report rule in plain language: every report shows how it was calculated
 function describe(spec: ReportSpec, d: DatasetDef, lang: Lang) {
   const f = (k: string) => field(d, k)?.label[lang] ?? k;
   const value = (x: { field: string; value?: unknown }) => {

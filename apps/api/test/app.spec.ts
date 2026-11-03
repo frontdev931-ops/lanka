@@ -84,7 +84,7 @@ describe('изоляция клиник', () => {
     expect(tasksB.body).toHaveLength(0);
 
     await http().patch(`/tasks/${tasksA.body[0].id}`).set(auth(b.token)).send({ status: 'DONE' }).expect(404);
-    // чужого пациента нельзя привязать к своей задаче
+    // another clinic's patient cannot be linked to your task
     await http().post('/tasks').set(auth(b.token)).send({ title: 'Тест', patientId }).expect(400);
   });
 });
@@ -106,7 +106,7 @@ describe('задачи', () => {
     expect(done.body.completedAt).toBeTruthy();
 
     const third = await http().post('/tasks/from-report').set(auth(a.token)).send({ reportId: 'no-next-visit' }).expect(201);
-    expect(third.body.created).toBe(1); // пациент с закрытой задачей снова в отчёте
+    expect(third.body.created).toBe(1); // a patient with a closed task is in the report again
   });
 
   it('из отчёта без списка задач создать нельзя', async () => {
@@ -116,7 +116,7 @@ describe('задачи', () => {
 });
 
 describe('сотрудники и роли', () => {
-  // Сотрудник добавляется приглашением: владелец создаёт ссылку, сотрудник по ней задаёт имя и пароль
+  // A staff member is added by an invitation: the owner creates a link, the staff member sets a name and password through it
   async function addMember(ownerToken: string, role: string) {
     const email = `m${rnd()}@example.com`;
     const inv = await http().post('/team/invitations').set(auth(ownerToken)).send({ email, role }).expect(201);
@@ -131,7 +131,7 @@ describe('сотрудники и роли', () => {
     const admin = await addMember(owner.token, 'ADMIN');
     await http().post('/tasks').set(auth(doctor.token)).send({ title: 'Позвонить' }).expect(403);
     await http().post('/tasks').set(auth(admin.token)).send({ title: 'Позвонить' }).expect(201);
-    await http().get('/tasks').set(auth(doctor.token)).expect(200); // смотреть может
+    await http().get('/tasks').set(auth(doctor.token)).expect(200); // may view
   });
 
   it('добавлять сотрудников может только владелец, роль владельца выдать нельзя', async () => {
@@ -158,7 +158,7 @@ describe('сотрудники и роли', () => {
   it('пользователь в двух клиниках выбирает клинику при входе', async () => {
     const owner1 = await register('Первая');
     const owner2 = await register('Вторая');
-    // уже зарегистрированный пользователь принимает приглашение своим паролем
+    // an already registered user accepts the invitation with their password
     const inv = await http().post('/team/invitations').set(auth(owner2.token)).send({ email: owner1.email, role: 'MANAGER' }).expect(201);
     const inviteToken = (inv.body.link as string).split('/invite/')[1];
     await http().post(`/invites/${inviteToken}/accept`).send({ password: 'password123' }).expect(201);
@@ -202,7 +202,7 @@ describe('логика отчётов', () => {
     const names = report.body.rows.map((r: { fullName: string }) => r.fullName);
     expect(names).toContain('Отменил будущую');
     expect(names).not.toContain('Есть запись');
-    expect(names).not.toContain('Не приходил'); // посещения не было
+    expect(names).not.toContain('Не приходил'); // there was no visit
 
     const missed = await http().get('/reports/missed-visits?days=30').set(auth(a.token)).expect(200);
     expect(missed.body.rows.map((r: { fullName: string }) => r.fullName)).toContain('Не приходил');
@@ -213,7 +213,7 @@ describe('логика отчётов', () => {
     await http().post('/integrations/cliniccards/sync').set(auth(a.token)).expect(201);
     const res = await http().get('/reports/no-next-visit/csv').set(auth(a.token)).expect(200);
     expect(res.text.charCodeAt(0)).toBe(0xfeff);
-    expect(res.text.split('\r\n')[0]).toContain('"Пацієнт";"Телефон"'); // язык по умолчанию — украинский
+    expect(res.text.split('\r\n')[0]).toContain('"Пацієнт";"Телефон"'); // the default language is Ukrainian
 
     const ru = await http().get('/reports/no-next-visit/csv').set(auth(a.token)).set('Accept-Language', 'ru').expect(200);
     expect(ru.text.split('\r\n')[0]).toContain('"Пациент";"Телефон"');
@@ -235,7 +235,7 @@ describe('логика отчётов', () => {
     await wb.xlsx.load(xl.body);
     const ws = wb.worksheets[0];
     expect(String(ws.getRow(1).getCell(1).value)).toContain('Немає наступного візиту'.slice(0, 5));
-    expect(ws.getRow(5).getCell(1).value).toBe('Пацієнт'); // шапка таблицы
+    expect(ws.getRow(5).getCell(1).value).toBe('Пацієнт'); // the table header
     expect(ws.rowCount).toBeGreaterThan(5);
     const en = await http().get('/reports/no-next-visit/xlsx').set(auth(a.token)).set('Accept-Language', 'en').buffer(true).parse(binary).expect(200);
     const wbEn = new ExcelJS.Workbook();
@@ -262,7 +262,7 @@ describe('логика отчётов', () => {
     expect(await title()).toBe('Неявки, скасування та перенесення');
     expect(await title('ru')).toBe('Неявки, отмены и переносы');
     expect(await title('en')).toBe('No-shows, cancellations and reschedules');
-    expect(await title('de')).toBe('Неявки, скасування та перенесення'); // неизвестный язык → украинский
+    expect(await title('de')).toBe('Неявки, скасування та перенесення'); // an unknown language falls back to Ukrainian
   });
 
   it('ошибки приходят на языке запроса', async () => {

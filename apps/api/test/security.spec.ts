@@ -39,7 +39,7 @@ async function register(password = PASSWORD) {
   return { token: res.body.accessToken as string, email };
 }
 
-// Токен из последнего письма с такой ссылкой
+// The token from the last email with such a link
 const tokenFromMail = (to: string, path: string) => {
   const m = [...mail.outbox].reverse().find((x) => x.to === to && x.text.includes(`/${path}/`));
   return m ? m.text.split(`/${path}/`)[1].split(/\s/)[0] : undefined;
@@ -71,15 +71,15 @@ describe('пароли и сброс', () => {
     await http().post('/auth/forgot-password').send({ email: u.email }).expect(200);
     const token = tokenFromMail(u.email, 'reset')!;
     const stored = await prisma.authToken.findMany({ where: { user: { email: u.email }, type: 'RESET' } });
-    expect(stored.some((s) => s.tokenHash === token)).toBe(false); // токен в базе не лежит
+    expect(stored.some((s) => s.tokenHash === token)).toBe(false); // the token is not stored in the database
 
-    await new Promise((r) => setTimeout(r, 1100)); // iat в токенах секундный
+    await new Promise((r) => setTimeout(r, 1100)); // iat in tokens is in seconds
     await http().post('/auth/reset-password').send({ token, password: 'a-brand-new-password' }).expect(200);
-    await http().post('/auth/reset-password').send({ token, password: 'another-new-password' }).expect(400); // повторно нельзя
+    await http().post('/auth/reset-password').send({ token, password: 'another-new-password' }).expect(400); // not allowed a second time
 
     await http().post('/auth/login').send({ email: u.email, password: PASSWORD }).expect(401);
     await http().post('/auth/login').send({ email: u.email, password: 'a-brand-new-password' }).expect(201);
-    await http().get('/auth/me').set(auth(u.token)).expect(401); // сессия, выданная до сброса, закрыта
+    await http().get('/auth/me').set(auth(u.token)).expect(401); // a session issued before the reset is closed
   });
 
   it('новая ссылка отзывает старую; слабый пароль и неверный токен отклоняются', async () => {
@@ -122,18 +122,18 @@ describe('подтверждение почты', () => {
 
   it('без подтверждения нельзя подключить данные клиники, после ссылки можно', async () => {
     const u = await register();
-    expect(tokenFromMail(u.email, 'verify')).toBeTruthy(); // письмо ушло при регистрации
+    expect(tokenFromMail(u.email, 'verify')).toBeTruthy(); // the email was sent at registration
     expect((await http().get('/auth/me').set(auth(u.token)).expect(200)).body.emailVerified).toBe(false);
 
     await withVerification(async () => {
       await http().put('/integrations/cliniccards/key').set(auth(u.token)).send({ apiKey: 'some-key-12345' }).expect(403);
       await http().post('/auth/verify-email').send({ token: tokenFromMail(u.email, 'verify') }).expect(200);
       expect((await http().get('/auth/me').set(auth(u.token)).expect(200)).body.emailVerified).toBe(true);
-      // теперь запрос доходит до проверки ключа (Cliniccards его не примет), а не отклоняется как «почта не подтверждена»
+      // now the request reaches the key check (Cliniccards will not accept it), instead of being rejected as "email not confirmed"
       const r = await http().put('/integrations/cliniccards/key').set(auth(u.token)).send({ apiKey: 'some-key-12345' });
       expect(r.status).not.toBe(403);
     });
-    // повторное открытие ссылки не ошибка
+    // opening the link again is not an error
     await http().post('/auth/verify-email').send({ token: tokenFromMail(u.email, 'verify') }).expect(200);
   });
 
@@ -166,9 +166,9 @@ describe('доступ сотрудников проверяется на каж
     const memberEmail = `m${rnd()}@example.com`;
     const inv = await http().post('/team/invitations').set(auth(owner.token)).send({ email: memberEmail, role: 'MANAGER' }).expect(201);
     const member = (await http().post(`/invites/${(inv.body.link as string).split('/invite/')[1]}/accept`).send({ name: 'Керівник', password: PASSWORD }).expect(201)).body.accessToken as string;
-    await http().get('/clinic/audit').set(auth(member)).expect(200); // управляющему история доступна
+    await http().get('/clinic/audit').set(auth(member)).expect(200); // the history is available to the manager
     await prisma.membership.updateMany({ where: { user: { email: memberEmail } }, data: { role: 'DOCTOR' } });
-    await http().get('/clinic/audit').set(auth(member)).expect(403); // токен прежний, роль уже другая
+    await http().get('/clinic/audit').set(auth(member)).expect(403); // the token is the same, the role is already different
   });
 });
 
@@ -177,7 +177,7 @@ describe('защита от перебора', () => {
     const u = await register();
     for (let i = 0; i < 10; i++) await http().post('/auth/login').send({ email: u.email, password: 'wrong-password-1' }).expect(401);
     await http().post('/auth/login').send({ email: u.email, password: PASSWORD }).expect(429);
-    // блокировка в таблице, а не в памяти процесса
+    // the lock is in a table, not in the process memory
     expect(await prisma.rateLimit.count({ where: { key: `login:email:${u.email}` } })).toBe(1);
   });
 
@@ -267,7 +267,7 @@ describe('врач не видит деньги', () => {
     expect(docCard).not.toHaveProperty('balanceIssued');
     expect(docCard).not.toHaveProperty('balancePaid');
     expect(docCard.visits[0]).not.toHaveProperty('amount');
-    expect(docCard.fullName).toBe('Тестенко Іван'); // остальное врачу доступно
+    expect(docCard.fullName).toBe('Тестенко Іван'); // the rest is available to the doctor
   });
 
   it('отчёты с деньгами (долги, источники, выручка) для врача закрыты, в каталоге их нет, CSV тоже', async () => {
@@ -299,7 +299,7 @@ describe('выгрузка отчёта', () => {
     expect(csv).toContain(`"'=HYPERLINK`);
     expect(csv).toContain(`"'@SUM(1+1)"`);
     expect(csv).toContain(`"'+cmd|calc"`);
-    expect(csv).toContain('"+380501112233"'); // обычный телефон не портится
+    expect(csv).toContain('"+380501112233"'); // an ordinary phone is not damaged
     const log = await prisma.auditLog.findFirst({ where: { clinicId, action: 'report.exported' } });
     expect(log).toBeTruthy();
     expect(log!.details).toMatchObject({ report: 'debtors', rows: 3 });
@@ -334,7 +334,7 @@ describe('соглашение об обработке данных', () => {
     expect((await http().get('/auth/me').set(auth(owner.token)).expect(200)).body.termsAccepted).toBe(false);
     await http().put('/integrations/cliniccards/key').set(auth(owner.token)).send({ apiKey: 'some-key-12345' }).expect(403);
 
-    // не владелец принять не может; устаревшая версия отклоняется
+    // a non-owner cannot accept; an outdated version is rejected
     const adminEmail = `a${rnd()}@example.com`;
     const inv = await http().post('/team/invitations').set(auth(owner.token)).send({ email: adminEmail, role: 'ADMIN' }).expect(201);
     const admin = (await http().post(`/invites/${(inv.body.link as string).split('/invite/')[1]}/accept`).send({ name: 'Адмін', password: PASSWORD }).expect(201)).body.accessToken as string;
@@ -345,8 +345,8 @@ describe('соглашение об обработке данных', () => {
     expect(ok.body.ok).toBe(true);
     expect((await http().get('/auth/me').set(auth(owner.token)).expect(200)).body.termsAccepted).toBe(true);
     const r = await http().put('/integrations/cliniccards/key').set(auth(owner.token)).send({ apiKey: 'some-key-12345' });
-    expect(r.status).not.toBe(403); // дошло до проверки ключа
-    expect(await prisma.auditLog.count({ where: { clinicId, action: 'terms.accepted' } })).toBeGreaterThanOrEqual(2); // при регистрации и позже
+    expect(r.status).not.toBe(403); // it reached the key check
+    expect(await prisma.auditLog.count({ where: { clinicId, action: 'terms.accepted' } })).toBeGreaterThanOrEqual(2); // at registration and later
   });
 });
 
@@ -363,13 +363,13 @@ describe('«давно не бували»: порядок и граница п�
     const tooOld = await mk('Г Давній', 900, 999_999);
     const recent = await mk('Д Нещодавній', 30, 1);
 
-    // у «А» невыполненное лечение: по итогу плана осталось 7000 (в цене пунктов указано иначе, итог плана главнее)
+    // "A" has unfinished treatment: by the plan total 7000 is left (the item prices say otherwise, the plan total wins)
     await prisma.planItem.create({ data: { clinicId, externalId: `p${rnd()}`, patientId: withPlan.id, planId: 'PL1', name: 'Імплант', price: 5000, status: 'NEW', createdAtExt: ago(100) } });
     await prisma.treatmentPlan.create({ data: { clinicId, externalId: 'PL1', total: 7000, totalDone: 0, createdAtExt: ago(100) } });
 
     const body = (await http().get('/reports/lapsed-patients').set(auth(owner.token)).expect(200)).body;
     const names = (body.rows as { fullName: string }[]).map((r) => r.fullName);
-    expect(names).toEqual([withPlan.fullName, rich.fullName, poor.fullName]); // лечение, затем оплаты по убыванию; давних и недавних нет
+    expect(names).toEqual([withPlan.fullName, rich.fullName, poor.fullName]); // treatment first, then payments in descending order; no old and no recent ones
     expect(body.rows[0].openSum).toBe(7000);
     expect(body.rows[1]).toMatchObject({ openSum: 0, lifetimePaid: 100_000 });
     expect(body.maxDays).toBe(730);
@@ -380,11 +380,11 @@ describe('«давно не бували»: порядок и граница п�
     expect(wide.map((r) => r.fullName)).toContain(tooOld.fullName);
     expect(wide.map((r) => r.fullName)).not.toContain(recent.fullName);
 
-    // верхняя граница не может быть меньше нижней
+    // the upper bound cannot be smaller than the lower
     const narrow = (await http().get('/reports/lapsed-patients?days=250&maxDays=100').set(auth(owner.token)).expect(200)).body;
     expect(narrow.maxDays).toBeGreaterThan(250);
 
-    // задачи из отчёта берут тот же период
+    // tasks from the report take the same period
     const t = await http().post('/tasks/from-report').set(auth(owner.token)).send({ reportId: 'lapsed-patients', maxDays: 1000 }).expect(201);
     expect(t.body.created).toBe(4);
   });
@@ -399,37 +399,37 @@ describe('«записи без итога»', () => {
     const gone = await prisma.patient.create({ data: { clinicId, externalId: `u${rnd()}`, fullName: 'Видалений', removedAt: new Date() } });
     const visit = (patientId: string, status: string, startsAt: Date, endsAt?: Date) =>
       prisma.visit.create({ data: { clinicId, patientId, externalId: `v${rnd()}`, startsAt, endsAt: endsAt ?? new Date(startsAt.getTime() + 30 * 60_000), status } });
-    await visit(patient.id, 'PLANNED', hoursAgo(48)); // не закрыта: попадает
-    await visit(patient.id, 'CONFIRMED', hoursAgo(24 * 10)); // не закрыта: попадает
-    await visit(patient.id, 'VISITED', hoursAgo(24 * 3)); // итог есть
-    await visit(patient.id, 'CANCELLED', hoursAgo(24 * 4)); // итог есть
-    await visit(patient.id, 'PLANNED', hoursAgo(-48)); // будущая
-    await visit(patient.id, 'CONFIRMED', hoursAgo(1)); // только что закончилась: рано
-    await visit(patient.id, 'PLANNED', hoursAgo(24 * 200)); // за пределами периода (90 дней)
-    await visit(gone.id, 'PLANNED', hoursAgo(72)); // пациента больше нет в Cliniccards
+    await visit(patient.id, 'PLANNED', hoursAgo(48)); // not closed: it is included
+    await visit(patient.id, 'CONFIRMED', hoursAgo(24 * 10)); // not closed: it is included
+    await visit(patient.id, 'VISITED', hoursAgo(24 * 3)); // there is a total
+    await visit(patient.id, 'CANCELLED', hoursAgo(24 * 4)); // there is a total
+    await visit(patient.id, 'PLANNED', hoursAgo(-48)); // future
+    await visit(patient.id, 'CONFIRMED', hoursAgo(1)); // just ended: too early
+    await visit(patient.id, 'PLANNED', hoursAgo(24 * 200)); // outside the period (90 days)
+    await visit(gone.id, 'PLANNED', hoursAgo(72)); // the patient is no longer in Cliniccards
 
     const body = (await http().get('/reports/unclosed-visits').set(auth(owner.token)).expect(200)).body;
     expect(body.rows).toHaveLength(2);
-    expect(body.rows.map((r: { visitStatus: string }) => r.visitStatus)).toEqual(['PLANNED', 'CONFIRMED']); // свежие сверху
+    expect(body.rows.map((r: { visitStatus: string }) => r.visitStatus)).toEqual(['PLANNED', 'CONFIRMED']); // fresh on top
     expect(body.rows[0]).toMatchObject({ fullName: 'Іваненко Іван', daysSince: 2 });
     expect(body.rows[0].visitTime).toMatch(/^\d\d:\d\d$/);
     expect(body.columns.map((c: { key: string }) => c.key)).toContain('visitStatus');
 
-    // период расширяется: запись 200 дней назад
+    // the period widens: an appointment 200 days ago
     const wide = (await http().get('/reports/unclosed-visits?days=300').set(auth(owner.token)).expect(200)).body;
     expect(wide.rows).toHaveLength(3);
 
     const csv = (await http().get('/reports/unclosed-visits/csv').set(auth(owner.token)).expect(200)).text;
-    expect(csv).toContain('Запланований'); // статус подписан по-человечески, а не кодом
+    expect(csv).toContain('Запланований'); // the status is labelled for people, not as a code
     expect(csv).not.toContain('PLANNED');
 
-    // задача администратору: одна на пациента (у него две незакрытые записи), повторный запуск дублей не плодит
+    // a task for the administrator: one per patient (they have two unclosed appointments), a repeated run makes no duplicates
     const t1 = await http().post('/tasks/from-report').set(auth(owner.token)).send({ reportId: 'unclosed-visits' }).expect(201);
     expect(t1.body.created).toBe(1);
     const t2 = await http().post('/tasks/from-report').set(auth(owner.token)).send({ reportId: 'unclosed-visits' }).expect(201);
     expect(t2.body.created).toBe(0);
 
-    // другая клиника этих записей не видит; врач отчёт видит (денег в нём нет)
+    // another clinic does not see these appointments; the doctor sees the report (there is no money in it)
     const other = await register();
     expect((await http().get('/reports/unclosed-visits').set(auth(other.token)).expect(200)).body.rows).toHaveLength(0);
   });
@@ -476,14 +476,14 @@ describe('воронка пациента', () => {
     const { owner } = await seed();
     const b = (await http().get('/funnel?months=12').set(auth(owner.token)).expect(200)).body;
     expect(b.counts).toEqual({ card: 8, booked: 7, came: 4, started: 2, paid: 2, repeat: 1, active: 3 });
-    // воронка не растёт к концу: каждый следующий этап не больше предыдущего
+    // the funnel does not grow towards the end: each next stage is no larger than the previous
     expect(b.counts.booked).toBeLessThanOrEqual(b.counts.card);
     expect(b.counts.started).toBeLessThanOrEqual(b.counts.came);
     expect(b.counts.paid).toBeLessThanOrEqual(b.counts.started);
     expect(b.lostAfterDays).toBe(180);
     expect(b.cohorts.reduce((s: number, c: { card: number }) => s + c.card, 0)).toBe(8);
     expect(b.sources).toEqual(expect.arrayContaining(['Instagram', 'Google реклама', '(не вказано)']));
-    expect(b.directions).toEqual(['Ортопедія', 'Терапія']); // профилактика направлением не считается
+    expect(b.directions).toEqual(['Ортопедія', 'Терапія']); // hygiene does not count as a direction
     expect(b.medians.cardToBooked).toBeDefined();
   });
 
@@ -509,7 +509,7 @@ describe('воронка пациента', () => {
     const terapia = (await http().get(`/funnel?direction=${encodeURIComponent('Терапія')}`).set(auth(owner.token)).expect(200)).body;
     expect(terapia.counts).toMatchObject({ card: 1, started: 1, paid: 1 });
     const short = (await http().get('/funnel?months=1').set(auth(owner.token)).expect(200)).body;
-    expect(short.counts.card).toBe(0); // карточки созданы 60 дней назад: в последний месяц не попадают
+    expect(short.counts.card).toBe(0); // the cards were created 60 days ago: they do not fall into the last month
     const bySource = (await http().get('/funnel').set(auth(owner.token)).expect(200)).body.bySource as { name: string; card: number; paidSum: number }[];
     expect(bySource.find((r) => r.name === 'Instagram')).toMatchObject({ card: 4, paidSum: 5000 });
   });
@@ -549,22 +549,22 @@ describe('журнал обращений (верх воронки)', () => {
     const clinicId = (await prisma.user.findUniqueOrThrow({ where: { email: owner.email }, include: { memberships: true } })).memberships[0].clinicId;
     const make = (channel: string, phone: string, occurredAt: Date) => http().post('/inquiries').set(auth(owner.token)).send({ channel, phone, occurredAt: occurredAt.toISOString() }).expect(201);
 
-    const a = (await make('PHONE', '050 111 22 33', ago(10))).body; // потом придёт и пролечится
-    const b = (await make('INSTAGRAM', '+38 (050) 222-33-44', ago(10))).body; // придёт и не появится
-    const c = (await make('GOOGLE', '0503334455', ago(10))).body; // записан, не пришёл
-    const d = (await make('PHONE', '0504445566', ago(10))).body; // давний пациент
-    const e = (await make('SITE', '0505556677', ago(9))).body; // карточки нет
-    await prisma.inquiry.update({ where: { id: (await make('WALK_IN', '0506667788', ago(1))).body.id }, data: { status: 'LOST' } }); // отказался
+    const a = (await make('PHONE', '050 111 22 33', ago(10))).body; // will come later and be treated
+    const b = (await make('INSTAGRAM', '+38 (050) 222-33-44', ago(10))).body; // will come and not appear
+    const c = (await make('GOOGLE', '0503334455', ago(10))).body; // booked, did not come
+    const d = (await make('PHONE', '0504445566', ago(10))).body; // a long-standing patient
+    const e = (await make('SITE', '0505556677', ago(9))).body; // no card
+    await prisma.inquiry.update({ where: { id: (await make('WALK_IN', '0506667788', ago(1))).body.id }, data: { status: 'LOST' } }); // declined
 
     const mk = (phone: string, createdAtExt: Date) => prisma.patient.create({ data: { clinicId, externalId: `q${rnd()}`, fullName: `P ${phone}`, phone, phoneNorm: phone, createdAtExt } });
     const pa = await mk('380501112233', ago(9));
     await prisma.visit.create({ data: { clinicId, patientId: pa.id, externalId: `v${rnd()}`, startsAt: ago(8), endsAt: ago(8), status: 'VISITED' } });
     const pc = await mk('380503334455', ago(9));
     await prisma.visit.create({ data: { clinicId, patientId: pc.id, externalId: `v${rnd()}`, startsAt: ago(-3), endsAt: ago(-3), status: 'PLANNED' } });
-    await mk('380504445566', ago(500)); // карточка давняя
-    const pb = await mk('380502223344', ago(9)); // карточка без записи
+    await mk('380504445566', ago(500)); // an old card
+    const pb = await mk('380502223344', ago(9)); // a card without an appointment
 
-    // любое новое обращение запускает связывание (после синхронизации оно запускается само)
+    // any new inquiry starts the linking (after a sync it starts by itself)
     await make('PHONE', '0509998877', ago(0));
     const list = (await http().get('/inquiries').set(auth(owner.token)).expect(200)).body.rows as { id: string; stage: string; patient: { id: string } | null }[];
     const stage = (id: string) => list.find((r) => r.id === id)!.stage;
@@ -576,12 +576,12 @@ describe('журнал обращений (верх воронки)', () => {
     expect(list.find((r) => r.id === a.id)!.patient!.id).toBe(pa.id);
     expect(pb.id).toBeTruthy();
 
-    // воронка верха: обращение «давнего пациента» новым не считается
+    // top of the funnel: an inquiry of a "long-standing patient" is not counted as new
     const f = (await http().get('/funnel/inquiries?months=3').set(auth(owner.token)).expect(200)).body;
     expect(f.returning).toBe(1);
     expect(f.counts).toEqual({ total: 6, card: 3, booked: 2, came: 1, started: 0, lost: 1 });
     const phone = f.byChannel.find((x: { name: string }) => x.name === 'PHONE');
-    expect(phone).toMatchObject({ total: 2, came: 1 }); // «давний» в канал не входит
+    expect(phone).toMatchObject({ total: 2, came: 1 }); // the "long-standing" one is not part of the channel
     const ig = (await http().get('/funnel/inquiries?channel=INSTAGRAM').set(auth(owner.token)).expect(200)).body;
     expect(ig.counts).toMatchObject({ total: 1, card: 1, came: 0 });
   });

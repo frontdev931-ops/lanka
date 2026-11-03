@@ -53,7 +53,7 @@ export class TeamController {
     });
   }
 
-  // Ссылка показывается один раз при создании: в базе хранится только хэш токена. Роль владельца так не выдаётся.
+  // The link is shown once at creation: only the token's hash is stored. The owner role is not issued this way.
   @Post('invitations')
   @Roles(Role.OWNER)
   async invite(@CurrentUser() u: AuthUser, @Body() dto: InviteDto) {
@@ -88,7 +88,7 @@ export class TeamController {
   }
 }
 
-// Публичные адреса: по ссылке приглашения открывается ещё без входа в систему
+// Public addresses: the invitation link opens without signing in
 // Staff management: change a role, remove a person from the clinic, reset someone's second factor. The owner cannot be touched.
 class RoleDto {
   @IsIn([Role.MANAGER, Role.ADMIN, Role.DOCTOR, Role.ANALYST]) role: Role;
@@ -156,7 +156,7 @@ export class InvitePublicController {
     return { clinicName: inv.clinic.name, role: inv.role, email: inv.email, existingUser: !!existing };
   }
 
-  // Новому пользователю нужно имя и пароль; тот, кто уже зарегистрирован, подтверждает приглашение своим паролем
+  // A new user needs a name and a password; someone already registered confirms the invitation with their password
   @Post(':token/accept')
   async accept(@Param('token') token: string, @Body() dto: AcceptDto, @Res({ passthrough: true }) res: Response) {
     const inv = await this.find(token);
@@ -167,7 +167,7 @@ export class InvitePublicController {
       throw new BadRequestException('name_required');
     }
 
-    // Приглашение занимается атомарно: одну ссылку нельзя использовать дважды
+    // An invitation is taken atomically: one link cannot be used twice
     const claimed = await this.prisma.invitation.updateMany({ where: { id: inv.id, acceptedAt: null }, data: { acceptedAt: new Date() } });
     if (!claimed.count) throw new NotFoundException('invite_invalid');
 

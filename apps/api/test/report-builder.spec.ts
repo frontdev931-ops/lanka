@@ -82,7 +82,7 @@ describe('конструктор отчётов', () => {
     await seed(other.clinicId);
     const spec = { dataset: 'patients', columns: ['patientName', 'source', 'lastVisitAt', 'debt'], filters: [{ field: 'lastVisitAt', op: 'lte', value: '-180d' }, { field: 'source', op: 'eq', value: 'instagram' }], sort: { field: 'lastVisitAt', dir: 'asc' } };
     const res = (await http().post('/report-builder/run').set(auth(o.token)).send({ spec }).expect(200)).body;
-    expect(res.rows.map((r: { patientName: string }) => r.patientName)).toEqual(['Мельник Оксана', 'Антоненко Іван']); // от старых к новым, чужая клиника не попала
+    expect(res.rows.map((r: { patientName: string }) => r.patientName)).toEqual(['Мельник Оксана', 'Антоненко Іван']); // from old to new, the other clinic's patient is not included
     expect(res.rows[1].debt).toBe(2000);
     expect(res.columns.map((c: { label: string }) => c.label)).toEqual(['Пацієнт', 'Джерело звернення', 'Останній візит', 'Борг']);
     expect(res.rule).toContain('Набір даних: Пацієнти');
@@ -134,8 +134,8 @@ describe('конструктор отчётов', () => {
     const ws = wb.worksheets[0];
     expect(ws.getRow(1).getCell(1).value).toBe('Мої пацієнти');
     expect(ws.getRow(5).getCell(3).value).toBe('Виставлено');
-    expect(ws.getRow(6).getCell(1).value).toBe('=Формула Петро'); // текст, а не формула
-    expect(ws.getRow(6).getCell(3).value).toBe(1000); // число остаётся числом
+    expect(ws.getRow(6).getCell(1).value).toBe('=Формула Петро'); // text, not a formula
+    expect(ws.getRow(6).getCell(3).value).toBe(1000); // a number stays a number
     const pdf = await http().post('/report-builder/export').set(auth(o.token)).send({ ...body, format: 'pdf' }).buffer(true).parse(binary).expect(200);
     expect(pdf.body.subarray(0, 5).toString()).toBe('%PDF-');
     const csv = await http().post('/report-builder/export').set(auth(o.token)).send({ ...body, format: 'csv' }).expect(200);
@@ -186,6 +186,6 @@ describe('конструктор: обращения, заявки, оценки
     const rev = (await run(admin, { dataset: 'reviews', groupBy: { field: 'doctorName' }, aggregates: [{ fn: 'count' }, { fn: 'avg', field: 'rating' }] })).body;
     expect(rev.rows).toEqual([{ group: 'Лікар', a0: 1, a1: 2 }]);
     expect((await run(other.token, { dataset: 'reviews', columns: ['rating'] })).body.rows).toEqual([]);
-    await http().post('/report-builder/run').set(auth(o.token)).send({ spec: { dataset: 'inquiries', columns: ['channel'], filters: [{ field: 'channel', op: 'in', value: 'INSTAGRAM' }] } }).expect(400); // «один из» требует список
+    await http().post('/report-builder/run').set(auth(o.token)).send({ spec: { dataset: 'inquiries', columns: ['channel'], filters: [{ field: 'channel', op: 'in', value: 'INSTAGRAM' }] } }).expect(400); // "one of" needs a list
   });
 });

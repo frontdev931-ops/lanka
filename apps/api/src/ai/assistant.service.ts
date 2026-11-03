@@ -7,7 +7,7 @@ import { AiService } from './ai.service';
 
 const LANG_NAME: Record<Lang, string> = { uk: 'українською', ru: 'російською', en: 'англійською' };
 const MAX_TRIES = 3;
-// Поля, значения которых указывают на конкретного человека: такие строки модели не передаются никогда
+// Fields whose values point to a specific person: such rows are never passed to the model
 const PERSONAL = new Set(['patientName', 'phone']);
 
 const SYSTEM = (catalog: string, today: string, lang: Lang) => `Ти — аналітик-помічник керівника стоматологічної клініки. Ти НЕ рахуєш цифри сам: ти лише складаєш ОПИС звіту (spec), а систему розрахує його за даними клініки.
@@ -92,14 +92,14 @@ export class AssistantService {
           lastError = `помилка в описі звіту: ${detail}`;
         }
       }
-      // просим исправить, показав причину
+      // we ask to fix it, showing the reason
       turns.push({ role: 'assistant', content: r.text.slice(0, 1500) });
       turns.push({ role: 'user', content: `Помилка: ${lastError}. Виправ і поверни лише JSON за форматом.` });
     }
     return { answer: { uk: 'Не вдалося скласти звіт за цим запитом. Спробуйте сформулювати інакше, наприклад: «покажи пацієнтів, які не були понад рік».', ru: 'Не удалось составить отчёт по этому запросу. Попробуйте сформулировать иначе, например: «покажи пациентов, которые не были больше года».', en: 'I could not build a report for this request. Try rephrasing, for example: “show patients who have not visited for over a year”.' }[lang], title: null, spec: null, report: null };
   }
 
-  // Короткое пояснение итогов. Модель видит только итоговые числа и подписи групп (врач, месяц, источник), строки с людьми ей не передаются.
+  // A short explanation of the totals. The model sees only the totals and group labels (doctor, month, source); rows with people are not passed to it.
   private async explain(clinicId: string, lang: Lang, question: string, answer: string, spec: ReportSpec, report: { columns: { key: string; label: string }[]; rows: unknown[]; total: number }): Promise<string> {
     const aggregated = !!spec.groupBy || !!spec.aggregates?.length;
     const personal = !!spec.groupBy && PERSONAL.has(spec.groupBy.field);

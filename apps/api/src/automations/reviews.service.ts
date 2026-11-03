@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 const DAY = 86_400_000;
 
-// Качество по оценкам пациентов: сводка, по врачам, по месяцам, последние низкие оценки с комментариями
+// Quality by patients' ratings: summary, by doctor, by month, the latest low ratings with comments
 @Injectable()
 export class ReviewsService {
   constructor(private prisma: PrismaService) {}

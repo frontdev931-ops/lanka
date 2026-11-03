@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 
-// QR-код ссылки (рисуется в браузере, ссылка никуда не отправляется)
+// The link's QR code (drawn in the browser, the link is sent nowhere)
 export function QrCode({ value, size = 180, label }: { value: string; size?: number; label: string }) {
   const [src, setSrc] = useState('');
   useEffect(() => {

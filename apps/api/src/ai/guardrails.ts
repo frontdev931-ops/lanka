@@ -1,13 +1,13 @@
-// Границы ИИ-помощника, которые проверяет код, а не только инструкция модели.
-// 1) входящее сообщение с опасной темой не доходит до модели вообще: сразу передача человеку;
-// 2) готовый ответ проверяется на то, чего помощник говорить не должен.
+// Boundaries of the AI assistant that the code checks, not only the model's instruction.
+// 1) an incoming message with a dangerous topic never reaches the model: it goes straight to a person;
+// 2) a finished reply is checked for what the assistant must not say.
 
-import { MEDICATION } from './dental';
+import { MEDICATION, stemsOf } from './dental';
 
 export const HANDOFF_TEXT = 'Передаю ваше запитання адміністратору клініки, він відповість найближчим часом.';
 export const HANDOFF_TEXT_RU = 'Передаю ваш вопрос администратору клиники, он ответит в ближайшее время.';
 
-// Язык пациента: і ї є ґ и украинские слова — украинский; ы э ъ ё и русские слова — русский; признаков нет — не определено
+// The patient's language: і ї є ґ and Ukrainian words mean Ukrainian; ы э ъ ё and Russian words mean Russian; no signs means undetermined
 const RU_WORDS = /(?<![\p{L}])(какие|какой|какая|какое|как|что|где|когда|есть|нужно|можно|окна|окон|окошк\p{L}*|сегодня|сколько|врач|записаться|запишите|запись|пожалуйста|спасибо|здравствуйте|привет|меня|мне|мой|моя|подскажите|свободн\p{L}*|ближайш\p{L}*|хотел\p{L}*|болит|чтобы|можете|ещё|лечение|во сколько)(?![\p{L}])/iu;
 const UK_WORDS = /(?<![\p{L}])(які|який|яка|яке|що|де|коли|є|потрібно|можна|вікна|вікон|вікно|сьогодні|скільки|лікар|записатися|запишіть|будь ласка|дякую|вітаю|добрий|мені|мене|мій|моя|підкажіть|вільн\p{L}*|найближч\p{L}*|хотів|хотіла|болить|щоб|можете|ще|лікування|о котрій)(?![\p{L}])/iu;
 export function detectLanguage(text: string): 'ru' | 'uk' | null {
@@ -35,12 +35,12 @@ export function handoffText(lang: 'ru' | 'uk'): string {
 export type HandoffReason = 'medical' | 'price' | 'complaint' | 'long' | 'reply_check' | 'model' | 'urgent';
 
 const TOPICS: { reason: HandoffReason; re: RegExp }[] = [
-  // здоровье: симптомы, лекарства, диагнозы — только врач или администратор
+  // health: symptoms, medicines, diagnoses: only a doctor or the administrator
   { reason: 'medical', re: /(біль|болить|болю|болят|боль|болит|кров|кровит|кровь|температур|набряк|отек|отёк|опух|пухлин|флюс|антибіот|антибиот|таблетк|ліки|лекарств|препарат|дозуван|дозировк|алерг|вагітн|беремен|діагноз|диагноз|нестерпн|невыносим|швидк|скорая|нагноє|гній|гной)/i },
-  // деньги: цены не называем, их знает администратор
+  // money: we do not name prices, the administrator knows them
   { reason: 'price', re: /(скільки\s+кошт|сколько\s+стоит|ціна|цена|цены|ціни|вартість|стоимость|прайс|знижк|скидк|розстрочк|рассрочк|кредит)/i },
-  // жалобы и угрозы
-  { reason: 'complaint', re: /(скарг|скарж|жалоб|жалу|пожалу|обман|поверніть\s+гроші|верните\s+деньги|прокурор|юрист|адвокат|суд[іуо]|поліці|полици|відгук\s+напишу|отзыв\s+напишу)/i },
+  // complaints and threats
+  { reason: 'complaint', re: /(скарг|скарж|жалоб|жалу(?!йст)|пожалу(?!йст)|обман|поверніть\s+гроші|верните\s+деньги|прокурор|юрист|адвокат|суд[іуо]|поліці|полици|відгук\s+напишу|отзыв\s+напишу)/i },
 ];
 
 // Discounts and instalments are never answered by the AI. A plain price question goes to the model only when the clinic has
@@ -63,23 +63,69 @@ export function isUrgentSymptom(text: string, pricesKnown = false): boolean {
   return !TOPICS.some((t) => t.reason !== 'medical' && t.re.test(text) && !(t.reason === 'price' && pricesKnown && !PRICE_ONLY_CASH.test(text)));
 }
 
-// Что нельзя в ответе клиники: суммы, дозировки, лекарства, диагнозы, советы по лечению
+// What a clinic reply must not contain: sums, dosages, medicines, diagnoses, treatment advice
 const MONEY = /(\d[\d\s]*(?:[.,]\d+)?)\s*(грн|₴|uah|usd|\$|€|грив|гривен|долар)/gi;
 const BAD_REPLY = [
   /\d+\s*(мг|mg|мл|ml|табл)/i,
   /(діагноз|диагноз|антибіот|антибиот|ібупрофен|ибупрофен|парацетамол|нурофен|анальгін|анальгин|полощіть|полоскайте|приймайте|принимайте|прийміть|прикладіть|приложите)/i,
 ];
 
-// allowedAmounts: the prices (UAH) the clinic approved and recently confirmed; any other amount in the reply is a violation
-export function replyViolates(reply: string, allowedAmounts: number[] = []): boolean {
+// "from 1 500 UAH" is never said: the clinic's list has fixed prices, and a price is marked as preliminary by a separate sentence
+const FROM_PRICE = /(?<![\p{L}])(від|от|from|начиная\s+с|починаючи\s+з)\s*\d[\d\s]*(?:[.,]\d+)?\s*(грн|₴|uah|грив)/iu;
+
+// A sum named in a reply must belong to the service it is named for, not only exist somewhere in the price list. The service is found by
+// the words of the reply around the sum (the title's significant words; best match only), then by the whole reply, then by the service
+// the model reported. A sum that cannot be tied to a service, or is another service's price, is a violation.
+export interface PricedService {
+  title: string;
+  category?: string | null;
+  amount: number;
+}
+function servicesNamedIn(text: string, priced: PricedService[]): PricedService[] {
+  const words = new Set(stemsOf(text));
+  const scored = priced
+    .map((p) => {
+      const t = stemsOf(p.title);
+      return { p, n: t.filter((x) => words.has(x)).length };
+    })
+    .filter((x) => x.n >= 1);
+  const best = Math.max(0, ...scored.map((x) => x.n));
+  return scored.filter((x) => x.n === best).map((x) => x.p);
+}
+function sumsMatchServices(reply: string, priced: PricedService[], hint?: string | null): boolean {
+  const hinted = hint ? servicesNamedIn(hint, priced) : [];
+  let from = 0;
+  for (const m of reply.matchAll(MONEY)) {
+    const n = Number(m[1].replace(/\s/g, '').replace(',', '.'));
+    const end = (m.index ?? 0) + m[0].length;
+    // the sentence that holds the sum: before it (where the name usually is), then the whole sentence, then the whole reply
+    const sentStart = Math.max(reply.lastIndexOf('. ', m.index ?? 0) + 2, reply.lastIndexOf('\n', m.index ?? 0) + 1, 0);
+    const windows = [reply.slice(Math.max(from, sentStart), m.index ?? 0), reply.slice(sentStart, end + 60), reply];
+    from = end;
+    let named: PricedService[] = [];
+    for (const w of windows) {
+      named = servicesNamedIn(w, priced);
+      if (named.length) break;
+    }
+    if (![...named, ...hinted].some((p) => p.amount === n) ) return false;
+    if (!named.length && !hinted.length) return false;
+  }
+  return true;
+}
+
+// allowedAmounts: the prices (UAH) of the clinic's own list that are known and current; any other amount in the reply is a violation.
+// With `check` also the binding of the sum to the service named for it (see above).
+export function replyViolates(reply: string, allowedAmounts: number[] = [], check?: { priced: PricedService[]; service?: string | null }): boolean {
+  if (FROM_PRICE.test(reply)) return true;
   for (const m of reply.matchAll(MONEY)) {
     const n = Number(m[1].replace(/\s/g, '').replace(',', '.'));
     if (!/грн|₴|uah|грив/i.test(m[2]) || !allowedAmounts.includes(n)) return true;
   }
+  if (check && !sumsMatchServices(reply, check.priced, check.service)) return true;
   return BAD_REPLY.some((re) => re.test(reply));
 }
 
-// Модель просят вернуть JSON; всё, что не разобралось, считается передачей человеку
+// The model is asked to return JSON; anything that does not parse is treated as a hand-over to a person
 export interface ModelOption {
   date: string;
   time: string;
@@ -109,12 +155,25 @@ export function parseModelJson(raw: string): ModelReply | null {
   }
 }
 
-// Время в ответе (чч:мм) должно лежать в одном из свободных окон, которые мы сами посчитали по расписанию.
-// Окна приходят в минутах от начала суток. Без окон называть время вообще нельзя.
+// A time in the reply (hh:mm) must lie inside one of the free windows that we calculated from the schedule ourselves.
+// Windows come in minutes from the start of the day. Without windows no time may be named at all.
 export function timesOutsideWindows(reply: string, windows: [number, number][]): boolean {
   for (const m of reply.matchAll(/(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?!\d)/g)) {
     const t = Number(m[1]) * 60 + Number(m[2]);
     if (!windows.some(([a, b]) => t >= a && t <= b)) return true;
   }
   return false;
+}
+
+// Every reply that names a price says that the price is preliminary and that the administrator clarifies the exact sum and what the service
+// includes. The model is told to write it; the code makes sure it is there, in the language of the conversation (whatever the model wrote).
+export const PRICE_NOTICE: Record<'uk' | 'ru', string> = {
+  uk: 'Вартість попередня — точну суму та що входить у послугу уточнить адміністратор.',
+  ru: 'Стоимость предварительная — точную сумму и что входит в услугу уточнит администратор.',
+};
+const NAMES_PRICE = /\d[\d\s]*(?:[.,]\d+)?\s*(грн|₴|uah|грив)|безкоштовн|бесплатн/i;
+const HAS_NOTICE = /(попередн|предварительн)/i;
+export function withPriceNotice(reply: string, lang: 'uk' | 'ru'): string {
+  if (!NAMES_PRICE.test(reply) || HAS_NOTICE.test(reply)) return reply;
+  return `${reply.trim()}\n\n${PRICE_NOTICE[lang]}`;
 }

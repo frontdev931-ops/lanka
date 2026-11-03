@@ -1,3 +1,3 @@
-// Версия соглашения об обработке данных (текст в интерфейсе: ключи terms.* на сайте).
-// При изменении текста по смыслу версию меняют: владельцам снова покажется окно принятия.
+// Version of the data processing agreement (the text in the interface: keys terms.* on the site).
+// When the text changes in meaning, the version is changed: owners will see the acceptance window again.
 export const TERMS_VERSION = '2026-10-29';

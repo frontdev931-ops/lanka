@@ -138,7 +138,7 @@ export class AutomationsController {
     return (await this.planner.rules(u.clinicId)).find((r) => r.key === key);
   }
 
-  // Предпросмотр: сколько сообщений и кому появится в очереди, ничего не создавая (в том числе для выключенных сценариев)
+  // Preview: how many messages and to whom would appear in the queue, creating nothing (also for scenarios that are off)
   @Get('preview')
   @Roles(...READERS)
   preview(@CurrentUser() u: AuthUser) {
@@ -194,7 +194,7 @@ export class AutomationsController {
     return r;
   }
 
-  // Служебный чат: код для привязки, проверка и отключение
+  // The staff chat: the code for linking, check and disconnect
   @Post('telegram/staff-chat')
   @Roles(...MANAGERS)
   staffChatCode(@CurrentUser() u: AuthUser) {
@@ -236,7 +236,7 @@ export class MessagesController {
     private results: ResultsService,
   ) {}
 
-  // Результат сообщений: что было с пациентами после отправки (для воронки)
+  // Result of messages: what happened to patients after sending (for the funnel)
   @Get('results')
   @Roles(...READERS)
   resultsOf(@CurrentUser() u: AuthUser, @Query('months') months?: string) {
@@ -304,7 +304,7 @@ export class CampaignsController {
     return this.campaigns.audience(u.clinicId, id, false);
   }
 
-  // Создаёт сообщения в очереди «ждёт подтверждения»; отправляются только после подтверждения сотрудником и при включённой отправке
+  // Creates messages in the "waiting for confirmation" queue; they are sent only after the staff confirms and while sending is on
   @Post(':id/queue')
   @Roles(...MANAGERS)
   @HttpCode(200)
@@ -323,7 +323,7 @@ class ReviewSettingsDto {
   @IsOptional() @IsString() @MaxLength(300) reviewUrl?: string;
 }
 
-// Отзывы и качество: оценки пациентов после визита (собирает бот)
+// Reviews and quality: patients' ratings after a visit (collected by the bot)
 @Controller('reviews')
 @UseGuards(AuthGuard)
 export class ReviewsController {
@@ -349,7 +349,7 @@ class DigestDto {
   @IsOptional() @IsInt() @Min(1) @Max(7) weekday?: number;
 }
 
-// Дайджест руководителю в Telegram: настройки, привязка получателей ссылкой, пробная отправка
+// The manager's digest in Telegram: settings, linking recipients by a link, a test send
 @Controller('digest')
 @UseGuards(AuthGuard)
 @Roles(...MANAGERS)
@@ -478,7 +478,7 @@ export class ConversationsController {
     return this.chat.resumeBot(u.clinicId, channel, chatId);
   }
 
-  // Черновик ответа от ИИ: только текст для сотрудника, ничего не отправляется
+  // A draft reply from the AI: only text for the staff, nothing is sent
   @Post(':channel/:chatId/draft')
   @Roles(...OPERATORS)
   @HttpCode(200)
@@ -494,7 +494,7 @@ export class ConversationsController {
   }
 }
 
-// Вебхук Telegram (в продакшене). Без входа: подлинность проверяется секретом в адресе и в заголовке.
+// Telegram webhook (in production). No sign-in: authenticity is checked by the secret in the address and in the header.
 @Controller('telegram')
 export class TelegramWebhookController {
   constructor(private telegram: TelegramService) {}

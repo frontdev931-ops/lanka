@@ -13,7 +13,7 @@ export interface SyncRun {
   error: string | null;
 }
 
-// Запуск загрузки данных из Cliniccards в фоне и слежение за ходом. onDone вызывается, когда загрузка закончилась.
+// Starting the data load from Cliniccards in the background and following its progress. onDone is called when the load is finished.
 export function useSync(onDone?: () => void) {
   const [run, setRun] = useState<SyncRun | null>(null);
   const [starting, setStarting] = useState(false);
@@ -41,11 +41,11 @@ export function useSync(onDone?: () => void) {
     was.current = running;
   }, [running]);
 
-  // Пока идёт загрузка (или она только запускается), состояние обновляется само
+  // While a load is running (or only starting), the state refreshes by itself
   useEffect(() => {
     if (!running && !starting) return;
     const id = setInterval(() => refresh().catch(() => {}), 2000);
-    // Если запись о запуске так и не появилась, перестаём ждать
+    // If the run record never appeared, we stop waiting
     const stop = starting ? setTimeout(() => setStarting(false), 15000) : undefined;
     return () => {
       clearInterval(id);

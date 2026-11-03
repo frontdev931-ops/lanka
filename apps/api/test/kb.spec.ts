@@ -98,11 +98,13 @@ describe('база знань клініки', () => {
     expect((await http().get('/knowledge').set(auth(c.token))).body.summary).toMatchObject({ total: 1, drafts: 0, stale: 0 });
   });
 
-  it('у промпт потрапляє тільки затверджене й активне; чернетки, вимкнене й чужі клініки — ні', async () => {
+  it('у промпт потрапляють затверджені локальні послуги; ручні чернетки, вимкнене, чужі клініки й незатверджені лікарі — ні', async () => {
     const c = await clinic();
     const other = await clinic();
     await service(c, 'Професійна гігієна', { text: 'Не їсти за 2 години' });
     await service(c, 'Чернетка послуги', {}, false);
+    const draftDoc = (await http().post('/knowledge').set(auth(c.token)).send({ kind: 'DOCTOR', title: 'Незатверджений Лікар', text: 'x' }).expect(201)).body.id;
+    expect(draftDoc).toBeTruthy();
     const off = await service(c, 'Вимкнена послуга');
     await http().patch(`/knowledge/${off}`).set(auth(c.token)).send({ active: false }).expect(200);
     await service(other, 'Чужа послуга');
@@ -112,9 +114,10 @@ describe('база знань клініки', () => {
     llm.systems.length = 0;
     await ask(c.clinicId, 'Добрий день, розкажіть про гігієну');
     const sys = llm.systems.at(-1)!;
-    expect(sys).toContain('Професійна гігієна; тривалість 60 хв; ціна 1200 грн; Не їсти за 2 години');
+    expect(sys).toContain('Професійна гігієна; тривалість 60 хв; ціна 1200 грн (фіксована); Не їсти за 2 години');
     expect(sys).toContain('Іваненко Олег: Терапевт');
-    expect(sys).not.toContain('Чернетка послуги');
+    expect(sys).not.toContain('Чернетка послуги'); // a hand-made draft is not published
+    expect(sys).not.toContain('Незатверджений Лікар');
     expect(sys).not.toContain('Вимкнена послуга');
     expect(sys).not.toContain('Чужа послуга');
   });
@@ -138,8 +141,8 @@ describe('ціни у відповідях ШІ', () => {
   it('вигадана, інша чи сума з чернетки не проходить: заміна на передачу людині', async () => {
     const c = await clinic();
     await service(c, 'Професійна гігієна');
-    await service(c, 'Чернетка', { priceUah: 777 }, false);
-    for (const wrong of ['Це коштує 1500 грн.', 'Чистка 1200 грн плюс огляд 300 грн', 'Чернетка коштує 777 грн', 'Це приблизно 40 $']) {
+    await service(c, 'Чернетка без ціни', { priceUah: null }, false);
+    for (const wrong of ['Це коштує 1500 грн.', 'Чистка 1200 грн плюс огляд 300 грн', 'Чернетка коштує 777 грн', 'Це приблизно 40 $', 'Чистка від 1200 грн']) {
       say(wrong);
       const d = await ask(c.clinicId, 'Скільки коштує чистка?');
       expect(d.handoff).toBe(true);
@@ -147,18 +150,22 @@ describe('ціни у відповідях ШІ', () => {
     }
   });
 
-  it('прострочена (понад 90 днів) ціна не називається: питання іде людині ще до моделі, а в промпті ціни немає', async () => {
+  it('прострочена (понад 90 днів) ціна не називається: модель відповідає «уточнить адміністратор», стару суму не підставляє', async () => {
     const c = await clinic();
     const id = await service(c, 'Професійна гігієна');
     await prisma.kbItem.update({ where: { id }, data: { reviewedAt: new Date(Date.now() - 100 * 86_400_000) } });
     llm.calls = 0;
+    say('Вартість цієї послуги потрібно уточнити в адміністратора клініки. Підібрати зручний час для запису?');
     const d = await ask(c.clinicId, 'Скільки коштує чистка?');
-    expect(d.handoff).toBe(true);
-    expect(llm.calls).toBe(0);
-    say('Добрий день!');
-    await ask(c.clinicId, 'Розкажіть про гігієну');
+    expect(d.handoff).toBe(false);
+    expect(llm.calls).toBe(1);
     expect(llm.systems.at(-1)).toContain('ціна: не називати');
     expect(llm.systems.at(-1)).not.toContain('1200 грн');
+    expect(d.reply).not.toMatch(/попередн/); // no sum named, no price notice
+    say('Це коштує 1200 грн.');
+    const old = await ask(c.clinicId, 'Скільки коштує чистка?');
+    expect(old.handoff).toBe(true);
+    expect(old.reason).toBe('reply_check');
   });
 
   it('знижки, розстрочка і медичні питання не доходять до моделі навіть при затверджених цінах', async () => {
@@ -179,11 +186,15 @@ describe('ціни у відповідях ШІ', () => {
     expect(incomingHandoff('Скільки коштує чистка?')).toBe('price');
     expect(incomingHandoff('Скільки коштує чистка?', true)).toBeNull();
     expect(incomingHandoff('Є знижка на чистку?', true)).toBe('price');
+    expect(incomingHandoff('Подскажите, пожалуйста, сколько стоит', true)).toBeNull(); // «пожалуйста» is not a complaint
+    expect(incomingHandoff('Я пожалуюсь на вас')).toBe('complaint');
+    expect(replyViolates('Чистка від 1200 грн', [1200])).toBe(true);
+    expect(replyViolates('Чистка коштує 1200 грн', [1200])).toBe(false);
   });
 });
 
 describe('чернетки з Cliniccards', () => {
-  it('імпорт створює лише чернетки; ціну з прайсу треба підтвердити вручну; повторний імпорт нічого не дублює', async () => {
+  it('імпорт створює послуги, що слідують за Cliniccards без затвердження кожної; невідома ціна лишається невідомою; повторний імпорт нічого не дублює', async () => {
     const c = await clinic();
     await http().post('/knowledge/import/services').set(auth(c.token)).expect(400); // no Cliniccards key yet
     await http().get('/integrations/cliniccards').set(auth(c.token)).expect(200);
@@ -192,7 +203,7 @@ describe('чернетки з Cliniccards', () => {
     expect(r.body.added).toBe(3);
     expect((await http().post('/knowledge/import/services').set(auth(c.token)).expect(200)).body.added).toBe(0);
     const items = (await http().get('/knowledge').set(auth(c.token))).body.items as { id: string; title: string; approved: boolean; priceUah: number | null; source: string }[];
-    expect(items.every((i) => !i.approved && i.source === 'CLINICCARDS')).toBe(true);
+    expect(items.every((i) => i.approved && i.source === 'CLINICCARDS')).toBe(true);
     expect((items as unknown as { title: string; category: string | null }[]).find((i) => i.title === 'Лікування карієсу')!.category).toBe('Терапія');
     const noPrice = items.find((i) => i.title === 'Консультація')!;
     expect(noPrice.priceUah).toBeNull(); // "0" in the price list means "not set"
@@ -200,38 +211,28 @@ describe('чернетки з Cliniccards', () => {
     expect(air.title).toBe('Професійна гігєна "Air flow" 1 ступеня'); // HTML entities decoded
     expect(air.text).toBe('— AirFlow\n— Полірування');
     expect(air.priceUah).toBe(1200);
-    // an unknown price does not block the approval; the bot just never names a price for it
-    await http().post(`/knowledge/${noPrice.id}/approve`).set(auth(c.token)).expect(200);
+    // the model sees every imported position at once, with no approval; an unknown price is never named
     say('Добрий день!');
     llm.systems.length = 0;
-    await ask(c.clinicId, 'Розкажіть про консультацію');
+    await ask(c.clinicId, 'Розкажіть про консультацію та гігієну');
     expect(llm.systems.at(-1)).toMatch(/Консультація[^\n]*ціна: не називати/);
-    // the model sees nothing of the positions that are still drafts
-    say('Добрий день!');
-    llm.systems.length = 0;
-    await ask(c.clinicId, 'Розкажіть про гігієну');
-    expect(llm.systems.at(-1)).not.toContain('Професійна гігієна');
+    expect(llm.systems.at(-1)).toContain('Професійна гігєна "Air flow" 1 ступеня (група: Профілактика); ціна 1200 грн (фіксована)');
   });
 });
 
 describe('затвердити групу', () => {
-  it('затверджує чернетки однієї групи, у тому числі позиції з невідомою ціною; чужа клініка й адміністратор не можуть', async () => {
+  it('затверджує ручні чернетки однієї групи; чужа клініка й адміністратор не можуть', async () => {
     const c = await clinic();
     const other = await clinic();
-    await http().get('/integrations/cliniccards').set(auth(c.token)).expect(200);
-    await http().put('/integrations/cliniccards/key').set(auth(c.token)).send({ apiKey: MOCK_KEY }).expect(200);
-    await http().post('/knowledge/import/services').set(auth(c.token)).expect(200);
     const admin = await member(c.token, 'ADMIN');
+    await prisma.kbItem.createMany({ data: [{ clinicId: c.clinicId, kind: 'SERVICE', title: 'Ручна терапія', category: 'Терапія', priceUah: 500 }, { clinicId: c.clinicId, kind: 'SERVICE', title: 'Ручна консультація', category: 'Консультації' }] });
     await http().post('/knowledge/approve-group').set(auth(admin)).send({ kind: 'SERVICE', category: 'Терапія' }).expect(403);
-    // a group with one priced item
     expect((await http().post('/knowledge/approve-group').set(auth(c.token)).send({ kind: 'SERVICE', category: 'Терапія' }).expect(200)).body).toEqual({ approved: 1, skipped: 0 });
     // the group whose only item has an unknown price: approved too (no price is ever named for it)
     expect((await http().post('/knowledge/approve-group').set(auth(c.token)).send({ kind: 'SERVICE', category: 'Консультації' }).expect(200)).body).toEqual({ approved: 1, skipped: 0 });
     const items = (await http().get('/knowledge').set(auth(c.token))).body.items as { title: string; approved: boolean }[];
-    expect(items.find((i) => i.title === 'Лікування карієсу')!.approved).toBe(true);
-    expect(items.find((i) => i.title === 'Консультація')!.approved).toBe(true);
-    expect(items.find((i) => i.title.startsWith('Професійна гігєна'))!.approved).toBe(false);
-    expect((await http().post('/knowledge/approve-group').set(auth(other.token)).send({ kind: 'SERVICE', category: 'Профілактика' }).expect(200)).body).toEqual({ approved: 0, skipped: 0 });
+    expect(items.every((i) => i.approved)).toBe(true);
+    expect((await http().post('/knowledge/approve-group').set(auth(other.token)).send({ kind: 'SERVICE', category: 'Терапія' }).expect(200)).body).toEqual({ approved: 0, skipped: 0 });
   });
 });
 
@@ -267,3 +268,191 @@ describe('довгий прайс (як у 112 dental: 234 позиції)', () 
   });
 });
 
+
+describe('прайс у переписці ШІ', () => {
+  it('імпортована послуга без дозволу на онлайн-запис і без тривалості: ціна називається, з поясненням про попередню вартість (мовою розмови)', async () => {
+    const c = await clinic();
+    await http().get('/integrations/cliniccards').set(auth(c.token)).expect(200);
+    await http().put('/integrations/cliniccards/key').set(auth(c.token)).send({ apiKey: MOCK_KEY }).expect(200);
+    await http().post('/knowledge/import/services').set(auth(c.token)).expect(200);
+    const caries = await prisma.kbItem.findFirstOrThrow({ where: { clinicId: c.clinicId, externalId: '1002' } });
+    expect(caries).toMatchObject({ approvedAt: expect.any(Date), onlineBooking: false, durationMin: null, priceUah: 1800 });
+    llm.systems.length = 0;
+    say('Лікування карієсу коштує 1800 грн.');
+    const uk = await ask(c.clinicId, 'Скільки коштує лікування карієсу?');
+    expect(uk.handoff).toBe(false);
+    expect(llm.systems.at(-1)).toContain('Лікування карієсу (група: Терапія); ціна 1800 грн (фіксована)');
+    expect(uk.reply).toContain('1800 грн');
+    expect(uk.reply).toContain('Вартість попередня — точну суму та що входить у послугу уточнить адміністратор.');
+    // the same in Russian, in the language of the person
+    say('Лечение кариеса стоит 1800 грн.');
+    const ru = await ask(c.clinicId, 'Сколько стоит лечение кариеса? Подскажите, пожалуйста');
+    expect(ru.reply).toContain('Стоимость предварительная — точную сумму и что входит в услугу уточнит администратор.');
+    // a reply that already says it is preliminary is not given the sentence twice
+    say('За прайсом лікування карієсу коштує 1800 грн. Вартість попередня — точну суму та що входить у послугу уточнить адміністратор.');
+    const once = await ask(c.clinicId, 'Скільки коштує лікування карієсу?');
+    expect(once.reply.match(/попередня/g)).toHaveLength(1);
+    // the dialogue goes on: an answer about the price is not a hand-over
+    expect(once).toMatchObject({ handoff: false, intent: 'info' });
+  });
+
+  it('невідома ціна, позиція, що зникла з прайсу, і суперечливі дані: сума не називається й не підставляється, «від» заборонено', async () => {
+    const c = await clinic();
+    await http().get('/integrations/cliniccards').set(auth(c.token)).expect(200);
+    await http().put('/integrations/cliniccards/key').set(auth(c.token)).send({ apiKey: MOCK_KEY }).expect(200);
+    await http().post('/knowledge/import/services').set(auth(c.token)).expect(200);
+    const kb = (await import('../src/kb/kb.service')).KbService;
+    const consult = await prisma.kbItem.findFirstOrThrow({ where: { clinicId: c.clinicId, externalId: '1003' } }); // "0" in the price list
+    const gone = await prisma.kbItem.findFirstOrThrow({ where: { clinicId: c.clinicId, externalId: '1002' } });
+    const air = await prisma.kbItem.findFirstOrThrow({ where: { clinicId: c.clinicId, externalId: '1001' } });
+    await prisma.kbItem.update({ where: { id: gone.id }, data: { missingInSourceAt: new Date() } });
+    // the clinic's own price, set on purpose, that the source now contradicts and nobody has decided about yet
+    await prisma.kbItem.update({ where: { id: air.id }, data: { priceUah: 1000, localFields: ['priceUah'], externalPrice: 1500 } });
+    const f = await app.get(kb).factsFor(c.clinicId, new Date(), 'консультація карієс гігієна');
+    expect(f.text).toMatch(/Консультація[^\n]*ціна: не називати, вона невідома/);
+    expect(f.text).toMatch(/Лікування карієсу[^\n]*вже немає в актуальному прайсі/);
+    expect(f.text).toMatch(/гігєна[^\n]*дані про ціну суперечливі/);
+    expect(f.allowedAmounts).toEqual([]);
+    expect(consult.priceUah).toBeNull();
+    // the model may not fill the gap with the old price, a zero or a "from" price
+    for (const wrong of ['Консультація коштує 0 грн.', 'Лікування карієсу коштує 1800 грн.', 'Гігієна коштує 1000 грн.', 'Гігієна від 1000 грн.']) {
+      say(wrong);
+      const d = await ask(c.clinicId, 'Скільки коштує консультація?');
+      expect(d).toMatchObject({ handoff: true, reason: 'reply_check' });
+    }
+    // and it does not claim a hand-over that did not happen: the prompt says so
+    expect(llm.systems.at(-1)).toContain('Не пиши, що передав запит');
+  });
+
+  it('кілька підходящих послуг: у промпті всі з групами (не лише найдешевша); сума з іншої послуги не проходить', async () => {
+    const c = await clinic();
+    const groups = ['Хірургія', 'Терапія', 'Ортодонтія'];
+    for (let i = 0; i < 3; i++) await prisma.kbItem.create({ data: { clinicId: c.clinicId, kind: 'SERVICE', title: 'Видалення зуба', category: groups[i], priceUah: 500 + i * 500, source: 'CLINICCARDS', externalId: `v${i}`, externalPrice: 500 + i * 500, reviewedAt: new Date() } });
+    for (let i = 0; i < 45; i++) await prisma.kbItem.create({ data: { clinicId: c.clinicId, kind: 'SERVICE', title: `Інша послуга ${i}`, priceUah: 100, source: 'CLINICCARDS', externalId: `o${i}`, externalPrice: 100 } });
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { priceListSyncedAt: new Date() } });
+    const f = await (await import('../src/kb/kb.service')).KbService.prototype.factsFor.call(app.get((await import('../src/kb/kb.service')).KbService), c.clinicId, new Date(), 'видалення зуба');
+    for (const g of groups) expect(f.text).toContain(`Видалення зуба (група: ${g})`);
+    expect(f.text).not.toContain('Інша послуга 1;');
+    expect(f.allowedAmounts.sort((a, b) => a - b)).toEqual([500, 1000, 1500]);
+    // the prompt tells the model to ask which one, not to pick the cheapest
+    say('Уточніть, будь ласка: видалення зуба у хірургії, терапії чи ортодонтії?');
+    const d = await ask(c.clinicId, 'Скільки коштує видалення зуба?');
+    expect(d.handoff).toBe(false);
+    expect(llm.systems.at(-1)).toContain('Ніколи не обирай довільно найдешевшу');
+  });
+
+  it('ціна оновлюється після синхронізації; ціна, що розійшлася з рішенням адміністратора, не називається; прайси клінік ізольовані', async () => {
+    const c = await clinic();
+    const other = await clinic();
+    await http().get('/integrations/cliniccards').set(auth(c.token)).expect(200);
+    await http().put('/integrations/cliniccards/key').set(auth(c.token)).send({ apiKey: MOCK_KEY }).expect(200);
+    await http().post('/knowledge/import/services').set(auth(c.token)).expect(200);
+    const KbService = (await import('../src/kb/kb.service')).KbService;
+    expect((await app.get(KbService).factsFor(c.clinicId)).allowedAmounts).toContain(1800);
+    // the price list changes: a draft follows it at the next read
+    mock.data.prices.find((r) => r.item_id === '1002')!.item_price = '2100';
+    await http().post('/knowledge/import/services').set(auth(c.token)).expect(200);
+    const after = await app.get(KbService).factsFor(c.clinicId);
+    expect(after.allowedAmounts).toContain(2100);
+    expect(after.allowedAmounts).not.toContain(1800);
+    say('Лікування карієсу коштує 2100 грн.');
+    expect((await ask(c.clinicId, 'Скільки коштує лікування карієсу?')).reply).toContain('2100 грн');
+    say('Лікування карієсу коштує 1800 грн.');
+    expect((await ask(c.clinicId, 'Скільки коштує лікування карієсу?')).reason).toBe('reply_check');
+    // an approved price that the source now contradicts is not named until the administrator decides
+    const caries = await prisma.kbItem.findFirstOrThrow({ where: { clinicId: c.clinicId, externalId: '1002' } });
+    await http().post(`/knowledge/${caries.id}/approve`).set(auth(c.token)).expect(200);
+    mock.data.prices.find((r) => r.item_id === '1002')!.item_price = '2500';
+    await http().post('/knowledge/import/services').set(auth(c.token)).expect(200);
+    expect((await app.get(KbService).factsFor(c.clinicId, new Date(), 'карієс')).allowedAmounts).not.toContain(2100);
+    mock.data.prices.find((r) => r.item_id === '1002')!.item_price = '1800';
+    // another clinic never sees this price list, and its own price for the same name is its own
+    await service(other, 'Лікування карієсу', { priceUah: 999 });
+    const o = await app.get(KbService).factsFor(other.clinicId, new Date(), 'карієс');
+    expect(o.allowedAmounts).toEqual([999]);
+    expect(o.text).not.toContain('2100');
+    say('Лікування карієсу коштує 2100 грн.');
+    expect((await ask(other.clinicId, 'Скільки коштує лікування карієсу?')).reason).toBe('reply_check');
+    say('Лікування карієсу коштує 999 грн.');
+    expect((await ask(other.clinicId, 'Скільки коштує лікування карієсу?')).reply).toContain('999 грн');
+  });
+});
+
+describe('пошук по всьому прайсу і прив’язка ціни до послуги', () => {
+  async function bigClinic() {
+    const c = await clinic();
+    const now = new Date();
+    const real: [string, string, number][] = [
+      ['Професійна гігієна порожнини рота', 'Профілактика', 1500],
+      ['Пломба світлова', 'Терапія', 1100],
+      ['Лікування карієсу', 'Терапія', 1800],
+      ['Видалення зуба простого', 'Хірургія', 900],
+      ['Видалення зуба складного', 'Хірургія', 2200],
+      ['Консультація ортодонта', 'Ортодонтія', 400],
+    ];
+    await prisma.kbItem.createMany({ data: real.map(([title, category, priceUah], i) => ({ clinicId: c.clinicId, kind: 'SERVICE', title, category, priceUah, source: 'CLINICCARDS', externalId: `r${i}`, externalPrice: priceUah, approvedAt: now, reviewedAt: now })) });
+    await prisma.kbItem.createMany({ data: Array.from({ length: 228 }, (_, i) => ({ clinicId: c.clinicId, kind: 'SERVICE', title: `Допоміжна позиція ${i} матеріал`, category: 'Матеріали', priceUah: 50 + i, source: 'CLINICCARDS', externalId: `f${i}`, externalPrice: 50 + i, approvedAt: now, reviewedAt: now })) });
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { priceListSyncedAt: now } });
+    return c;
+  }
+  const KbService = () => import('../src/kb/kb.service').then((m) => m.KbService);
+
+  it('українські й російські формулювання знаходять послугу в прайсі з 234 позицій; без збігу — жодної ціни й жодного «такої послуги немає»', async () => {
+    const c = await bigClinic();
+    const kb = app.get(await KbService());
+    const expectations: [string, string][] = [
+      ['скільки коштує чистка', 'Професійна гігієна порожнини рота'],
+      ['чистка зубів', 'Професійна гігієна порожнини рота'],
+      ['почистить зубы', 'Професійна гігієна порожнини рота'],
+      ['гігієна', 'Професійна гігієна порожнини рота'],
+      ['гигиена полости рта', 'Професійна гігієна порожнини рота'],
+      ['пломба', 'Пломба світлова'],
+      ['поставить пломбу', 'Пломба світлова'],
+      ['лікування карієсу', 'Лікування карієсу'],
+      ['лечение кариеса', 'Лікування карієсу'],
+      ['удалить зуб', 'Видалення зуба простого'],
+      ['хочу видалити зуб', 'Видалення зуба складного'],
+    ];
+    for (const [q, title] of expectations) {
+      const f = await kb.factsFor(c.clinicId, new Date(), `${q} ${(await import('../src/ai/dental')).expandForSearch(q)}`);
+      expect({ q, found: f.text?.includes(`- ${title}`) }).toEqual({ q, found: true });
+    }
+    // «удалить зуб» is ambiguous (simple or complex): both variants are shown, the cheaper one is not picked
+    const del = await kb.factsFor(c.clinicId, new Date(), 'удалить зуб видалення хірургія');
+    expect(del.text).toContain('Видалення зуба простого');
+    expect(del.text).toContain('Видалення зуба складного');
+    // nothing in the price list resembles the words: no price, and the model is told not to say "no such service"
+    const none = await kb.factsFor(c.clinicId, new Date(), 'скільки коштує квантовий масаж пяток');
+    expect(none.allowedAmounts).toEqual([]);
+    expect(none.priced).toEqual([]);
+    expect(none.text).toContain('не стверджуй, що такої послуги немає');
+    expect(none.text).toContain('НАПРЯМКИ ПОСЛУГ КЛІНІКИ');
+    say('Не знайшла такої послуги серед наших. Уточніть, будь ласка, назву: вартість уточнить адміністратор.');
+    const d = await ask(c.clinicId, 'скільки коштує квантовий масаж пяток');
+    expect(d.handoff).toBe(false);
+    expect(d.reply).not.toMatch(/\d+\s*грн/);
+  });
+
+  it('сума має належати саме названій послузі: ціна іншої послуги з того самого прайсу не проходить', async () => {
+    const c = await bigClinic();
+    // right service, right sum
+    say('Лікування карієсу коштує 1800 грн.');
+    const ok = await ask(c.clinicId, 'Скільки коштує лікування карієсу?');
+    expect(ok.handoff).toBe(false);
+    expect(ok.reply).toContain('1800 грн');
+    // 1100 is the price of the filling, 1500 of the hygiene: both exist in the list, but not for the caries
+    for (const wrong of ['Лікування карієсу коштує 1100 грн.', 'Лікування карієсу коштує 1500 грн.']) {
+      say(wrong);
+      const d = await ask(c.clinicId, 'Скільки коштує лікування карієсу?');
+      expect(d).toMatchObject({ handoff: true, reason: 'reply_check' });
+    }
+    // two services in one answer, each with its own sum; swapped sums fail
+    say('Пломба світлова — 1100 грн, лікування карієсу — 1800 грн.');
+    expect((await ask(c.clinicId, 'Скільки коштує пломба і лікування карієсу?')).handoff).toBe(false);
+    say('Пломба світлова — 1800 грн, лікування карієсу — 1100 грн.');
+    expect((await ask(c.clinicId, 'Скільки коштує пломба і лікування карієсу?')).reason).toBe('reply_check');
+    // a sum with no service named at all cannot be tied to anything
+    say('Це коштує 1800 грн.');
+    expect((await ask(c.clinicId, 'Скільки коштує лікування карієсу?')).reason).toBe('reply_check');
+  });
+});

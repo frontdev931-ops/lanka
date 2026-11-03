@@ -21,12 +21,12 @@ export default function PatientsPage() {
   const [source, setSource] = useState('');
   const [page, setPage] = useState(1);
   const [data, setData] = useState<Result | null>(null);
-  // Врачу сервер деньги не отдаёт: колонку долга для него не показываем
+  // The server does not give money to the doctor: the debt column is not shown to them
   const showMoney = !data || data.rows.length === 0 || data.rows[0].debt !== undefined;
   const [error, setError] = useState('');
 
   useEffect(() => {
-    // небольшая задержка, чтобы не слать запрос на каждую букву
+    // a short delay, so as not to send a request for every letter
     const timer = setTimeout(() => {
       const q = new URLSearchParams({ search, page: String(page) });
       if (source) q.set('source', source);

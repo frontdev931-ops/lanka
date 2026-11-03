@@ -20,7 +20,7 @@ export class TelegramError extends Error {
   }
 }
 
-// Тонкая обёртка над Bot API. Токен в адрес входит, поэтому он не попадает ни в сообщения об ошибках, ни в журнал.
+// A thin wrapper over the Bot API. The token is part of the address, so it never gets into error messages or the log.
 @Injectable()
 export class TelegramApi {
   private async call<T>(token: string, method: string, body: Record<string, unknown> = {}): Promise<T> {

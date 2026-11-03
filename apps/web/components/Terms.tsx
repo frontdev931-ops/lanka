@@ -8,7 +8,7 @@ import { Alert } from './ui';
 
 const POINTS = ['terms.p1', 'terms.p2', 'terms.p3', 'terms.p4', 'terms.p5', 'terms.p6', 'terms.p7', 'terms.p8', 'terms.p9', 'terms.p10', 'terms.p11', 'terms.p12'] as const;
 
-// Окно поверх страницы; закрывается кнопкой (если onClose передан)
+// A window over the page; closed with a button (if onClose is passed)
 export function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose?: () => void }) {
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={title}>
@@ -32,7 +32,7 @@ export function TermsText() {
   );
 }
 
-// Просмотр текста при регистрации (без принятия: чекбокс на самой форме)
+// Viewing the text at registration (without accepting: the checkbox is on the form itself)
 export function TermsViewer({ onClose }: { onClose: () => void }) {
   const t = useT();
   return (
@@ -42,7 +42,7 @@ export function TermsViewer({ onClose }: { onClose: () => void }) {
   );
 }
 
-// Окно для владельца клиники, созданной до появления соглашения (или после смены версии): пока не принято, работать нельзя
+// A window for the owner of a clinic created before the agreement existed (or after a version change): until it is accepted, work is not possible
 export function AcceptTermsGate({ onAccepted }: { onAccepted: () => void }) {
   const t = useT();
   const [checked, setChecked] = useState(false);

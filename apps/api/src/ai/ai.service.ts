@@ -53,10 +53,10 @@ export class AiService {
     return this.status(clinicId);
   }
 
-  // Единственная точка вызова ИИ. Проверяет, что ИИ включён и месячный лимит не исчерпан, пишет расход (без текста).
+  // The only place that calls the AI. Checks that the AI is on and the monthly limit is not used up, records the usage (without the text).
   async complete(clinicId: string, kind: string, system: string, messages: { role: 'user' | 'assistant'; content: string }[], maxTokens?: number, scope: 'chat' | 'assistant' = 'chat', billable = true): Promise<LlmResult> {
     const st = await this.status(clinicId);
-    // chat: ответы пациентам и черновики; assistant: помощник руководителя (у каждого свой выключатель)
+    // chat: replies to patients and drafts; assistant: the manager's assistant (each has its own switch)
     if (!st.available || !(scope === 'assistant' ? st.assistant : st.enabled)) throw new BadRequestException('ai_disabled');
     // Included replies first, then bought ones; with neither left the caller hands the conversation to a person
     // Demo copies share a daily budget so that the public demo cannot run up the AI bill

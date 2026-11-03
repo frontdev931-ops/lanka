@@ -15,7 +15,7 @@ class AskDto {
   @IsArray() @ValidateNested({ each: true }) @Type(() => TurnDto) history: TurnDto[];
 }
 
-// Вопрос владельца свободным текстом: ответ приходит отчётом, который считает код
+// The owner's question in free text: the answer is a report that the code calculates
 @Controller('assistant')
 @UseGuards(AuthGuard)
 @Roles(Role.OWNER, Role.MANAGER, Role.ADMIN, Role.ANALYST)

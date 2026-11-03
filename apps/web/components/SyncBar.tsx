@@ -12,7 +12,7 @@ const STAGE_KEYS = {
   saving: 'int.stage.saving',
 } as const;
 
-// Полоса хода загрузки данных из Cliniccards: этап и процент
+// The progress bar of loading data from Cliniccards: stage and percent
 export function SyncBar({ run }: { run: SyncRun | null }) {
   const t = useT();
   if (!run || run.status !== 'RUNNING') return null;

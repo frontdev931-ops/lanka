@@ -4,7 +4,7 @@ import PDFDocument from 'pdfkit';
 import { Lang, VALUE_LABEL } from '../common/i18n';
 import type { Cell, Report } from './reports.service';
 
-// Подпись значения для людей (статусы, да/нет, «не указан»): общая для CSV, Excel и PDF
+// A label of a value for people (statuses, yes/no, "not specified"): shared by CSV, Excel and PDF
 export function cellLabel(lang: Lang, key: string, value: Cell): string {
   const v = VALUE_LABEL[lang];
   if (key === 'kind') return v.kind[String(value)] ?? String(value ?? '');
@@ -22,7 +22,7 @@ const TEXT = {
 
 const when = (d: Date | string | null, lang: Lang) => (d ? new Date(d).toLocaleString(lang === 'uk' ? 'uk-UA' : lang === 'ru' ? 'ru-RU' : 'en-GB', { timeZone: 'Europe/Kyiv' }) : TEXT[lang].never);
 
-// Excel: числа остаются числами (их можно суммировать), всё остальное текст. Строки записываются как текст, а не формулы.
+// Excel: numbers stay numbers (they can be summed), everything else is text. Rows are written as text, not formulas.
 export async function toXlsx(report: Report, lang: Lang): Promise<Buffer> {
   const t = TEXT[lang];
   const wb = new ExcelJS.Workbook();
@@ -56,7 +56,7 @@ const FONT = path.join(path.dirname(require.resolve('dejavu-fonts-ttf/package.js
 const FONT_BOLD = path.join(path.dirname(require.resolve('dejavu-fonts-ttf/package.json')), 'ttf', 'DejaVuSans-Bold.ttf');
 const PDF_MAX_ROWS = 1500;
 
-// PDF: альбомная A4, таблица с повтором шапки на каждой странице, шрифт с кириллицей. Очень длинные списки обрезаются (полный в Excel).
+// PDF: landscape A4, a table with the header repeated on every page, a font with Cyrillic. Very long lists are cut (the full one is in Excel).
 export function toPdf(report: Report, lang: Lang): Promise<Buffer> {
   const t = TEXT[lang];
   return new Promise((resolve, reject) => {
@@ -75,7 +75,7 @@ export function toPdf(report: Report, lang: Lang): Promise<Buffer> {
     doc.text(`${t.updated}: ${when(report.dataUpdatedAt, lang)} · ${t.generated}: ${when(report.generatedAt, lang)} · ${t.rows}: ${report.rows.length}`, { width });
     doc.fillColor('#000').moveDown(0.6);
 
-    // ширина колонок по содержимому (не больше 28% строки)
+    // column width by content (no more than 28% of the row)
     const sample = report.rows.slice(0, 200);
     const weight = report.columns.map((c) => Math.min(40, Math.max(c.label.length, ...sample.map((r) => cellLabel(lang, c.key, r[c.key]).length), 4)));
     const total = weight.reduce((a, b) => a + b, 0);
@@ -111,7 +111,7 @@ export function toPdf(report: Report, lang: Lang): Promise<Buffer> {
     for (const r of report.rows.slice(0, PDF_MAX_ROWS)) drawRow(report.columns.map((c) => cellLabel(lang, c.key, r[c.key])), false);
     if (report.rows.length > PDF_MAX_ROWS) doc.moveDown(0.5).font('r').fontSize(8.5).text(t.cut.replace('{n}', String(PDF_MAX_ROWS)), left, doc.y);
 
-    // номера страниц
+    // page numbers
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);

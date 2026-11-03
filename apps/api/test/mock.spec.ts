@@ -47,7 +47,7 @@ describe('коннектор против имитации Cliniccards', () => {
     const before = mock.requests.filter((r) => r.path === '/planItems').length;
     const all = await new CliniccardsConnector(client()).fetchTreatment(win);
     const bigRequests = mock.requests.filter((r) => r.path === '/planItems').length - before;
-    expect(bigRequests).toBeLessThanOrEqual(3); // три года — не больше трёх годовых отрезков
+    expect(bigRequests).toBeLessThanOrEqual(3); // three years: no more than three yearly segments
 
     const strict = await startMock({ patients: 450, rateLimitPerMinute: 1_000_000, maxPeriodDays: 31 });
     try {
@@ -62,16 +62,16 @@ describe('коннектор против имитации Cliniccards', () => {
   it('разбирает «грязные» данные: пустой телефон, дата 0000-00-00, записи без услуг, ID числом', async () => {
     const connector = new CliniccardsConnector(client());
     const patients = await connector.fetchPatients();
-    const first = patients.find((p) => p.externalId === '100000')!; // i = 0: пустой телефон и 0000-00-00
+    const first = patients.find((p) => p.externalId === '100000')!; // i = 0: an empty phone and 0000-00-00
     expect(first.phone).toBeUndefined();
     expect(first.lastVisitAt).toBeUndefined();
 
     const visits = await connector.fetchVisits({ from: new Date(Date.now() - 200 * DAY), to: new Date(Date.now() + 70 * DAY) });
     expect(visits.length).toBeGreaterThan(300);
-    expect(visits.every((v) => typeof v.patientExternalId === 'string')).toBe(true); // числовые ID приведены к строкам
+    expect(visits.every((v) => typeof v.patientExternalId === 'string')).toBe(true); // numeric IDs converted to strings
     expect(visits.some((v) => v.serviceName === undefined)).toBe(true); // price_items = null
     expect(visits.some((v) => v.serviceName && v.amount && v.amount > 0)).toBe(true);
-    expect(new Set(visits.map((v) => v.externalId)).size).toBe(visits.length); // нет повторов на границах отрезков
+    expect(new Set(visits.map((v) => v.externalId)).size).toBe(visits.length); // no repeats at segment borders
   });
 
   it('читает планы лечения, платежи, акты и расписание', async () => {
@@ -84,7 +84,7 @@ describe('коннектор против имитации Cliniccards', () => {
 
     const { payments, invoices } = await connector.fetchFinance({ from: window.from, to: new Date() });
     expect(payments.length).toBeGreaterThan(50);
-    expect(payments.some((p) => p.patientExternalId === undefined)).toBe(true); // платёж без пациента
+    expect(payments.some((p) => p.patientExternalId === undefined)).toBe(true); // a payment without a patient
     expect(invoices.every((i) => i.amount > 0)).toBe(true);
 
     const { shifts, blocks } = await connector.fetchSchedule({ from: new Date(), to: new Date(Date.now() + 14 * DAY) });
@@ -108,7 +108,7 @@ describe('коннектор против имитации Cliniccards', () => {
       await c.get('/staff');
       await c.get('/staff');
       await expect(c.get('/staff')).rejects.toThrow('Too many requests');
-      expect(limited.requests.length).toBe(2); // сверх лимита сервер ничего не обработал
+      expect(limited.requests.length).toBe(2); // beyond the limit the server processed nothing
     } finally {
       await limited.close();
     }
@@ -120,7 +120,7 @@ describe('коннектор против имитации Cliniccards', () => {
     await slow.get('/staff');
     await slow.get('/staff');
     await slow.get('/staff');
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(230); // три запроса: две паузы по 120 мс
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(230); // three requests: two pauses of 120 ms
   });
 
   it('недоступный сервер: ошибка про связь', async () => {
@@ -139,7 +139,7 @@ describe('синхронизация и отчёты на данных имит�
   const http = () => request(app.getHttpServer());
 
   beforeAll(async () => {
-    // Паузы между запросами в тестах отключены, поэтому лимит имитации снят (сам лимит проверен отдельным тестом выше)
+    // Pauses between requests are turned off in tests, so the imitation's limit is lifted (the limit itself is checked by a separate test above)
     mock = await startMock({ patients: 450, rateLimitPerMinute: 1_000_000 });
     process.env.CLINICCARDS_BASE_URL = mock.url;
 
@@ -160,7 +160,7 @@ describe('синхронизация и отчёты на данных имит�
     const inviteToken = (inv.body.link as string).split('/invite/')[1];
     admin = (await http().post(`/invites/${inviteToken}/accept`).send({ name: 'Адмін', password: 'password123' }).expect(201)).body.accessToken;
 
-    // Демо-данные до подключения ключа
+    // Demo data before the key is connected
     await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201);
     expect(await prisma.patient.count({ where: { clinicId, externalId: { startsWith: 'demo-' } } })).toBeGreaterThan(0);
 
@@ -181,13 +181,13 @@ describe('синхронизация и отчёты на данных имит�
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: target.patientId } });
     const item = await prisma.planItem.findFirstOrThrow({ where: { patientId: target.patientId, status: { in: ['NEW', 'PLANNED_TO_DO'] } } });
 
-    // В Cliniccards часть пунктов в долларах: итог плана в гривнах (с курсом) больше суммы «сырых» цен
+    // In Cliniccards some items are in dollars: the plan total in hryvnias (with the rate) is larger than the sum of the "raw" prices
     const plan = mock.data.plans.find((p) => String(p.plan_id) === item.planId)!;
     const original = { ...plan };
     plan.plan_total_with_discount = String(Number(plan.plan_total_done_with_discount) + 250_000);
     await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201);
     const row = ((await http().get('/reports/unfinished-treatment').set(auth(owner)).expect(200)).body.rows as { patientId: string; openSum: number }[]).find((r) => r.patientId === patient.id)!;
-    // 250 000 по плану (плюс остаток других планов пациента, если они есть)
+    // 250,000 by the plan (plus the rest of the patient's other plans, if any)
     expect(row.openSum).toBeGreaterThanOrEqual(250_000);
 
     Object.assign(plan, original);
@@ -201,7 +201,7 @@ describe('синхронизация и отчёты на данных имит�
     const row = runs.find((r) => r.id === stuck.id)!;
     expect(row.status).toBe('FAILED');
     expect(row.error).toContain('прервана');
-    // свежая загрузка («идёт» две минуты) остаётся как есть
+    // a fresh load ("running" for two minutes) stays as it is
     const fresh = await prisma.syncRun.create({ data: { clinicId, integrationId: integration.id, startedAt: new Date(Date.now() - 2 * 60_000) } });
     const again = (await http().get('/integrations/cliniccards/runs').set(auth(owner)).expect(200)).body as { id: string; status: string }[];
     expect(again.find((r) => r.id === fresh.id)!.status).toBe('RUNNING');
@@ -216,10 +216,10 @@ describe('синхронизация и отчёты на данных имит�
     expect(def['7']).toBeNull();
     expect((await http().get('/clinic/work-hours/info').set(auth(owner)).expect(200)).body).toMatchObject({ configured: true, source: 'CLINICCARDS', connected: true });
 
-    await http().put('/clinic/work-hours').set(auth(admin)).send(week('10:00', '18:00')).expect(403); // администратор не меняет
-    await http().put('/clinic/work-hours').set(auth(owner)).send({ ...week('10:00', '18:00'), '3': { from: '18:00', to: '10:00' } }).expect(400); // начало позже конца
-    await http().put('/clinic/work-hours').set(auth(owner)).send({ ...week('10:00', '18:00'), '3': { from: '9', to: '18:00' } }).expect(400); // не ЧЧ:ММ
-    await http().put('/clinic/work-hours').set(auth(owner)).send({ '1': { from: '09:00', to: '20:00' } }).expect(400); // не все дни
+    await http().put('/clinic/work-hours').set(auth(admin)).send(week('10:00', '18:00')).expect(403); // the administrator does not change it
+    await http().put('/clinic/work-hours').set(auth(owner)).send({ ...week('10:00', '18:00'), '3': { from: '18:00', to: '10:00' } }).expect(400); // the start is later than the end
+    await http().put('/clinic/work-hours').set(auth(owner)).send({ ...week('10:00', '18:00'), '3': { from: '9', to: '18:00' } }).expect(400); // not HH:MM
+    await http().put('/clinic/work-hours').set(auth(owner)).send({ '1': { from: '09:00', to: '20:00' } }).expect(400); // not all days
 
     await http().put('/clinic/work-hours').set(auth(owner)).send({ ...week('10:00', '18:00'), '7': null }).expect(200);
     const saved = (await http().get('/clinic/work-hours').set(auth(owner)).expect(200)).body;
@@ -228,7 +228,7 @@ describe('синхронизация и отчёты на данных имит�
     // typed by hand: the source is now MANUAL and the next sync does not replace it
     expect((await http().get('/clinic/work-hours/info').set(auth(owner)).expect(200)).body).toMatchObject({ configured: true, source: 'MANUAL' });
 
-    // другая клиника своих часов не меняет и чужих не видит
+    // another clinic does not change its hours and does not see the others'
     const other = await http().post('/auth/register').send({ acceptTerms: true, clinicName: `Часы ${rnd()}`, name: 'Ольга', email: `h${rnd()}@example.com`, password: 'password123' }).expect(201);
     // a clinic that never set them: the form shows 09:00-20:00 as a default but it is NOT a setting, and the info says so
     expect((await http().get('/clinic/work-hours').set(auth(other.body.accessToken)).expect(200)).body['1']).toEqual({ from: '09:00', to: '20:00' });
@@ -237,28 +237,28 @@ describe('синхронизация и отчёты на данных имит�
   });
 
   it('свободные окна без смен врачей считаются по рабочим часам кабинетов', async () => {
-    await prisma.shift.deleteMany({ where: { clinicId } }); // в Cliniccards смен нет (профили врачей не заведены)
+    await prisma.shift.deleteMany({ where: { clinicId } }); // Cliniccards has no shifts (doctor profiles are not set up)
     const week = (from: string, to: string) => Object.fromEntries(['1', '2', '3', '4', '5', '6', '7'].map((d) => [d, { from, to }]));
     await http().put('/clinic/work-hours').set(auth(owner)).send(week('10:00', '14:00')).expect(200);
 
     const body = (await http().get('/reports/free-slots?days=7').set(auth(owner)).expect(200)).body;
     expect(body.rows.length).toBeGreaterThan(0);
-    // без смен у окон нет врача: колонки «Лікар» нет, кабинеты подписаны названиями из Cliniccards
+    // without shifts the windows have no doctor: there is no "Doctor" column, cabinets are labelled with the names from Cliniccards
     expect(body.columns.map((c: { key: string }) => c.key)).not.toContain('doctor');
     expect(body.rows.every((r: { cabinet: string }) => /^Кабінет [12]$/.test(r.cabinet))).toBe(true);
     const toMin = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
     for (const r of body.rows as { windows: string; freeMinutes: number }[]) {
       const ranges = r.windows.split(', ').map((w) => w.split('–').map(toMin));
-      expect(ranges.every(([a, b]) => a >= 10 * 60 && b <= 14 * 60 && b - a >= 30)).toBe(true); // не выходят за рабочие часы
+      expect(ranges.every(([a, b]) => a >= 10 * 60 && b <= 14 * 60 && b - a >= 30)).toBe(true); // they do not go beyond the working hours
       expect(r.freeMinutes).toBeLessThanOrEqual(4 * 60);
     }
 
-    // выходные дни не попадают в отчёт
+    // days off do not get into the report
     await http().put('/clinic/work-hours').set(auth(owner)).send(Object.fromEntries(['1', '2', '3', '4', '5', '6', '7'].map((d) => [d, null]))).expect(200);
     expect((await http().get('/reports/free-slots?days=7').set(auth(owner)).expect(200)).body.rows).toHaveLength(0);
 
     await http().put('/clinic/work-hours').set(auth(owner)).send(week('09:00', '20:00')).expect(200);
-    await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201); // смены вернулись
+    await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201); // the shifts are back
   });
 
   it('пациент, исчезнувший из Cliniccards, скрывается из списков и отчётов, но данные остаются; вернулся — снова виден', async () => {
@@ -268,7 +268,7 @@ describe('синхронизация и отчёты на данных имит�
     const totalBefore = await listTotal();
     expect(before.length).toBeGreaterThan(0);
     const target = await prisma.patient.findUniqueOrThrow({ where: { id: before[0].patientId } });
-    // у пациента есть своя задача: она не должна пропасть
+    // the patient has their own task: it must not disappear
     const task = await prisma.task.create({ data: { clinicId, patientId: target.id, title: 'Позвонить', dueDate: new Date(), createdById: (await prisma.user.findFirstOrThrow({ where: { memberships: { some: { clinicId } } } })).id } });
 
     const saved = [...mock.data.patients];
@@ -279,13 +279,13 @@ describe('синхронизация и отчёты на данных имит�
       expect((await prisma.patient.findUniqueOrThrow({ where: { id: target.id } })).removedAt).toBeTruthy();
       expect((await rows()).some((r) => r.patientId === target.id)).toBe(false);
       expect(await listTotal()).toBe(totalBefore - 1);
-      expect(await prisma.task.count({ where: { id: task.id } })).toBe(1); // данные сохранены
+      expect(await prisma.task.count({ where: { id: task.id } })).toBe(1); // the data is saved
       const run = await prisma.syncRun.findFirstOrThrow({ where: { clinicId }, orderBy: { startedAt: 'desc' } });
       expect(run.extra).toMatchObject({ removedPatients: 1 });
-      // по ссылке карточка открывается (с пометкой), чтобы не терять историю
+      // the card opens by the link (with a mark), so the history is not lost
       expect((await http().get(`/patients/${target.id}`).set(auth(owner)).expect(200)).body.removedAt).toBeTruthy();
 
-      // Сбой: пришёл пустой список. Никого не скрываем.
+      // A failure: an empty list came. We hide nobody.
       mock.data.patients.splice(0, mock.data.patients.length);
       await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201);
       const stillVisible = await prisma.patient.count({ where: { clinicId, removedAt: null } });
@@ -310,7 +310,7 @@ describe('синхронизация и отчёты на данных имит�
     expect(codes.filter((c) => c === 201).length).toBeGreaterThanOrEqual(1);
     expect(codes.filter((c) => c === 409).length).toBeGreaterThanOrEqual(1);
     expect(codes.every((c) => c === 201 || c === 409)).toBe(true);
-    // по окончании блокировки нет
+    // there is no block at the end
     await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201);
     expect(await prisma.syncRun.count({ where: { clinicId, status: 'RUNNING' } })).toBe(0);
   });
@@ -329,12 +329,12 @@ describe('синхронизация и отчёты на данных имит�
     expect((await rows()).some((r) => r.patientId === target)).toBe(false);
     expect(await prisma.reminder.count({ where: { clinicId, externalId: '9900001' } })).toBe(1);
 
-    // Напоминание выполнено — пациент снова в списке
+    // The reminder is done: the patient is in the list again
     reminder.status = 'DONE';
     await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201);
     expect((await rows()).some((r) => r.patientId === target)).toBe(true);
 
-    // Напоминание удалено в Cliniccards — пропадает и у нас; чужая клиника его не видит
+    // The reminder was deleted in Cliniccards: it disappears for us too; another clinic does not see it
     mock.data.reminders.length = 0;
     await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201);
     expect(await prisma.reminder.count({ where: { clinicId } })).toBe(0);
@@ -380,7 +380,7 @@ describe('синхронизация и отчёты на данных имит�
     expect(await prisma.shift.count({ where: { clinicId } })).toBeGreaterThan(10);
     const items = await prisma.planItem.count({ where: { clinicId } });
     expect(items).toBeGreaterThan(50);
-    expect(items).toBeLessThan(mock.data.planItems.length); // архивный пациент 999999 не загружен
+    expect(items).toBeLessThan(mock.data.planItems.length); // the archived patient 999999 is not loaded
     const run = (await http().get('/integrations/cliniccards/runs').set(auth(owner)).expect(200)).body[0];
     expect(run.status).toBe('OK');
     expect(run.extra.planItems).toBe(items);
@@ -425,7 +425,7 @@ describe('синхронизация и отчёты на данных имит�
     const status = await http().get('/integrations/cliniccards').set(auth(owner)).expect(200);
     expect(status.body.lastRun.status).toBe('FAILED');
     expect(status.body.lastRun.error).toContain('нет связи');
-    await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201); // и дальше всё работает
+    await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201); // and everything keeps working after that
   });
 
   it('отчёты считаются на загруженных данных', async () => {
@@ -441,7 +441,7 @@ describe('синхронизация и отчёты на данных имит�
       expect(r.openItems).toBeGreaterThanOrEqual(1);
       expect(r.lastDoneAt).toBeTruthy();
     }
-    // у пациентов из отчёта нет будущих действующих записей
+    // the patients of the report have no future valid appointments
     const ids = unfinished.rows.map((r: { patientId: string }) => r.patientId);
     const booked = await prisma.visit.count({
       where: { clinicId, patientId: { in: ids }, startsAt: { gt: new Date() }, status: { notIn: ['CANCELLED', 'DID_NOT_COME', 'MOVED'] } },
@@ -456,7 +456,7 @@ describe('синхронизация и отчёты на данных имит�
 
     const revenue = await get('revenue');
     expect(revenue.rows.length).toBeGreaterThan(3);
-    expect(revenue.rows[0].month > revenue.rows[1].month).toBe(true); // свежие месяцы сверху
+    expect(revenue.rows[0].month > revenue.rows[1].month).toBe(true); // fresh months on top
     expect(revenue.rows.every((r: { invoiced: number; paid: number }) => r.invoiced >= 0 && r.paid >= 0)).toBe(true);
   });
 
@@ -470,11 +470,11 @@ describe('синхронизация и отчёты на данных имит�
       expect(ranges.every(([a, b]) => b - a >= 30)).toBe(true);
       expect(ranges.reduce((s, [a, b]) => s + (b - a), 0)).toBe(r.freeMinutes);
       if (r.cabinet === 'Кабінет 1') {
-        // в первом кабинете с 13:00 до 14:00 обед: ни одно окно не должно его пересекать
+        // the first cabinet has lunch from 13:00 to 14:00: no window may cross it
         expect(ranges.every(([a, b]) => b <= 13 * 60 || a >= 14 * 60)).toBe(true);
       }
     }
-    // сумма свободного не больше длины смены (9 часов)
+    // the sum of free time is no more than the length of the shift (9 hours)
     expect(slots.rows.every((r: { freeMinutes: number }) => r.freeMinutes <= 9 * 60)).toBe(true);
   });
 
@@ -501,7 +501,7 @@ describe('синхронизация и отчёты на данных имит�
     expect(t2.body.created).toBeGreaterThan(0);
     await http().post('/tasks/from-report').set(auth(admin)).send({ reportId: 'revenue' }).expect(400);
     const titles = (await http().get('/tasks?status=OPEN').set(auth(admin)).expect(200)).body.map((t: { title: string }) => t.title);
-    expect(titles).toContain('Запропонувати продовжити лікування'); // язык по умолчанию — украинский
+    expect(titles).toContain('Запропонувати продовжити лікування'); // the default language is Ukrainian
     expect(titles).toContain('Нагадати про заборгованість');
   });
 

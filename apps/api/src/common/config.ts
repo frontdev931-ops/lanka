@@ -1,5 +1,5 @@
-// Проверка настроек при запуске. В продакшене слабые секреты и небезопасные адреса — отказ запускаться,
-// а не молчаливая работа с дырой.
+// Checking the settings at start. In production weak secrets and unsafe addresses mean a refusal to start,
+// not silent work with a hole.
 const WEAK = ['change-me', 'changeme', 'secret', 'password', 'test-jwt-secret', 'test-encryption-key'];
 
 export function configProblems(env: NodeJS.ProcessEnv = process.env): string[] {

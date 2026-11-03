@@ -34,7 +34,7 @@ export class ClinicController {
     private imports: SettingsImportService,
   ) {}
 
-  // Владелец принимает соглашение об обработке данных от имени клиники (версия должна быть текущей)
+  // The owner accepts the data processing agreement on behalf of the clinic (the version must be the current one)
   @Put('terms')
   @Roles(Role.OWNER)
   async acceptTerms(@CurrentUser() u: AuthUser, @Body() dto: AcceptTermsDto, @Req() req: Request) {
@@ -44,7 +44,7 @@ export class ClinicController {
     return { ok: true, version: TERMS_VERSION };
   }
 
-  // Рабочие часы клиники: по ним считаются свободные окна, когда в Cliniccards нет смен врачей
+  // The clinic's working hours: free windows are calculated from them when Cliniccards has no doctor shifts
   @Get('work-hours')
   async workHours(@CurrentUser() u: AuthUser) {
     const c = await this.prisma.clinic.findUnique({ where: { id: u.clinicId }, select: { workHours: true } });
@@ -104,7 +104,7 @@ export class ClinicController {
     return this.contacts(u);
   }
 
-  // История действий сотрудников и автоматических процессов
+  // History of actions of staff and automatic processes
   @Get('audit')
   @Roles(Role.OWNER, Role.MANAGER)
   async audit(@CurrentUser() u: AuthUser, @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1) {
@@ -124,7 +124,7 @@ export class ClinicController {
     };
   }
 
-  // Полная выгрузка данных клиники одним JSON-файлом. Пароли и ключ Cliniccards в неё не входят.
+  // A full export of the clinic's data as one JSON file. Passwords and the Cliniccards key are not included.
   @Get('export')
   @Roles(Role.OWNER)
   async export(@CurrentUser() u: AuthUser, @Res() res: Response) {
@@ -151,7 +151,7 @@ export class ClinicController {
     res.send(JSON.stringify({ exportedAt: new Date().toISOString(), clinic, team, patients, visits, planItems, payments, invoices, shifts, blocks, reminders, tasks, contacts, imports, audit }));
   }
 
-  // Безвозвратное удаление клиники со всеми данными. Нужно ввести её название и пароль владельца.
+  // Irreversible deletion of the clinic with all its data. The clinic's name and the owner's password must be entered.
   @Delete()
   @Roles(Role.OWNER)
   @HttpCode(200)
@@ -163,7 +163,7 @@ export class ClinicController {
     if (!clinic || !user || dto.confirmName.trim() !== clinic.name.trim() || !(await bcrypt.compare(dto.password, user.passwordHash))) {
       throw new BadRequestException('wrong_confirmation');
     }
-    // Сотрудники, у которых нет других клиник, удаляются вместе с ней
+    // Staff who have no other clinics are deleted with it
     const members = await this.prisma.membership.findMany({ where: { clinicId: u.clinicId }, select: { userId: true } });
     const solo: string[] = [];
     for (const m of members) {

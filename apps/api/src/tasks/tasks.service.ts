@@ -107,7 +107,7 @@ export class TasksService {
     if (dto.result !== undefined && dto.status !== 'OPEN') data.result = dto.result;
 
     const updated = await this.prisma.task.update({ where: { id }, data });
-    // Результат контакта по задаче сразу попадает в историю контактов пациента
+    // The result of a contact on a task goes straight into the patient's contact history
     if (dto.result && dto.status !== 'OPEN' && task.patientId) {
       await this.prisma.contactLog.create({
         data: { clinicId, patientId: task.patientId, userId, outcome: dto.result, note: task.title, source: 'TASK', taskId: id },
@@ -117,8 +117,8 @@ export class TasksService {
     return updated;
   }
 
-  // Создаёт задачи по строкам отчёта. Для пациента, у которого уже есть открытая задача
-  // из этого же отчёта, новая не создаётся. Строки с actionable = 0 пропускаются.
+  // Creates tasks from the report rows. For a patient who already has an open task
+  // from the same report, a new one is not created. Rows with actionable = 0 are skipped.
   async fromReport(clinicId: string, userId: string, role: Role, reportId: string, days: number | undefined, lang: Lang, assigneeId?: string, maxDays?: number) {
     const title = TASK_TITLE[reportId]?.[lang];
     if (!title) throw new BadRequestException('report_no_tasks');

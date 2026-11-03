@@ -51,7 +51,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     });
   }
 
-  // В разработке сервер не доступен из интернета, поэтому бот опрашивается сам. В продакшене Telegram присылает обновления вебхуком.
+  // In development the server is not reachable from the internet, so the bot polls by itself. In production Telegram sends updates by webhook.
   onApplicationBootstrap() {
     if (process.env.NODE_ENV === 'production' || process.env.TELEGRAM_POLL === 'false') return;
     this.timer = setInterval(() => void this.poll(), 3000);
@@ -69,7 +69,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     return { connected: !!i?.apiKeyEnc, username: cfg.username ?? null, linkedPatients: linked, staffChat: cfg.staffChat?.title ?? null };
   }
 
-  // Сохраняет токен бота (после проверки у Telegram), в базе он лежит зашифрованным
+  // Saves the bot token (after checking it with Telegram); it is stored encrypted in the database
   async connect(clinicId: string, token: string) {
     let me: { username: string };
     try {
@@ -90,7 +90,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
         const origin = (process.env.WEB_ORIGIN ?? '').replace(/\/$/, '');
         await this.api.setWebhook(token, `${origin}/backend/telegram/webhook/${secret}`, secret);
       } else {
-        await this.api.deleteWebhook(token); // без вебхука работает опрос
+        await this.api.deleteWebhook(token); // without a webhook polling works
       }
     } catch (e) {
       this.log.warn(`Webhook: ${(e as Error).message}`);
@@ -106,7 +106,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     return { connected: false };
   }
 
-  // Одноразовая ссылка для конкретного пациента: чат привяжется именно к его карточке
+  // A one-time link for a specific patient: the chat is linked exactly to their card
   async patientLink(clinicId: string, patientId: string) {
     const st = await this.status(clinicId);
     if (!st.connected) throw new BadRequestException('bot_not_connected');
@@ -118,7 +118,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     return { url: `https://t.me/${st.username}?start=${token}`, expiresAt };
   }
 
-  // Общая ссылка клиники: человек делится номером, и мы находим карточку по телефону
+  // The clinic's shared link: the person shares a number and we find the card by phone
   async generalLink(clinicId: string) {
     const st = await this.status(clinicId);
     if (!st.connected) throw new BadRequestException('bot_not_connected');
@@ -162,7 +162,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     await this.inbound.receive(i.clinicId, 'TELEGRAM', `${i.clinicId}:${update.update_id}`, update);
   }
 
-  // Разбор одного сообщения от пациента: подключение по ссылке, по номеру, отписка
+  // Handling one message from a patient: connecting by link, by number, opting out
   async handleUpdate(clinicId: string, token: string, update: TgUpdate) {
     if (update.callback_query) return this.handleCallback(clinicId, token, update.callback_query);
     const m = update.message;
@@ -174,17 +174,17 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     if (clinic.suspendedAt) return; // a suspended clinic does not process chats
     const text = (m.text ?? '').trim();
 
-    // Привязка служебного чата: «/chat КОД» (в группе Telegram может добавить @имя_бота)
+    // Linking the staff chat: "/chat CODE" (in a Telegram group @bot_name may be added)
     const bindCmd = /^\/chat(?:@\w+)?\s+(\S+)/i.exec(text);
     if (bindCmd) {
       const title = m.chat.title ?? (m.from?.first_name ? `Чат з ${m.from.first_name}` : 'Службовий чат');
       const ok = await this.staff.bind(clinicId, bindCmd[1], { id: chatId, title });
       return void (await say(ok ? 'Службовий чат підключено: сюди надходитимуть нові заявки клініки.' : 'Код недійсний або застарів. Створіть новий у налаштуваннях сервісу.'));
     }
-    // Сообщения из служебного чата не пациентские: ничего не сохраняем и не отвечаем
+    // Messages from the staff chat are not patient messages: we save nothing and do not reply
     if ((await this.staff.chat(clinicId))?.id === chatId) return;
 
-    // Руководитель привязывает чат к дайджесту ссылкой «owner_…»; получатель дайджеста может запросить сводку командой /digest
+    // The manager links a chat to the digest with an "owner_…" link; a digest recipient may ask for the summary with the /digest command
     const ownerLink = /^\/start\s+owner_(\S+)/.exec(text);
     if (ownerLink) {
       const lang = m.from?.language_code?.startsWith('ru') ? 'ru' : m.from?.language_code?.startsWith('en') ? 'en' : 'uk';
@@ -213,7 +213,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     }
 
     if (m.contact) {
-      // Принимаем только собственный контакт человека, чужой номер привязать нельзя
+      // We accept only the person's own contact, someone else's number cannot be linked
       if (m.contact.user_id !== undefined && m.contact.user_id !== m.from?.id) return void (await say(T.notFound));
       const phone = normalizePhone(m.contact.phone_number);
       const patients = phone ? await this.prisma.patient.findMany({ where: { clinicId, removedAt: null, phoneNorm: phone }, select: { id: true } }) : [];
@@ -222,12 +222,12 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
       return void (await say(T.linked(clinic.name), { reply_markup: { remove_keyboard: true } }));
     }
 
-    if (!text) return void (await say(T.other)); // фото, стикеры и т. п. пока не принимаем
-    // Обычное сообщение: сохраняем во входящие. Один вежливый ответ в сутки, чтобы человек знал, что его увидят.
+    if (!text) return void (await say(T.other)); // photos, stickers and the like are not accepted yet
+    // An ordinary message: we save it as incoming. One polite reply per day, so the person knows it will be seen.
     const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: 'TELEGRAM', externalId: chatId }, select: { patientId: true } });
     const contactName = [m.from?.first_name, m.from?.last_name].filter(Boolean).join(' ') || (username ? `@${username}` : null);
     await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel: 'TELEGRAM', chatId, contactName, direction: 'IN', text: text.slice(0, 4000) } });
-    // Комментарий к низкой оценке: сохраняем у отзыва, обновляем заявку администратору, ШІ не отвечает
+    // A comment on a low rating: we save it with the review, update the administrator's request, the AI does not reply
     const pending = ch?.patientId ? await this.prisma.review.findFirst({ where: { clinicId, patientId: ch.patientId, comment: null, awaitingUntil: { gt: new Date() } }, orderBy: { updatedAt: 'desc' } }) : null;
     if (pending) {
       const comment = text.slice(0, 1000);
@@ -243,7 +243,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     }
     // An answer to the bot's question about the name and the phone is not for the AI
     if (await this.flow.onText({ clinicId, channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName }, text)) return;
-    // Автоответ ШІ (если клиника его включила); иначе обычный вежливый ответ раз в сутки
+    // The AI's automatic reply (if the clinic turned it on); otherwise an ordinary polite reply once a day
     if (await this.autoReply.onInbound(clinicId, 'TELEGRAM', chatId)) return;
     const recent = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel: 'TELEGRAM', chatId, direction: 'OUT', authorUserId: null, createdAt: { gt: new Date(Date.now() - 86_400_000) } }, select: { id: true } });
     if (!recent) {
@@ -252,7 +252,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     }
   }
 
-  // Пациент нажал кнопку с вариантом времени: сохраняем выбор, создаём заявку администратору, благодарим
+  // The patient pressed a time-option button: we save the choice, create a request for the administrator, thank them
   private async handleCallback(clinicId: string, token: string, cq: NonNullable<TgUpdate['callback_query']>) {
     await this.api.answerCallbackQuery(token, cq.id).catch(() => undefined);
     const chatId = String(cq.message?.chat.id ?? cq.from.id);
@@ -322,11 +322,11 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     await this.prisma.chatMessage.create({ data: { clinicId, patientId: visit.patientId, channel: 'TELEGRAM', chatId, direction: 'OUT', text } });
   }
 
-  // Пациент нажал оценку 1-5. Оценка сохраняется всегда; низкая сразу становится заявкой администратору и ждёт комментарий.
+  // The patient pressed a rating 1-5. The rating is always saved; a low one immediately becomes a request for the administrator and waits for a comment.
   private async handleRating(clinicId: string, token: string, chatId: string, visitId: string, rating: number) {
     const visit = await this.prisma.visit.findFirst({ where: { id: visitId, clinicId }, select: { id: true, patientId: true, doctorName: true } });
     if (!visit) return;
-    // оценить визит может только пациент, чей это чат
+    // only the patient who owns the chat may rate the visit
     const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: 'TELEGRAM', externalId: chatId, patientId: visit.patientId }, select: { optedOutAt: true } });
     if (!ch) return;
     const awaiting = rating <= 3 ? new Date(Date.now() + 86_400_000) : null;

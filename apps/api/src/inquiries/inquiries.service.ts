@@ -20,7 +20,7 @@ export class InquiriesService {
     const note = dto.note?.trim() || undefined;
     if (!phone && !name && !note) throw new BadRequestException('inquiry_empty');
     const occurredAt = dto.occurredAt ? new Date(dto.occurredAt) : new Date();
-    // Обращение «из будущего» бывает только от неправильной даты в форме
+    // An inquiry "from the future" can only come from a wrong date in the form
     if (occurredAt.getTime() > Date.now() + 3600_000) throw new BadRequestException('inquiry_future');
     const row = await this.prisma.inquiry.create({
       data: { clinicId, channel: dto.channel, phone, phoneNorm: normalizePhone(phone), name, note, occurredAt, createdById: userId },

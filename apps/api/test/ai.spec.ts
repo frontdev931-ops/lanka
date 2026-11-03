@@ -14,7 +14,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 
 jest.setTimeout(60_000);
 
-// Поддельный ИИ: в интернет ничего не уходит
+// A fake AI: nothing goes to the internet
 const fake = { configured: true, calls: 0, fail: false, next: 'Добрий день!', seq: [] as string[], systems: [] as string[], turns: [] as { role: string; content: string }[][], system: '', complete: async (system?: string, messages?: { role: string; content: string }[]): Promise<{ text: string; inputTokens: number; outputTokens: number }> => {
   fake.calls++;
   fake.system = system ?? '';
@@ -24,7 +24,7 @@ const fake = { configured: true, calls: 0, fail: false, next: 'Добрий де
   return { text: fake.seq.length ? fake.seq.shift()! : fake.next, inputTokens: 100, outputTokens: 20 };
 } };
 
-// Поддельный Telegram: ничего не уходит в интернет
+// A fake Telegram: nothing goes to the internet
 const tg = {
   sent: [] as { chatId: string; text: string; extra?: Record<string, unknown> }[],
   answered: [] as string[],
@@ -178,7 +178,7 @@ describe('ИИ-помощник в переписке: границы', () => {
 
     await say('s1', 'Хочу записатися на чистку');
     fake.next = '{"intent":"booking","reply":"Можемо запропонувати 10:00"}';
-    expect(await assistant.draft(c.clinicId, 'TELEGRAM', 's1')).toMatchObject({ handoff: true, reason: 'reply_check' }); // окон нет: время называть нельзя
+    expect(await assistant.draft(c.clinicId, 'TELEGRAM', 's1')).toMatchObject({ handoff: true, reason: 'reply_check' }); // no windows: no time may be named
     expect(fake.system).toContain('Вільні вікна тобі невідомі');
 
     await prisma.cabinet.create({ data: { clinicId: c.clinicId, externalId: 'cab1', name: 'Терапія' } });
@@ -219,20 +219,20 @@ describe('ИИ-помощник в переписке: границы', () => {
     fake.next = 'це не json';
     expect(await assistant.draft(c.clinicId, 'TELEGRAM', 'c2')).toMatchObject({ handoff: true, reason: 'model' });
 
-    // затянувшийся диалог: больше сообщений пациента за сутки, чем разрешает клиника (здесь 8)
+    // a long-running dialogue: more patient messages in a day than the clinic allows (8 here)
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiRepliesPerChatDay: 8 } });
     for (let i = 0; i < 9; i++) await say('c3', `повідомлення ${i}`);
     const calls = fake.calls;
     expect(await assistant.draft(c.clinicId, 'TELEGRAM', 'c3')).toMatchObject({ handoff: true, reason: 'long' });
     expect(fake.calls).toBe(calls);
 
-    // последним ответил сотрудник: отвечать нечего
+    // the last reply was by a staff member: nothing to answer
     await say('c4', 'Привіт');
     await new Promise((r) => setTimeout(r, 20));
     await say('c4', 'Добрий день!', 'OUT');
     await expect(assistant.draft(c.clinicId, 'TELEGRAM', 'c4')).rejects.toMatchObject({ message: 'nothing_to_answer' });
 
-    // HTTP: врачу нельзя, чужая клиника диалога не видит, выключенный ИИ не вызывается
+    // HTTP: a doctor is not allowed, another clinic does not see the dialogue, a switched-off AI is not called
     const other = await clinic();
     await http().post('/conversations/TELEGRAM/c2/draft').set(auth(other.token)).expect(404);
     await http().patch('/ai').set(auth(c.token)).send({ enabled: false }).expect(200);
@@ -295,7 +295,7 @@ describe('ШІ сам отвечает пациентам в Telegram', () => {
     const calls = fake.calls;
     tg.sent.length = 0;
     await app.get(TelegramService).handleUpdate(q.clinicId, TOKEN, msg(q.chat, 'У мене болить зуб'));
-    expect(fake.calls).toBe(calls); // до модели не дошло
+    expect(fake.calls).toBe(calls); // did not reach the model
     expect(tg.sent[0].text).toContain('термінове');
   });
 
@@ -359,14 +359,14 @@ describe('кнопки со временем и заявки администр�
     // the card has a name but no phone: the bot asks for the phone first and does not say the request was passed on yet
     expect(tg.sent[0].text).toContain('номер телефону');
     expect(tg.sent[0].text).not.toContain('Передали');
-    expect(await prisma.bookingRequest.count({ where: { clinicId: q.clinicId } })).toBe(1); // та же заявка, не дубль
+    expect(await prisma.bookingRequest.count({ where: { clinicId: q.clinicId } })).toBe(1); // the same request, not a duplicate
     tg.sent.length = 0;
     await app.get(TelegramService).handleUpdate(q.clinicId, TOKEN, msg(q.chat, '097 123 45 67'));
     expect(tg.sent[0].text).toContain(`${d}.${m}.${y} о 15:30`);
     expect(tg.sent[0].text).toContain('Очікуйте підтвердження запису');
     expect(await prisma.bookingRequest.count({ where: { clinicId: q.clinicId } })).toBe(1);
     expect((await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: q.clinicId } })).summary).toContain(`час: ${d}.${m}.${y} 15:30`);
-    // подделанные данные кнопки игнорируются
+    // forged button data is ignored
     tg.sent.length = 0;
     await app.get(TelegramService).handleUpdate(q.clinicId, TOKEN, { update_id: 3, callback_query: { id: 'cb2', from: { id: q.chat }, message: { chat: { id: q.chat } }, data: 'slot|абв|99' } });
     expect(tg.sent).toHaveLength(0);
@@ -426,7 +426,7 @@ describe('служебный чат для заявок', () => {
     await tgs.handleUpdate(c.clinicId, TOKEN, upd(-1001, `/chat@my_bot ${code.toLowerCase()}`, 'Адміністратори'));
     expect(tg.sent.at(-1)!.text).toContain('підключено');
     expect((await http().get('/automations').set(auth(c.token))).body.telegram.staffChat).toBe('Адміністратори');
-    // код одноразовый
+    // the code is single-use
     await tgs.handleUpdate(c.clinicId, TOKEN, upd(-1002, `/chat ${code}`, 'Інший'));
     expect((await http().get('/automations').set(auth(c.token))).body.telegram.staffChat).toBe('Адміністратори');
 
@@ -440,7 +440,7 @@ describe('служебный чат для заявок', () => {
     expect((await http().post('/automations/telegram/staff-chat/test').set(auth(c.token)).expect(200)).body.sent).toBe(true);
     expect(tg.sent[0]).toMatchObject({ chatId: '-1001' });
 
-    // просроченный код
+    // an expired code
     const second = (await http().post('/automations/telegram/staff-chat').set(auth(c.token)).expect(201)).body.code;
     const integ = await prisma.integration.findFirstOrThrow({ where: { clinicId: c.clinicId, provider: 'TELEGRAM' } });
     const cfg = integ.config as { staffCode: { hash: string; expiresAt: number } };
@@ -482,17 +482,17 @@ describe('служебный чат для заявок', () => {
     expect(tg.sent.find((s) => s.chatId === '-2001')!.text).toContain('Оновлення заявки');
     expect(tg.sent.find((s) => s.chatId === '-2001')!.text).toContain('час:');
 
-    // сообщение в служебном чате: ничего не сохраняется и бот не отвечает
+    // a message in the staff chat: nothing is saved and the bot does not reply
     tg.sent.length = 0;
     const before = await prisma.chatMessage.count({ where: { clinicId: c.clinicId } });
     await tgs.handleUpdate(c.clinicId, TOKEN, upd(-2001, 'Привіт, команда', 'Заявки'));
     expect(await prisma.chatMessage.count({ where: { clinicId: c.clinicId } })).toBe(before);
     expect(tg.sent).toHaveLength(0);
 
-    // отправка пациентам выключена: заявка всё равно сообщается сотрудникам
+    // sending to patients is off: the request is still reported to the staff
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { sendingEnabled: false } });
     await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: 'zz', kind: 'CANCEL', summary: 'x' } });
-    // прямое создание строки не уведомляет (уведомляет сервис при upsert); проверяем через сервис
+    // creating a row directly does not notify (the service notifies on upsert); we check through the service
     const svc = app.get((await import('../src/automations/requests.service')).RequestsService);
     await svc.upsert(c.clinicId, { channel: 'TELEGRAM', chatId: 'zz2', patientId: null, contactName: 'Хтось', kind: 'HANDOFF', summary: 'Питання' });
     expect(tg.sent.find((s) => s.chatId === '-2001')!.text).toContain('Потрібна відповідь людини');
@@ -528,10 +528,10 @@ describe('окна по врачам (клиники со сменами)', () =
     expect(fake.system).toContain('Будь-який лікар:');
     expect(fake.system).toContain('Лікар Петренко Олег:');
     expect(fake.system).toContain('Лікар Сидоренко Анна:');
-    expect(tg.sent.at(-1)!.extra).toBeDefined(); // общий вариант 11:00 есть у любого врача (у Петренка)
+    expect(tg.sent.at(-1)!.extra).toBeDefined(); // the shared 11:00 option exists for any doctor (for Petrenko)
 
     tg.sent.length = 0;
-    fake.next = reply([{ date: tomorrow(), time: '11:00', doctor: 'Сидоренко Анна' }]); // у Сидоренко в 11:00 смены нет
+    fake.next = reply([{ date: tomorrow(), time: '11:00', doctor: 'Сидоренко Анна' }]); // Sydorenko has no shift at 11:00
     await tgs.handleUpdate(q.clinicId, TOKEN, msg(q.chat, 'Хочу до Сидоренко завтра зранку'));
     expect(tg.sent.at(-1)!.extra).toBeUndefined();
     expect(tg.sent.at(-1)!.text).toContain('адміністратору');
@@ -582,7 +582,7 @@ describe('ШІ-помічник керівника: вопрос → отчёт'
     expect(res.report.rows[0].debt).toBe(2000);
     expect(res.title).toBe('Давно не були');
     expect(res.answer).toContain('Знайдено рядків: 1');
-    expect(fake.calls).toBe(1); // список людей не пояснюється моделью
+    expect(fake.calls).toBe(1); // the list of people is not explained by the model
     expect(JSON.stringify(fake.turns)).not.toContain('Секретна');
     expect(fake.systems[0]).toContain('debt');
   });
@@ -605,7 +605,7 @@ describe('ШІ-помічник керівника: вопрос → отчёт'
     fake.systems.length = 0;
     fake.turns.length = 0;
     const personal = (await ask(c.token, 'порахуй по пацієнтах').expect(200)).body;
-    expect(personal.answer).toContain('Знайдено рядків: 2'); // без пояснення моделью
+    expect(personal.answer).toContain('Знайдено рядків: 2'); // without an explanation by the model
     expect(fake.calls).toBe(1);
 
     fake.calls = 0;
@@ -617,7 +617,7 @@ describe('ШІ-помічник керівника: вопрос → отчёт'
     const fixed = (await ask(c.token, 'покажи пацієнтів').expect(200)).body;
     expect(fixed.report.rows).toHaveLength(2);
     expect(fake.calls).toBe(2);
-    expect(fake.turns[1].at(-1)!.content).toContain('field: nonexistent'); // причина ошибки показана модели
+    expect(fake.turns[1].at(-1)!.content).toContain('field: nonexistent'); // the reason for the error is shown to the model
 
     fake.calls = 0;
     fake.seq = [J({ spec: { dataset: 'patients', columns: ['zzz'] }, answer: 'a' }), J({ spec: { dataset: 'patients', columns: ['zzz'] }, answer: 'a' }), J({ spec: { dataset: 'patients', columns: ['zzz'] }, answer: 'a' })];
@@ -638,7 +638,7 @@ describe('ШІ-помічник керівника: вопрос → отчёт'
     const total = (await ask(c.token, 'скільки всього пацієнтів і на яку суму виставлено').expect(200)).body;
     expect(total.report.rows).toEqual([{ a0: 2, a1: 3000 }]);
 
-    // администратору деньги недоступны: в каталоге модели их нет, а описание с деньгами отклоняется
+    // money is unavailable to the administrator: it is not in the model's catalogue, and a description with money is rejected
     const inv = await http().post('/team/invitations').set(auth(c.token)).send({ email: `ad${rnd()}@example.com`, role: 'ADMIN' }).expect(201);
     const admin = (await http().post(`/invites/${(inv.body.link as string).split('/invite/')[1]}/accept`).send({ name: 'Ад', password: PASSWORD }).expect(201)).body.accessToken as string;
     fake.systems.length = 0;
@@ -650,14 +650,14 @@ describe('ШІ-помічник керівника: вопрос → отчёт'
     const doctor = (await http().post(`/invites/${(doctorInv.body.link as string).split('/invite/')[1]}/accept`).send({ name: 'Лік', password: PASSWORD }).expect(201)).body.accessToken as string;
     await ask(doctor, 'покажи пацієнтів').expect(403);
 
-    // чужая клиника: свои данные, отчёт считается только по её пациентам
+    // another clinic: its own data, the report is calculated only over its patients
     const other = await ready();
     fake.next = J({ answer: 'Ок', title: 't', spec: { dataset: 'patients', columns: ['patientName'] } });
     expect((await ask(other.token, 'покажи пацієнтів').expect(200)).body.report.rows).toHaveLength(2);
     await prisma.patient.deleteMany({ where: { clinicId: other.clinicId } });
     expect((await ask(other.token, 'покажи пацієнтів').expect(200)).body.report.rows).toHaveLength(0);
 
-    // месячный лимит
+    // monthly limit
     await http().patch('/ai').set(auth(c.token)).send({ enabled: true, monthlyLimit: 0 }).expect(200);
     await ask(c.token, 'покажи пацієнтів').expect(400);
   });

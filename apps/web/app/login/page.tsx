@@ -27,10 +27,10 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
-  // Если у пользователя несколько клиник, после проверки пароля показываем выбор
+  // If the user has several clinics, after the password check we show a choice
   const [creds, setCreds] = useState<{ email: string; password: string } | null>(null);
   const [clinics, setClinics] = useState<{ id: string; name: string }[]>([]);
-  // Двухфакторный вход: после пароля просим код; если клиник несколько, выбор клиники в том же шаге
+  // Two-factor sign-in: after the password we ask for the code; if there are several clinics, the clinic choice is in the same step
   const [needCode, setNeedCode] = useState(false);
   const [code, setCode] = useState('');
   const [pickClinic, setPickClinic] = useState('');
@@ -43,11 +43,11 @@ export default function LoginPage() {
     try {
       const res = await api<LoginResult>(register ? '/auth/register' : '/auth/login', {
         method: 'POST',
-        // Чекбокс приходит из формы строкой «on»; серверу нужно true
+        // A checkbox comes from the form as the string "on"; the server needs true
         body: JSON.stringify(register ? { ...f, acceptTerms: f.acceptTerms === 'on' } : f),
       });
       if (res.accessToken) {
-        router.push('/dashboard'); // сервер уже поставил сессионную cookie
+        router.push('/dashboard'); // the server has already set the session cookie
       } else if (res.twoFactorRequired) {
         setCreds({ email: f.email, password: f.password });
         setClinics(res.clinics ?? []);

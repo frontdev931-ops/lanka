@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsImportService } from '../integrations/settings-import.service';
 import { SyncService } from '../integrations/sync.service';
+import { stemsOf } from '../ai/dental';
 
 export const KB_KINDS = ['SERVICE', 'DOCTOR', 'LOCATION', 'FAQ'] as const;
 export type KbKind = (typeof KB_KINDS)[number];
@@ -27,15 +28,17 @@ export interface KbInput {
 export interface KbFacts {
   // Text for the model; null when the clinic approved nothing
   text: string | null;
-  // The amounts (UAH) the reply may mention: only fresh approved prices
+  // The amounts (UAH) the reply may mention: only known, current prices of the clinic's own list
   allowedAmounts: number[];
+  // The services shown to the model with a known price: a named sum must belong to the service it is named for
+  priced: { title: string; category: string | null; amount: number }[];
   pricesKnown: boolean;
 }
 
-// The price Cliniccards has now differs from the clinic's own, and the administrator has not accepted it nor chosen to keep the own one
-// (only for an approved position: a draft simply follows Cliniccards)
-export const priceDivergent = (r: { externalId: string | null; externalPrice: number | null; priceUah: number | null; externalPriceAcked: number | null; approvedAt: Date | null }) =>
-  !!r.approvedAt && !!r.externalId && r.externalPrice !== null && r.externalPrice !== r.priceUah && r.externalPrice !== r.externalPriceAcked;
+// An imported position follows the price list by itself. A discrepancy exists only for a price the clinic set by hand on purpose (a local
+// exception) that Cliniccards now contradicts, until the administrator accepts the source price or keeps the own one.
+export const priceDivergent = (r: { externalId: string | null; externalPrice: number | null; priceUah: number | null; externalPriceAcked: number | null; localFields: string[] }) =>
+  !!r.externalId && r.localFields.includes('priceUah') && r.externalPrice !== null && r.externalPrice !== r.priceUah && r.externalPrice !== r.externalPriceAcked;
 
 const fresh = (d: Date | null, now = new Date()) => !!d && now.getTime() - d.getTime() < PRICE_FRESH_DAYS * DAY;
 
@@ -68,7 +71,7 @@ export class KbService {
       source: r.source,
       approved: !!r.approvedAt,
       // approved, but not confirmed for 90 days: prices stop being quoted, the rest still works
-      stale: !!r.approvedAt && !fresh(r.reviewedAt, now),
+      stale: !!r.approvedAt && !(r.externalId && !r.localFields.includes('priceUah')) && !fresh(r.reviewedAt, now),
       reviewedAt: r.reviewedAt,
     }));
   }
@@ -111,13 +114,22 @@ export class KbService {
     return row.id;
   }
 
-  // Any change of the content takes the approval back: the AI uses an item again only after a person approves the new version
+  // Any change of the content of a hand-made item takes the approval back: the AI uses it again only after a person approves the new version.
+  // An imported service keeps its approval (it follows Cliniccards); a field the clinic changes by hand becomes a local exception that
+  // an import never overwrites (a price equal to the source's is no exception).
   async update(clinicId: string, userId: string, id: string, d: KbInput) {
     const cur = await this.prisma.kbItem.findFirst({ where: { id, clinicId } });
     if (!cur) throw new NotFoundException('kb_not_found');
     const data = this.clean({ ...d, kind: undefined });
     const contentChanged = (['title', 'text', 'durationMin', 'priceUah'] as const).some((k) => data[k] !== undefined && data[k] !== cur[k]);
-    await this.prisma.kbItem.update({ where: { id }, data: { ...data, ...(contentChanged ? { approvedAt: null, approvedById: null } : {}) } });
+    const local = new Set(cur.localFields);
+    if (cur.externalId) {
+      if (data.title !== undefined && data.title !== cur.title) data.title === cur.externalTitle ? local.delete('title') : local.add('title');
+      if (data.text !== undefined && data.text !== cur.text) local.add('text');
+      if (data.priceUah !== undefined && data.priceUah !== cur.priceUah) data.priceUah !== null && data.priceUah > 0 && data.priceUah === cur.externalPrice ? local.delete('priceUah') : local.add('priceUah');
+    }
+    const resetApproval = contentChanged && !cur.externalId;
+    await this.prisma.kbItem.update({ where: { id }, data: { ...data, localFields: [...local], ...(resetApproval ? { approvedAt: null, approvedById: null } : {}) } });
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.updated', details: { id, contentChanged } } });
   }
 
@@ -195,7 +207,8 @@ export class KbService {
   async resolvePrice(clinicId: string, userId: string, id: string, action: 'accept' | 'keep') {
     const cur = await this.prisma.kbItem.findFirst({ where: { id, clinicId, kind: 'SERVICE' } });
     if (!cur || cur.externalPrice === null) throw new NotFoundException('kb_not_found');
-    if (action === 'accept') await this.prisma.kbItem.update({ where: { id }, data: { priceUah: cur.externalPrice, externalPriceAcked: null, reviewedAt: new Date() } });
+    // accepting the source price returns the position to following Cliniccards (a source 0 is kept as an explicit "free")
+    if (action === 'accept') await this.prisma.kbItem.update({ where: { id }, data: { priceUah: cur.externalPrice, externalPriceAcked: null, reviewedAt: new Date(), localFields: cur.externalPrice === 0 ? cur.localFields : cur.localFields.filter((f) => f !== 'priceUah') } });
     else await this.prisma.kbItem.update({ where: { id }, data: { externalPriceAcked: cur.externalPrice, reviewedAt: new Date() } });
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.price_resolved', details: { id, action, source: cur.externalPrice, own: cur.priceUah } } });
   }
@@ -204,7 +217,7 @@ export class KbService {
   async resolveMissing(clinicId: string, userId: string, id: string, action: 'keep' | 'disable') {
     const cur = await this.prisma.kbItem.findFirst({ where: { id, clinicId, kind: 'SERVICE', missingInSourceAt: { not: null } } });
     if (!cur) throw new NotFoundException('kb_not_found');
-    if (action === 'keep') await this.prisma.kbItem.update({ where: { id }, data: { missingInSourceAt: null, externalId: null, externalTitle: null, externalPrice: null, externalPriceAcked: null } });
+    if (action === 'keep') await this.prisma.kbItem.update({ where: { id }, data: { missingInSourceAt: null, externalId: null, externalTitle: null, externalPrice: null, externalPriceAcked: null, localFields: [] } });
     else await this.prisma.kbItem.update({ where: { id }, data: { active: false, onlineBooking: false } });
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.missing_resolved', details: { id, action } } });
   }
@@ -219,7 +232,7 @@ export class KbService {
     if (!manual || !imp) throw new NotFoundException('kb_not_found');
     await this.prisma.$transaction([
       this.prisma.kbItem.update({ where: { id: imp.id }, data: { externalId: null, active: false, onlineBooking: false, source: 'MANUAL', matchDismissed: true } }),
-      this.prisma.kbItem.update({ where: { id: manual.id }, data: { externalId: imp.externalId, externalTitle: imp.externalTitle, externalPrice: imp.externalPrice, ...(manual.category ? {} : { category: imp.category }) } }),
+      this.prisma.kbItem.update({ where: { id: manual.id }, data: { externalId: imp.externalId, externalTitle: imp.externalTitle, externalPrice: imp.externalPrice, localFields: ['title', 'text', ...(manual.priceUah !== null ? ['priceUah'] : [])], ...(manual.category ? {} : { category: imp.category }) } }),
     ]);
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.linked', details: { manualId, importedId } } });
   }
@@ -230,29 +243,70 @@ export class KbService {
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.match_dismissed', details: { id } } });
   }
 
-  // What the model may know. Only approved, active items. A price and its amount appear only when confirmed in the last 90 days.
+  // What the model may know. Services: every active service of the clinic, imported from Cliniccards (also drafts) or made by hand, whether or
+  // not it is allowed for online booking and whether or not it has a length. The other kinds (doctors, addresses, answers) only when approved.
+  // A price is named only when it is known and current: a number, not a guess. A price is current when it follows the last read of the price
+  // list (not older than 90 days) or was confirmed by a person in the last 90 days; an unknown price, a position that vanished from the
+  // price list and a price the source and the clinic disagree about are told to the model as "do not name, the administrator will clarify".
   // A clinic with a long price list (112 dental has 234 items) cannot put it all into every prompt: with more than SERVICES_ALL services
   // only those that match the patient's words are included, plus the list of directions so the model knows what exists.
   // The amounts a reply may mention are those of the services that were included.
   async factsFor(clinicId: string, now = new Date(), query = ''): Promise<KbFacts> {
-    const rows = await this.prisma.kbItem.findMany({ where: { clinicId, active: true, approvedAt: { not: null }, missingInSourceAt: null }, orderBy: [{ kind: 'asc' }, { title: 'asc' }] });
-    if (!rows.length) return { text: null, allowedAmounts: [], pricesKnown: false };
+    const [all, clinic] = await Promise.all([
+      this.prisma.kbItem.findMany({ where: { clinicId, active: true }, orderBy: [{ kind: 'asc' }, { title: 'asc' }] }),
+      this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { priceListSyncedAt: true } }),
+    ]);
+    // Trusted: services imported from the connected Cliniccards (they follow it by themselves), and everything else only once approved.
+    // A hand-made draft is not published.
+    const rows = all.filter((r) => !!r.approvedAt || (r.kind === 'SERVICE' && !!r.externalId && r.source === 'CLINICCARDS'));
+    if (!rows.length) return { text: null, allowedAmounts: [], priced: [], pricesKnown: false };
     const services = rows.filter((r) => r.kind === 'SERVICE');
+    // KNOWN: a number that may be named; FREE: explicitly free; CONFLICT / GONE / UNKNOWN: the administrator clarifies
+    const priceOf = (r: (typeof services)[number]): { state: 'KNOWN' | 'FREE' | 'CONFLICT' | 'GONE' | 'UNKNOWN'; amount: number | null } => {
+      if (r.missingInSourceAt) return { state: 'GONE', amount: null };
+      if (priceDivergent(r)) return { state: 'CONFLICT', amount: null };
+      if (r.priceUah === null) return { state: 'UNKNOWN', amount: null };
+      const followsSource = !!r.externalId && r.source === 'CLINICCARDS' && !r.localFields.includes('priceUah');
+      const current = followsSource ? fresh(clinic?.priceListSyncedAt ?? null, now) : fresh(r.reviewedAt, now);
+      if (!current) return { state: 'UNKNOWN', amount: null };
+      return { state: r.priceUah === 0 ? 'FREE' : 'KNOWN', amount: r.priceUah };
+    };
+    const states = new Map(services.map((r) => [r.id, priceOf(r)]));
     let shown = services;
     let directions: string[] = [];
+    let partial = false;
     if (services.length > SERVICES_ALL) {
-      const stems = [...new Set((query.toLowerCase().match(/[\p{L}]{4,}/gu) ?? []).map((w) => w.slice(0, 5)))];
-      const score = (r: (typeof services)[number]) => stems.filter((st) => `${r.title} ${r.category ?? ''}`.toLowerCase().includes(st)).length;
-      shown = services.map((r) => ({ r, n: score(r) })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n).slice(0, SERVICES_SHOWN).map((x) => x.r);
+      // The search runs over the WHOLE list (not only what fits in the prompt): by the stems of the patient's words (Russian and Ukrainian
+      // spellings folded together), and by shorter stems when nothing matched
+      partial = true;
+      const hay = services.map((r) => ({ r, h: stemsOf(`${r.title} ${r.category ?? ''}`, 8).join(' ') }));
+      const pick = (n: number) => {
+        const stems = stemsOf(query, n);
+        return hay.map((x) => ({ r: x.r, n: stems.filter((st) => x.h.includes(st)).length })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n).slice(0, SERVICES_SHOWN).map((x) => x.r);
+      };
+      shown = pick(5);
+      if (!shown.length) shown = pick(4);
       directions = [...new Set(services.map((r) => r.category).filter((c): c is string => !!c))].slice(0, 40);
     }
     const allowed = new Set<number>();
+    const priced: KbFacts['priced'] = [];
     const sections: Record<KbKind, string[]> = { SERVICE: [], DOCTOR: [], LOCATION: [], FAQ: [] };
     for (const r of shown) {
-      // the old price is not told as current while Cliniccards has another one that the administrator has not decided about
-      const price = r.priceUah !== null && fresh(r.reviewedAt, now) && !priceDivergent(r) ? r.priceUah : null;
-      if (price !== null) allowed.add(price);
-      sections.SERVICE.push(`- ${r.title}${r.category ? ` (група: ${r.category})` : ''}${r.durationMin ? `; тривалість ${r.durationMin} хв` : ''}${price === 0 ? '; безкоштовно (ціна 0 грн)' : price !== null ? `; ціна ${price} грн` : '; ціна: не називати, передати адміністратору'}${r.text ? `; ${r.text.replace(/\s*\n\s*/g, ' ')}` : ''}`);
+      const p = states.get(r.id)!;
+      if (p.amount !== null && p.state !== 'FREE') allowed.add(p.amount);
+      if (p.state === 'FREE') allowed.add(0);
+      if (p.amount !== null) priced.push({ title: r.title, category: r.category, amount: p.amount });
+      const price =
+        p.state === 'FREE'
+          ? '; безкоштовно (ціна 0 грн)'
+          : p.amount !== null
+            ? `; ціна ${p.amount} грн (фіксована)`
+            : p.state === 'GONE'
+              ? '; ціна: не називати, цієї позиції вже немає в актуальному прайсі, вартість треба уточнити в адміністратора'
+              : p.state === 'CONFLICT'
+                ? '; ціна: не називати, дані про ціну суперечливі, вартість треба уточнити в адміністратора'
+                : '; ціна: не називати, вона невідома, вартість треба уточнити в адміністратора';
+      sections.SERVICE.push(`- ${r.title}${r.category ? ` (група: ${r.category})` : ''}${r.durationMin ? `; тривалість ${r.durationMin} хв` : ''}${price}${r.text ? `; ${r.text.replace(/\s*\n\s*/g, ' ')}` : ''}`);
     }
     for (const r of rows) {
       const kind = r.kind as KbKind;
@@ -261,11 +315,16 @@ export class KbService {
     }
     const parts: string[] = [];
     const add = (head: string, lines: string[]) => lines.length && parts.push(`${head}\n${lines.join('\n')}`);
-    if (directions.length) parts.push(`НАПРЯМКИ ПОСЛУГ КЛІНІКИ (повний прайс не наведено; конкретні послуги нижче лише ті, що стосуються питання): ${directions.join(', ')}`);
+    if (partial) {
+      parts.push(
+        `НАПРЯМКИ ПОСЛУГ КЛІНІКИ: ${directions.join(', ')}\nПрайс клініки великий (${services.length} позицій), нижче лише ті послуги, що найближче до слів пацієнта. ${shown.length ? 'Відсутність послуги в цьому списку НЕ означає, що її немає в клініці: не стверджуй, що такої послуги нема, а якщо потрібної немає серед наведених, попроси уточнити назву.' : 'Точного збігу за словами пацієнта не знайдено: не стверджуй, що такої послуги немає, і не називай жодної ціни; попроси уточнити назву послуги або скажи, що вартість уточнить адміністратор.'}`,
+      );
+    }
     add('ПОСЛУГИ:', sections.SERVICE);
     add('ЛІКАРІ:', sections.DOCTOR);
     add('АДРЕСИ ТА КОНТАКТИ:', sections.LOCATION);
     add('ЧАСТІ ПИТАННЯ:', sections.FAQ);
-    return { text: parts.join('\n\n').slice(0, PROMPT_BUDGET), allowedAmounts: [...allowed], pricesKnown: [...allowed].length > 0 || services.some((r) => r.priceUah !== null && fresh(r.reviewedAt, now) && !priceDivergent(r)) };
+    // pricesKnown: the clinic has a service list, so a question about a price goes to the model (it names a known price or says it is to be clarified)
+    return { text: parts.join('\n\n').slice(0, PROMPT_BUDGET), allowedAmounts: [...allowed], priced, pricesKnown: services.length > 0 };
   }
 }

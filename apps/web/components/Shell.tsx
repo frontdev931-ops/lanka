@@ -41,7 +41,7 @@ const NAV: (NavItem | { sep: true })[] = [
 // Only for the owner of the service (see PLATFORM_ADMIN_EMAILS)
 const PLATFORM_ITEM: NavItem = { href: '/platform', label: 'nav.platform', icon: 'chart' };
 
-// Нижняя панель на телефоне: главное под большим пальцем, остальное под «Ещё»
+// The bottom bar on a phone: the main things under the thumb, the rest under "More"
 const TABS: NavItem[] = [
   { href: '/dashboard', label: 'nav.home', icon: 'home' },
   { href: '/patients', label: 'nav.patients', icon: 'users' },
@@ -64,8 +64,8 @@ interface Me {
   billing?: { status: string; plan: string; paidUntil: string | null; graceDays: number; demo: boolean; blocked: boolean };
 }
 
-// На узких экранах таблицы превращаются в карточки: подпись каждой ячейки берётся из заголовка колонки.
-// Делаем это одним наблюдателем, чтобы любая таблица (в том числе будущая) работала на телефоне без доработок.
+// On narrow screens tables turn into cards: each cell's label comes from the column header.
+// We do it with one observer, so that any table (including a future one) works on a phone without extra work.
 function useStackedTables() {
   useEffect(() => {
     let frame = 0;
@@ -102,7 +102,7 @@ export default function Shell({ children }: { children: ReactNode }) {
   const [newRequests, setNewRequests] = useState(0);
   useStackedTables();
 
-  // Сессия хранится в httpOnly-cookie: единственный способ узнать, вошёл ли пользователь, — спросить сервер
+  // The session is stored in an httpOnly cookie: the only way to know whether the user is signed in is to ask the server
   useEffect(() => {
     api<Me>('/auth/me')
       .then(setMe)
@@ -111,7 +111,7 @@ export default function Shell({ children }: { children: ReactNode }) {
       });
   }, [router]);
 
-  // Страница интеграций сообщает, что загрузка данных закончилась: логотип клиники мог измениться
+  // The integrations page reports that the data load is finished: the clinic's logo may have changed
   useEffect(() => {
     const refresh = () => {
       api<Me>('/auth/me').then(setMe).catch(() => {});
@@ -120,7 +120,7 @@ export default function Shell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('stomat:me-changed', refresh);
   }, []);
 
-  // Число новых заявок администратору (из переписки): показывается значком у пункта «Листування»; врачу раздел недоступен
+  // The number of new requests to the administrator (from conversations): shown as a badge on the "Messages" item; the section is unavailable to a doctor
   useEffect(() => {
     if (!me || me.role === 'DOCTOR') return;
     const load = () => api<{ newCount: number }>('/requests?status=NEW').then((r) => setNewRequests(r.newCount)).catch(() => {});

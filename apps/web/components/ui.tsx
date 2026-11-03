@@ -78,7 +78,7 @@ export function Badge({ tone = 'gray', children }: { tone?: Tone; children: Reac
   return <span className={`badge ${tone === 'gray' ? '' : tone}`}>{children}</span>;
 }
 
-// Цвет бейджа по статусу записи в Cliniccards
+// Badge colour by the appointment status in Cliniccards
 export function statusTone(status: string): Tone {
   switch (status) {
     case 'VISITED':

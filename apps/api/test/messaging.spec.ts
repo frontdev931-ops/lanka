@@ -13,7 +13,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 
 jest.setTimeout(60_000);
 
-// Поддельный Telegram: ничего не уходит в интернет, все отправки записываются
+// A fake Telegram: nothing goes to the internet, every send is recorded
 class FakeTelegram {
   sent: { token: string; chatId: string; text: string; extra?: Record<string, unknown> }[] = [];
   blocked = new Set<string>();
@@ -70,7 +70,7 @@ async function clinic() {
   const clinicId = (await prisma.user.findUniqueOrThrow({ where: { email }, include: { memberships: true } })).memberships[0].clinicId;
   // features of the Pro plan are on by default in these tests; the plan rules have their own tests
   await prisma.clinic.update({ where: { id: clinicId }, data: { plan: 'PRO' } });
-  // в тестах отправка включена; выключенный предохранитель проверяется отдельно
+  // sending is on in tests; the switched-off safety is checked separately
   await prisma.clinic.update({ where: { id: clinicId }, data: { sendingEnabled: true } });
   return { token: res.body.accessToken as string, clinicId };
 }
@@ -82,7 +82,7 @@ async function member(ownerToken: string, role: string) {
 
 const hours = (h: number) => new Date(Date.now() + h * 3_600_000);
 
-// Пациент с подключённым Telegram и записью на прием через `h` часов, созданной заранее
+// A patient with Telegram connected and an appointment in `h` hours, created in advance
 async function patientWithVisit(clinicId: string, h = 20, over: Record<string, unknown> = {}) {
   const p = await prisma.patient.create({ data: { clinicId, externalId: `p${rnd()}`, fullName: 'Козир Галина Анатоліївна', phone: '0501112233', phoneNorm: `3805${Math.floor(Math.random() * 1e7)}`, ...over } });
   await prisma.patientChannel.create({ data: { clinicId, patientId: p.id, channel: 'TELEGRAM', externalId: `chat-${rnd()}` } });
@@ -131,27 +131,27 @@ describe('привязка пациента к Telegram', () => {
     expect(await prisma.patientChannel.findUnique({ where: { patientId_channel: { patientId: p.id, channel: 'TELEGRAM' } } })).toMatchObject({ externalId: '555' });
     expect(tg.sent.at(-1)!.text).toContain('Готово');
 
-    // ссылка одноразовая: другой человек по ней не привяжется
+    // the link is single-use: another person cannot link through it
     await telegram.handleUpdate(clinicId, TOKEN, update(777, `/start ${t}`));
     expect((await prisma.patientChannel.findUnique({ where: { patientId_channel: { patientId: p.id, channel: 'TELEGRAM' } } }))!.externalId).toBe('555');
     expect(tg.sent.at(-1)!.text).toContain('недійсне');
-    // в базе лежит только хэш
+    // only the hash is stored in the database
     expect(await prisma.channelLink.count({ where: { clinicId, tokenHash: t } })).toBe(0);
   });
 
   it('по номеру: только собственный контакт, найденный по телефону; чужой номер и неизвестный не привязываются', async () => {
     const { clinicId } = await connected();
     const p = await prisma.patient.create({ data: { clinicId, externalId: `p${rnd()}`, fullName: 'Петренко Олена', phoneNorm: '380509998877' } });
-    await telegram.handleUpdate(clinicId, TOKEN, update(10, '/start')); // просьба поделиться номером
+    await telegram.handleUpdate(clinicId, TOKEN, update(10, '/start')); // a request to share the number
     expect(tg.sent.at(-1)!.extra).toMatchObject({ reply_markup: { keyboard: [[{ request_contact: true }]] } });
 
-    await telegram.handleUpdate(clinicId, TOKEN, update(11, undefined, { phone_number: '+380509998877', user_id: 99 })); // чужой контакт
+    await telegram.handleUpdate(clinicId, TOKEN, update(11, undefined, { phone_number: '+380509998877', user_id: 99 })); // someone else's contact
     expect(await prisma.patientChannel.count({ where: { patientId: p.id } })).toBe(0);
-    await telegram.handleUpdate(clinicId, TOKEN, update(12, undefined, { phone_number: '+380670000000', user_id: 12 })); // неизвестный номер
+    await telegram.handleUpdate(clinicId, TOKEN, update(12, undefined, { phone_number: '+380670000000', user_id: 12 })); // unknown number
     expect(await prisma.patientChannel.count({ where: { patientId: p.id } })).toBe(0);
     expect(tg.sent.at(-1)!.text).toContain('Не знайшли');
 
-    await telegram.handleUpdate(clinicId, TOKEN, update(13, undefined, { phone_number: '+38 (050) 999-88-77', user_id: 13 })); // свой номер, другая запись
+    await telegram.handleUpdate(clinicId, TOKEN, update(13, undefined, { phone_number: '+38 (050) 999-88-77', user_id: 13 })); // own number, another entry
     expect((await prisma.patientChannel.findUniqueOrThrow({ where: { patientId_channel: { patientId: p.id, channel: 'TELEGRAM' } } })).externalId).toBe('13');
   });
 
@@ -164,11 +164,11 @@ describe('привязка пациента к Telegram', () => {
     expect((await prisma.patientChannel.findUniqueOrThrow({ where: { patientId_channel: { patientId: p.id, channel: 'TELEGRAM' } } })).optedOutAt).toBeTruthy();
 
     const link = (await http().post(`/automations/patients/${p.id}/telegram-link`).set(auth(a.token)).expect(201)).body.url as string;
-    await telegram.handleUpdate(b.clinicId, TOKEN, update(888, `/start ${link.split('start=')[1]}`)); // токен чужой клиники
+    await telegram.handleUpdate(b.clinicId, TOKEN, update(888, `/start ${link.split('start=')[1]}`)); // a token of another clinic
     expect(await prisma.patientChannel.count({ where: { clinicId: b.clinicId } })).toBe(0);
-    await http().post(`/automations/patients/${p.id}/telegram-link`).set(auth(b.token)).expect(404); // карточка чужой клиники
+    await http().post(`/automations/patients/${p.id}/telegram-link`).set(auth(b.token)).expect(404); // a card of another clinic
 
-    // вебхук: неверный секрет, неверный заголовок — ничего не происходит; верные — обрабатывается
+    // webhook: a wrong secret, a wrong header: nothing happens; the right ones: it is processed
     const secret = ((await prisma.integration.findFirstOrThrow({ where: { clinicId: a.clinicId, provider: 'TELEGRAM' } })).config as { secret: string }).secret;
     const lines = { update_id: 2, message: { chat: { id: 444 }, from: { id: 444 }, text: `/start ${(await http().post(`/automations/patients/${p.id}/telegram-link`).set(auth(a.token)).expect(201)).body.url.split('start=')[1]}` } };
     await http().post('/telegram/webhook/wrong').set('x-telegram-bot-api-secret-token', 'wrong').send(lines).expect(200);
@@ -183,17 +183,17 @@ describe('сценарии: кому и что ставится в очеред�
   it('напоминание о записи: выключено по умолчанию; после включения создаётся один раз, текст без медицины', async () => {
     const { token, clinicId } = await clinic();
     const { p, v } = await patientWithVisit(clinicId);
-    expect(await planner.plan(clinicId, { dryRun: false })).toEqual([]); // сценарии выключены
+    expect(await planner.plan(clinicId, { dryRun: false })).toEqual([]); // scenarios are off
     const pre = (await http().get('/automations/preview').set(auth(token)).expect(200)).body as { key: string; toQueue: number }[];
-    expect(pre.find((r) => r.key === 'visit-reminder')!.toQueue).toBe(1); // предпросмотр показывает, что будет
-    expect(await prisma.outboundMessage.count({ where: { clinicId } })).toBe(0); // но ничего не создаёт
+    expect(pre.find((r) => r.key === 'visit-reminder')!.toQueue).toBe(1); // the preview shows what will happen
+    expect(await prisma.outboundMessage.count({ where: { clinicId } })).toBe(0); // but creates nothing
 
     await http().patch('/automations/rules/visit-reminder').set(auth(token)).send({ enabled: true }).expect(200);
     const r1 = await planner.plan(clinicId, { dryRun: false });
     expect(r1[0]).toMatchObject({ key: 'visit-reminder', candidates: 1, toQueue: 1, alreadyQueued: 0 });
     const m = await prisma.outboundMessage.findFirstOrThrow({ where: { clinicId, patientId: p.id } });
     expect(m).toMatchObject({ status: 'PENDING_APPROVAL', channel: 'TELEGRAM', visitId: v.id });
-    expect(m.text).toContain('Галина'); // обращение по имени, а не по фамилии
+    expect(m.text).toContain('Галина'); // addressed by the first name, not by the surname
     expect(m.text).toMatch(/\d\d\.\d\d о \d\d:\d\d/);
     expect(m.text).not.toMatch(/\{|\}/);
     expect(m.expiresAt!.getTime()).toBe(v.startsAt.getTime());
@@ -206,11 +206,11 @@ describe('сценарии: кому и что ставится в очеред�
   it('не создаёт напоминание тем, кто записался позже момента напоминания, и по отменённым или далёким записям', async () => {
     const { token, clinicId } = await clinic();
     await http().patch('/automations/rules/visit-reminder').set(auth(token)).send({ enabled: true }).expect(200);
-    const lateBooked = await patientWithVisit(clinicId, 10); // запись через 10 часов...
-    await prisma.visit.update({ where: { id: lateBooked.v.id }, data: { bookedAt: hours(-1) } }); // ...оформлена час назад: напоминание за 24 часа не нужно
+    const lateBooked = await patientWithVisit(clinicId, 10); // an appointment in 10 hours...
+    await prisma.visit.update({ where: { id: lateBooked.v.id }, data: { bookedAt: hours(-1) } }); // ...made an hour ago: a 24-hour reminder is not needed
     const cancelled = await patientWithVisit(clinicId, 12);
     await prisma.visit.update({ where: { id: cancelled.v.id }, data: { status: 'CANCELLED' } });
-    const far = await patientWithVisit(clinicId, 60); // через 60 часов: рано
+    const far = await patientWithVisit(clinicId, 60); // in 60 hours: too early
     const r = await planner.plan(clinicId, { dryRun: false });
     expect(r[0].toQueue).toBe(0);
     expect(far.p.id).toBeTruthy();
@@ -222,13 +222,13 @@ describe('сценарии: кому и что ставится в очеред�
     await http().patch('/automations/rules/visit-reminder').set(auth(token)).send({ enabled: true }).expect(200);
     await http().patch('/automations/rules/hygiene-recall').set(auth(token)).send({ enabled: true, params: { months: 6 } }).expect(200);
 
-    const fine = await patientWithVisit(clinicId, 20); // обычный пациент: ему служебное напоминание положено
+    const fine = await patientWithVisit(clinicId, 20); // an ordinary patient: they are due the service reminder
     const withdrawn = await patientWithVisit(clinicId, 20, { consent: 'WITHDRAWN' });
     const paused = await patientWithVisit(clinicId, 20, { automationPaused: true });
     const noChannel = await prisma.patient.create({ data: { clinicId, externalId: `p${rnd()}`, fullName: 'Без Каналу' } });
     await prisma.visit.create({ data: { clinicId, patientId: noChannel.id, externalId: `v${rnd()}`, startsAt: hours(20), endsAt: hours(21), status: 'PLANNED', bookedAt: hours(-72) } });
 
-    // гигиена 6 месяцев назад (срок наступил на этой неделе): один с согласием, один без
+    // hygiene 6 months ago (the due date came this week): one with consent, one without
     const dueAt = new Date(Date.now() - 6 * 30 * 86_400_000 - 5 * 86_400_000);
     const hyg = async (name: string, consent: 'GIVEN' | 'UNKNOWN') => {
       const p = await prisma.patient.create({ data: { clinicId, externalId: `p${rnd()}`, fullName: name, consent } });
@@ -241,7 +241,7 @@ describe('сценарии: кому и что ставится в очеред�
 
     const r = await planner.plan(clinicId, { dryRun: false });
     const rem = r.find((x) => x.key === 'visit-reminder')!;
-    expect(rem).toMatchObject({ candidates: 4, toQueue: 1, paused: 2, noChannel: 1 }); // отказавшийся и приостановленный = 2
+    expect(rem).toMatchObject({ candidates: 4, toQueue: 1, paused: 2, noChannel: 1 }); // opted out and paused = 2
     const hy = r.find((x) => x.key === 'hygiene-recall')!;
     expect(hy).toMatchObject({ candidates: 2, toQueue: 1, blockedConsent: 1 });
     const queued = await prisma.outboundMessage.findMany({ where: { clinicId }, select: { patientId: true, ruleKey: true } });
@@ -283,7 +283,7 @@ describe('подтверждение и отправка', () => {
     const ch = await prisma.patientChannel.findUniqueOrThrow({ where: { patientId_channel: { patientId: x.p.id, channel: 'TELEGRAM' } } });
     const noon = localToUtc(`${clinicDate(new Date())} 12:00:00`);
     const night = localToUtc(`${clinicDate(new Date())} 23:30:00`);
-    // сообщение «давно созданное», чтобы момент отправки зависел только от переданного времени
+    // a message "created long ago", so that the send moment depends only on the time passed in
     await prisma.outboundMessage.update({ where: { id: msg.id }, data: { scheduledFor: new Date(0), expiresAt: hours(24 * 5) } });
     return { ...c, ...x, msg, ch, noon, night };
   }
@@ -329,15 +329,15 @@ describe('подтверждение и отправка', () => {
     await prisma.outboundMessage.create({ data: { clinicId: q.clinicId, patientId: p2.id, ruleKey: 'post-visit-thanks', channel: 'TELEGRAM', text: 'Дякуємо', status: 'APPROVED', scheduledFor: new Date(0), expiresAt: hours(24 * 5), dedupeKey: `lim${rnd()}` } });
     await http().post('/messages/approve').set(auth(q.token)).send({ all: true }).expect(200);
     expect(await outbox.process(q.noon)).toMatchObject({ sent: 1 });
-    expect(await prisma.outboundMessage.count({ where: { clinicId: q.clinicId, status: 'APPROVED' } })).toBe(1); // второе ждёт
+    expect(await prisma.outboundMessage.count({ where: { clinicId: q.clinicId, status: 'APPROVED' } })).toBe(1); // the second one waits
     expect((await outbox.process(q.noon)).sent).toBe(0);
-    // новый лимит: ожидавшее уходит
+    // a new limit: the waiting one goes out
     await prisma.clinic.update({ where: { id: q.clinicId }, data: { limitOverrides: { messagesPerMonth: 5 } } });
     expect((await outbox.process(q.noon)).sent).toBe(1);
 
     const s = await queued();
     await prisma.clinic.update({ where: { id: s.clinicId }, data: { sendingEnabled: true, suspendedAt: new Date() } });
-    await http().post('/messages/approve').set(auth(s.token)).send({ all: true }).expect(403); // клиника приостановлена
+    await http().post('/messages/approve').set(auth(s.token)).send({ all: true }).expect(403); // the clinic is suspended
     await prisma.outboundMessage.updateMany({ where: { clinicId: s.clinicId }, data: { status: 'APPROVED' } });
     tg.sent.length = 0;
     expect((await outbox.process(s.noon)).sent).toBe(0);
@@ -347,7 +347,7 @@ describe('подтверждение и отправка', () => {
   it('ночью не отправляется; запись отменили, пациент отказался, бот заблокирован: сообщение не уходит', async () => {
     const q = await queued();
     await http().post('/messages/approve').set(auth(q.token)).send({ all: true }).expect(200);
-    expect((await outbox.process(q.night)).sent).toBe(0); // ночное окно
+    expect((await outbox.process(q.night)).sent).toBe(0); // night window
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { id: q.msg.id } })).status).toBe('APPROVED');
 
     await prisma.visit.update({ where: { id: q.v.id }, data: { status: 'CANCELLED' } });
@@ -371,7 +371,7 @@ describe('подтверждение и отправка', () => {
     expect((await prisma.patientChannel.findUniqueOrThrow({ where: { id: q2.ch.id } })).optedOutAt).toBeTruthy();
 
     const q3 = await queued();
-    await prisma.outboundMessage.update({ where: { id: q3.msg.id }, data: { expiresAt: new Date(q3.noon.getTime() - 1000) } }); // срок вышел до момента отправки
+    await prisma.outboundMessage.update({ where: { id: q3.msg.id }, data: { expiresAt: new Date(q3.noon.getTime() - 1000) } }); // the due date passed before the send moment
     await http().post('/messages/approve').set(auth(q3.token)).send({ all: true }).expect(200);
     await outbox.process(q3.noon);
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { id: q3.msg.id } })).status).toBe('EXPIRED');
@@ -494,7 +494,7 @@ describe('новые сценарии: благодарность, продол�
   it('благодарность после визита: один раз в день на пациента, только по состоявшемуся визиту', async () => {
     const { token, clinicId } = await clinic();
     await enable(token, 'post-visit-thanks');
-    const p = await person(clinicId, { consent: 'UNKNOWN' }); // служебное: согласие не нужно
+    const p = await person(clinicId, { consent: 'UNKNOWN' }); // service: consent is not needed
     const at = new Date(Date.now() - 24 * 3_600_000);
     await prisma.visit.create({ data: { clinicId, patientId: p.id, externalId: `v${rnd()}`, startsAt: at, endsAt: new Date(at.getTime() + 1800_000), status: 'VISITED' } });
     await prisma.visit.create({ data: { clinicId, patientId: p.id, externalId: `v${rnd()}`, startsAt: new Date(at.getTime() + 1000), endsAt: new Date(at.getTime() + 1900_000), status: 'VISITED' } });
@@ -534,7 +534,7 @@ describe('новые сценарии: благодарность, продол�
     expect((await rowsOf(clinicId, 'continue-treatment')).map((r) => r.patientId)).toEqual([open.id]);
     expect((await rowsOf(clinicId, 'lapsed')).map((r) => r.patientId)).toEqual([lapsed.id]);
     expect(tooOld.id).toBeTruthy();
-    // маркетинг ждёт подтверждения; повторный запуск ничего не добавляет
+    // marketing waits for confirmation; a repeated run adds nothing
     expect((await rowsOf(clinicId, 'lapsed'))[0].status).toBe('PENDING_APPROVAL');
     await planner.plan(clinicId, { dryRun: false });
     expect(await prisma.outboundMessage.count({ where: { clinicId } })).toBe(2);
@@ -551,11 +551,11 @@ describe('новые сценарии: благодарность, продол�
     expect((await rowsOf(clinicId, 'birthday')).map((r) => r.patientId)).toEqual([yes.id]);
     expect(other.id).toBeTruthy();
 
-    // «давно не были» этому же пациенту: сообщение уже было, но поздравление не считается в частоту
+    // "long absent" for the same patient: a message already existed, but a birthday greeting does not count towards the frequency
     await prisma.patient.update({ where: { id: yes.id }, data: { lastVisitAt: new Date(Date.now() - 185 * DAYMS) } });
     await planner.plan(clinicId, { dryRun: false });
     expect(await rowsOf(clinicId, 'lapsed')).toHaveLength(1);
-    // а вот второе маркетинговое подряд — нет
+    // but a second marketing message in a row does
     await http().patch('/automations/rules/continue-treatment').set(auth(token)).send({ enabled: true }).expect(200);
     await prisma.planItem.create({ data: { clinicId, patientId: yes.id, externalId: `i${rnd()}`, planId: 'plx', name: 'Л', status: 'DONE', groupName: 'Т', createdAtExt: new Date(), markedDoneAt: new Date() } });
     await prisma.planItem.create({ data: { clinicId, patientId: yes.id, externalId: `i${rnd()}`, planId: 'plx', name: 'Л2', status: 'NEW', groupName: 'Т', createdAtExt: new Date() } });
@@ -590,28 +590,28 @@ describe('своя рассылка (акция)', () => {
     const c = (await http().post('/campaigns').set(auth(q.token)).send({ name: 'Акція на гігієну', text: 'Привіт, {name}! Знижка 20% на гігієну до кінця місяця. Клініка «{clinic}».', filters: { monthsSinceVisitMin: 12 } }).expect(201)).body;
 
     const prev = (await http().get(`/campaigns/${c.id}/preview`).set(auth(q.token)).expect(200)).body;
-    expect(prev).toMatchObject({ matched: 4, noConsent: 1, paused: 1, noChannel: 1, toQueue: 1 }); // «Нещодавній Візит» отсеян фильтром
+    expect(prev).toMatchObject({ matched: 4, noConsent: 1, paused: 1, noChannel: 1, toQueue: 1 }); // "Recent Visit" is filtered out
     expect(prev.sample[0].text).toContain('Ірина');
-    expect(await prisma.outboundMessage.count({ where: { clinicId: q.clinicId } })).toBe(0); // предпросмотр ничего не создаёт
+    expect(await prisma.outboundMessage.count({ where: { clinicId: q.clinicId } })).toBe(0); // the preview creates nothing
 
     const queued = (await http().post(`/campaigns/${c.id}/queue`).set(auth(q.token)).expect(200)).body;
     expect(queued.toQueue).toBe(1);
-    await http().post(`/campaigns/${c.id}/queue`).set(auth(q.token)).expect(400); // второй раз нельзя
+    await http().post(`/campaigns/${c.id}/queue`).set(auth(q.token)).expect(400); // a second time is not allowed
     const msg = await prisma.outboundMessage.findFirstOrThrow({ where: { clinicId: q.clinicId } });
     expect(msg).toMatchObject({ patientId: q.ok.id, status: 'PENDING_APPROVAL', ruleKey: `campaign:${c.id}` });
 
-    // сам по себе не уходит
+    // does not go out by itself
     await prisma.outboundMessage.update({ where: { id: msg.id }, data: { scheduledFor: new Date(0) } });
     const noon = localToUtc(`${clinicDate(new Date())} 12:00:00`);
     expect((await outbox.process(noon)).sent).toBe(0);
-    // подтверждён, но пациент успел отозвать согласие: не уходит
+    // confirmed, but the patient managed to withdraw consent: it does not go out
     await http().post('/messages/approve').set(auth(q.token)).send({ all: true }).expect(200);
     await prisma.patient.update({ where: { id: q.ok.id }, data: { consent: 'UNKNOWN' } });
     await outbox.process(noon);
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { id: msg.id } })).status).toBe('CANCELLED');
     expect(tg.sent).toHaveLength(0);
 
-    // в журнале видно название рассылки
+    // the campaign name is visible in the log
     const list = (await http().get('/messages').set(auth(q.token)).expect(200)).body;
     expect(list.rows[0].campaignName).toBe('Акція на гігієну');
   });
@@ -635,7 +635,7 @@ describe('своя рассылка (акция)', () => {
     await http().post('/messages/approve').set(auth(q.token)).send({ all: true }).expect(200);
     const noon = localToUtc(`${clinicDate(new Date())} 12:00:00`);
     expect((await outbox.process(noon)).sent).toBe(2);
-    await http().delete(`/campaigns/${c.id}`).set(auth(q.token)).expect(404); // отправленную рассылку удалять нельзя
+    await http().delete(`/campaigns/${c.id}`).set(auth(q.token)).expect(404); // a sent campaign cannot be deleted
   });
 });
 
@@ -652,10 +652,10 @@ describe('результат сообщений для воронки', () => {
       prisma.visit.create({ data: { clinicId, patientId, externalId: `v${rnd()}`, startsAt: new Date(Date.now() + startsIn * DAYMS), endsAt: new Date(Date.now() + startsIn * DAYMS + 1800_000), status, bookedAt: ago(bookedDaysAgo) } });
 
     const camp = await prisma.campaign.create({ data: { clinicId, name: 'Акція', text: 'x', filters: {}, status: 'QUEUED' } });
-    const a = await mk('А'); // записался и пришёл, сообщение старое
-    const b = await mk('Б'); // не записался
-    const c = await mk('В'); // записался недавно, сообщение свежее, ответил боту
-    const d = await mk('Г'); // запись была ДО сообщения
+    const a = await mk('А'); // booked and came, the message is old
+    const b = await mk('Б'); // did not book
+    const c = await mk('В'); // booked recently, the message is fresh, replied to the bot
+    const d = await mk('Г'); // the appointment was BEFORE the message
     const e = await mk('Д'); // записался, но отменил
     for (const p of [a, b, d, e]) await send(p.id, `campaign:${camp.id}`, 20);
     await send(c.id, `campaign:${camp.id}`, 3);
@@ -665,7 +665,7 @@ describe('результат сообщений для воронки', () => {
     await visit(e.id, 'CANCELLED', 18);
     await prisma.chatMessage.create({ data: { clinicId, patientId: c.id, channel: 'TELEGRAM', chatId: 'cc', direction: 'IN', text: 'Дякую', createdAt: ago(2) } });
 
-    // напоминания о записи: исход самой записи
+    // appointment reminders: the outcome of the appointment itself
     const r1 = await visit(a.id, 'VISITED', 40, -5);
     const r2 = await visit(b.id, 'DID_NOT_COME', 40, -5);
     await send(a.id, 'visit-reminder', 6, r1.id);
@@ -678,7 +678,7 @@ describe('результат сообщений для воронки', () => {
     expect(rem).toMatchObject({ sent: 2, attendedVisit: 1, noShowVisit: 1, cancelledVisit: 0 });
     expect(res.attributionDays).toBe(14);
 
-    // врач не видит; чужая клиника не видит
+    // a doctor does not see it; another clinic does not see it
     const doctor = await member(token, 'DOCTOR');
     await http().get('/messages/results').set(auth(doctor)).expect(403);
     const other = await clinic();
@@ -702,19 +702,19 @@ describe('согласие на рекламные сообщения', () => {
     expect((await http().get(`/campaigns/${camp.id}/preview`).set(auth(q.token))).body).toMatchObject({ matched: 3, noConsent: 1, paused: 1, toQueue: 1 });
 
     const admin = await member(q.token, 'ADMIN');
-    await http().patch('/automations/settings').set(auth(admin)).send({ assumeConsent: true }).expect(403); // только владелец и управляющий
+    await http().patch('/automations/settings').set(auth(admin)).send({ assumeConsent: true }).expect(403); // only the owner and the manager
     expect((await http().patch('/automations/settings').set(auth(q.token)).send({ assumeConsent: true }).expect(200)).body.assumeConsent).toBe(true);
     expect(await prisma.auditLog.count({ where: { clinicId: q.clinicId, action: 'automation.settings' } })).toBe(1);
     expect((await http().get('/automations').set(auth(q.token))).body.settings.assumeConsent).toBe(true);
     expect((await http().get(`/campaigns/${camp.id}/preview`).set(auth(q.token))).body).toMatchObject({ matched: 3, noConsent: 0, paused: 1, toQueue: 2 });
 
-    // при отправке согласие перепроверяется с учётом настройки
+    // consent is re-checked at sending, taking the setting into account
     await http().post(`/campaigns/${camp.id}/queue`).set(auth(q.token)).expect(200);
     await prisma.outboundMessage.updateMany({ where: { clinicId: q.clinicId }, data: { scheduledFor: new Date(0) } });
     await http().post('/messages/approve').set(auth(q.token)).send({ all: true }).expect(200);
     await http().patch('/automations/settings').set(auth(q.token)).send({ assumeConsent: false }).expect(200);
     const noon = localToUtc(`${clinicDate(new Date())} 12:00:00`);
-    expect((await outbox.process(noon)).sent).toBe(1); // «Невідомо» больше не считается согласием, остался только «Згода»
+    expect((await outbox.process(noon)).sent).toBe(1); // "Unknown" no longer counts as consent, only "Consent" is left
     expect(tg.sent).toHaveLength(1);
   });
 });
@@ -743,13 +743,13 @@ describe('дайджест руководителю в Telegram', () => {
     const s = (await http().get('/digest').set(auth(c.token)).expect(200)).body;
     expect(s.recipients).toEqual([expect.objectContaining({ name: 'Ольга', lang: 'uk' })]);
 
-    // повторное использование и подделка
+    // reuse and forgery
     tg.sent.length = 0;
     await telegram.handleUpdate(c.clinicId, TOKEN, upd(9002, `/start owner_${url.split('owner_')[1]}`));
     expect(tg.sent.at(-1)!.text).toContain('недійсне');
     await telegram.handleUpdate(c.clinicId, TOKEN, upd(9002, '/start owner_fake'));
     expect((await http().get('/digest').set(auth(c.token))).body.recipients).toHaveLength(1);
-    // ссылка другой клиники в этой не сработает
+    // a link of another clinic will not work in this one
     const b = await ready();
     const urlB = (await http().post('/digest/link').set(auth(b.token)).expect(201)).body.url as string;
     await telegram.handleUpdate(c.clinicId, TOKEN, upd(9003, `/start owner_${urlB.split('owner_')[1]}`));
@@ -762,7 +762,7 @@ describe('дайджест руководителю в Telegram', () => {
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'MONTHLY' }).expect(400);
     await http().patch('/digest').set(auth(c.token)).send({ hour: 25 }).expect(400);
     expect((await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 8, weekday: 5 }).expect(200)).body).toMatchObject({ frequency: 'WEEKLY', hour: 8, weekday: 5 });
-    // сообщение получателя не считается обращением пациента
+    // the recipient's message does not count as a patient's inquiry
     const before = await prisma.chatMessage.count({ where: { clinicId: c.clinicId } });
     await telegram.handleUpdate(c.clinicId, TOKEN, upd(9001, 'привіт'));
     expect(await prisma.chatMessage.count({ where: { clinicId: c.clinicId } })).toBe(before);
@@ -782,9 +782,9 @@ describe('дайджест руководителю в Telegram', () => {
     await visit(p.id, 'VISITED', 3);
     await visit(p.id, 'DID_NOT_COME', 4);
     await visit(p.id, 'CANCELLED', 5);
-    await visit(old.id, 'VISITED', 9); // прошлая неделя
-    await visit(old.id, 'PLANNED', 20); // давно не закрыта
-    await visit(p.id, 'PLANNED', -2); // будущая
+    await visit(old.id, 'VISITED', 9); // last week
+    await visit(old.id, 'PLANNED', 20); // long not closed
+    await visit(p.id, 'PLANNED', -2); // future
     await prisma.payment.create({ data: { clinicId: c.clinicId, patientId: p.id, externalId: `pay${rnd()}`, paidAt: ago(2), amount: 12500 } });
     await prisma.payment.create({ data: { clinicId: c.clinicId, patientId: p.id, externalId: `pay${rnd()}`, paidAt: ago(10), amount: 4000 } });
     await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: 'x', kind: 'BOOKING', summary: 's', createdAt: ago(2) } });
@@ -825,15 +825,15 @@ describe('дайджест руководителю в Telegram', () => {
 
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 9, weekday: weekday === 7 ? 1 : weekday + 1 }).expect(200);
     await digest.tick(at('10:00'));
-    expect(tg.sent).toHaveLength(0); // не тот день недели
+    expect(tg.sent).toHaveLength(0); // not the right weekday
 
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 9, weekday }).expect(200);
     await digest.tick(at('08:00'));
-    expect(tg.sent).toHaveLength(0); // рано
+    expect(tg.sent).toHaveLength(0); // too early
     await digest.tick(at('10:00'));
     expect(tg.sent).toHaveLength(1);
     await digest.tick(at('10:05'));
-    expect(tg.sent).toHaveLength(1); // сегодня уже отправлялся
+    expect(tg.sent).toHaveLength(1); // already sent today
   });
 });
 
@@ -856,7 +856,7 @@ describe('отзывы и качество: оценка после визита
 
   it('просьба об оценке уходит через несколько часов после визита с кнопками 1-5, один раз', async () => {
     const q = await ready();
-    const fresh = await q.visit(0, 1); // час назад: рано
+    const fresh = await q.visit(0, 1); // an hour ago: too early
     expect((await planner.plan(q.clinicId, { dryRun: false })).find((r) => r.key === 'visit-review')).toMatchObject({ candidates: 0 });
     await prisma.visit.update({ where: { id: fresh.id }, data: { startsAt: ago(0, 5), endsAt: ago(0, 5) } });
     await planner.plan(q.clinicId, { dryRun: false });
@@ -882,7 +882,7 @@ describe('отзывы и качество: оценка после визита
     await telegram.handleUpdate(q.clinicId, TOKEN, cb(q.chat, `rate|${v.id}|5`));
     expect(tg.sent.at(-1)!.text).toContain('https://g.page/r/test/review');
     expect(await prisma.review.findUniqueOrThrow({ where: { visitId: v.id } })).toMatchObject({ rating: 5, doctorName: 'Лікар Перший', awaitingUntil: null });
-    expect(await prisma.bookingRequest.count({ where: { clinicId: q.clinicId } })).toBe(0); // хорошая оценка заявки не создаёт
+    expect(await prisma.bookingRequest.count({ where: { clinicId: q.clinicId } })).toBe(0); // a good rating creates no request
 
     // the same neutral invitation goes to a low rating too (never only to the satisfied), and the complaint flow still starts
     const low = await q.visit(2, 0, 'Лікар Третій');
@@ -898,7 +898,7 @@ describe('отзывы и качество: оценка после визита
     expect(await prisma.review.count({ where: { clinicId: q.clinicId } })).toBe(1);
     expect((await prisma.review.findUniqueOrThrow({ where: { visitId: v.id } })).rating).toBe(4);
 
-    // чужой чат и подделка
+    // another chat and forgery
     const other = await ready();
     await telegram.handleUpdate(other.clinicId, TOKEN, cb(other.chat, `rate|${v.id}|1`));
     await telegram.handleUpdate(q.clinicId, TOKEN, cb('424242', `rate|${v.id}|1`));
@@ -931,8 +931,8 @@ describe('отзывы и качество: оценка после визита
     const req = await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: q.clinicId, kind: 'REVIEW' } });
     expect(req.summary).toContain('Коментар');
     expect(await prisma.bookingRequest.count({ where: { clinicId: q.clinicId } })).toBe(1);
-    expect(await prisma.chatMessage.count({ where: { clinicId: q.clinicId, byAi: true } })).toBe(0); // ШІ не отвечал на жалобу
-    // следующее обычное сообщение уже не комментарий
+    expect(await prisma.chatMessage.count({ where: { clinicId: q.clinicId, byAi: true } })).toBe(0); // the AI did not answer the complaint
+    // the next ordinary message is no longer a comment
     tg.sent.length = 0;
     await telegram.handleUpdate(q.clinicId, TOKEN, msg(q.chat, 'А ще хочу записатися'));
     expect(tg.sent.every((s) => s.chatId !== '-777')).toBe(true);
@@ -965,7 +965,7 @@ describe('отзывы и качество: оценка после визита
     const other = await clinic();
     expect((await http().get('/reviews').set(auth(other.token))).body).toMatchObject({ count: 0, average: null });
 
-    // дайджест: оценки за прошлую неделю
+    // digest: ratings for last week
     const digest = app.get((await import('../src/automations/digest.service')).DigestService);
     const n = await digest.numbers(q.clinicId, 'WEEKLY');
     expect(n.reviews).toMatchObject({ count: 4, avg: 4, low: 1 });
@@ -1005,7 +1005,7 @@ describe('подтверждение записи кнопками и сообщ
     expect(kb.map((b) => b.callback_data)).toEqual([`confirm|${v.id}|y`, `confirm|${v.id}|m`]);
 
     tg.sent.length = 0;
-    await telegram.handleUpdate(q.clinicId, TOKEN, cb('424242', `confirm|${v.id}|y`)); // чужой чат
+    await telegram.handleUpdate(q.clinicId, TOKEN, cb('424242', `confirm|${v.id}|y`)); // another chat
     expect((await prisma.visit.findUniqueOrThrow({ where: { id: v.id } })).patientConfirmedAt).toBeNull();
     await telegram.handleUpdate(q.clinicId, TOKEN, cb(q.chat, `confirm|${v.id}|y`));
     expect((await prisma.visit.findUniqueOrThrow({ where: { id: v.id } })).patientConfirmedAt).toBeTruthy();
@@ -1018,7 +1018,7 @@ describe('подтверждение записи кнопками и сообщ
     const req = await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: q.clinicId, kind: 'RESCHEDULE' } });
     expect(req.summary).toContain('просить перенести');
     expect(tg.sent.find((s) => s.chatId === '-555')!.text).toContain('Перенесення');
-    // прошедшая запись больше не подтверждается
+    // a past appointment is no longer confirmed
     await prisma.visit.update({ where: { id: v.id }, data: { startsAt: new Date(Date.now() - 3_600_000), patientConfirmedAt: null } });
     await telegram.handleUpdate(q.clinicId, TOKEN, cb(q.chat, `confirm|${v.id}|y`));
     expect((await prisma.visit.findUniqueOrThrow({ where: { id: v.id } })).patientConfirmedAt).toBeNull();
@@ -1033,7 +1033,7 @@ describe('подтверждение записи кнопками и сообщ
     await prisma.patientChannel.create({ data: { clinicId: q.clinicId, patientId: booked.id, channel: 'TELEGRAM', externalId: `c${rnd()}` } });
     await mkVisit(booked.id, 'MOVED', 2);
     await prisma.visit.create({ data: { clinicId: q.clinicId, patientId: booked.id, externalId: `v${rnd()}`, startsAt: new Date(Date.now() + 3 * DAYMS), status: 'PLANNED' } });
-    await mkVisit(q.p.id, 'CANCELLED', 10); // слишком давно
+    await mkVisit(q.p.id, 'CANCELLED', 10); // too long ago
     await planner.plan(q.clinicId, { dryRun: false });
     await planner.plan(q.clinicId, { dryRun: false });
     const rows = await prisma.outboundMessage.findMany({ where: { clinicId: q.clinicId, ruleKey: 'cancel-followup' } });

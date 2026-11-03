@@ -9,7 +9,7 @@ import { AiService } from './ai.service';
 import { contactReply, formatHours } from './contacts';
 import { ChoiceButton, Decision, DoctorChoiceService, RequestPatch } from '../booking/doctor-choice.service';
 import { DENTAL_GLOSSARY, URGENT_TEXT, expandForSearch } from './dental';
-import { HandoffReason, handoffText, incomingHandoff, isUrgentSymptom, languageOf, parseModelJson, replyViolates, timesOutsideWindows } from './guardrails';
+import { HandoffReason, handoffText, incomingHandoff, isUrgentSymptom, languageOf, parseModelJson, replyViolates, timesOutsideWindows, withPriceNotice } from './guardrails';
 
 const HISTORY = 8;
 
@@ -35,14 +35,21 @@ ${facts}
 
 ${hours ? `Графік роботи клініки: ${hours}.` : 'Графік роботи тобі не відомий.'}
 ${contacts ? `КОНТАКТИ КЛІНІКИ (їх вказала сама клініка, їх можна називати): ${contacts}.` : ''}
-${kb.text ? `ДОВІДКА КЛІНІКИ (затверджена клінікою; тільки з неї можна називати послуги, тривалість, ціни, лікарів, адреси та відповіді на часті питання):\n${kb.text}\n\nПравила довідки: ціну називай ЛИШЕ якщо вона вказана в рядку послуги, дослівно в гривнях, без округлення, без знижок і без підсумків за кілька послуг. Якщо послуги немає в довідці, ціна не вказана або питання виходить за довідку, intent "handoff". Те, чого немає в довідці (адреса, телефон, лікарі), ти не знаєш.` : 'Адреси, телефону, цін і складу лікарів ти не знаєш.'}
+${kb.text ? `ДОВІДКА КЛІНІКИ (дані цієї клініки; тільки з неї можна називати послуги, тривалість, ціни, склад послуги, лікарів, адреси та відповіді на часті питання):\n${kb.text}\n\nПравила цін і послуг:
+- Назви послуг, ціни й склад послуги бери ЛИШЕ з довідки. Нічого не вигадуй, не додавай «від», коли в довідці фіксована ціна. Одиницю розрахунку (за зуб, за візит тощо) називай лише якщо вона є в тексті послуги.
+- Ціну називай дослівно в гривнях, без округлення, без знижок. ПРИ КОЖНІЙ відповіді з ціною додай окремим реченням, що вартість попередня й що точну суму та що входить у послугу уточнить адміністратор. Наприклад: «За актуальним прайсом клініки професійна гігієна коштує 1 500 грн. Вартість попередня — точну суму та що входить у послугу уточнить адміністратор».
+- Якщо під запит підходить кілька різних послуг, уточни, яка саме потрібна, або покажи варіанти з їхніми групами й поясненнями. Ніколи не обирай довільно найдешевшу.
+- Якщо в рядку послуги «ціна: не називати» (невідома, позиції вже немає в прайсі, дані суперечливі), не називай жодної суми, не підставляй стару ціну чи нуль, а скажи, що вартість цієї послуги потрібно уточнити в адміністратора клініки. Не пиши, що передав запит чи що адміністратор зв’яжеться: це не відбулося.
+- Не складай вартість лікування з окремих позицій і не рахуй підсумків: склад послуги підтверджує лише адміністратор.
+- Повідомлення про попередню ціну не завершує розмову: далі допомагай із записом.
+- Послуги, якої немає в довідці, ти не знаєш: скажи, що це уточнить адміністратор. Те, чого немає в довідці (адреса, телефон, лікарі), ти не знаєш.` : 'Адреси, телефону, цін і складу лікарів ти не знаєш.'}
 
 ${DENTAL_GLOSSARY}
 
 СУВОРІ ПРАВИЛА:
 - Гострий біль, набряк, флюс, кровотеча чи травма зуба до тебе не доходять: їх обробляє код. Якщо все ж таке з’явилося, intent "handoff".
 - Ніколи не давай медичних порад, діагнозів, оцінки симптомів, рекомендацій щодо ліків чи догляду. Не називай цін і сум, окрім цін із довідки клініки.
-- Якщо пацієнт питає про здоров’я, біль, ліки, ціни, скаржиться або просить те, чого ти не знаєш, — intent "handoff".
+- Якщо пацієнт питає про здоров’я, біль, ліки, знижки чи розстрочку, скаржиться або просить те, чого ти не знаєш, — intent "handoff". Питання про ціни послуг — це НЕ handoff: відповідай за правилами цін (intent "info").
 - Не відповідай на сторонні теми (політика, загальні знання, жарти, програмування тощо): ввічливо скажи, що допомагаєш лише із записом до клініки, і поверни розмову до запису.
 - Якщо пацієнт питає про свою історію (чи були в нас, коли була чистка, чи пора на чистку, чи є запис), відповідай ЛИШЕ за фактами вище, словами «за нашими даними». Якщо фактів немає або пацієнта не ідентифіковано, не вгадуй: попроси підказати приблизно коли це було й напиши, що адміністратор уточнить. Не кажи, що пацієнтові «потрібно» чи «обов’язково» щось робити з медичного погляду: можна лише сказати, що з моменту останньої гігієни минуло стільки-то місяців, що клініка нагадує про гігієну раз на N місяців, і запропонувати запис.
 - Не вигадуй фактів. Чого не знаєш — передай адміністратору.
@@ -67,7 +74,7 @@ export interface SlotOption {
   date: string;
   time: string;
   label: string;
-  // Если пациент выбирает врача (в клиниках со сменами врачей)
+  // When the patient chooses a doctor (in clinics with doctor shifts)
   doctor?: string;
   // The doctor of the time as an id in Cliniccards (the button carries the id, not the name)
   doctorId?: string;
@@ -91,11 +98,11 @@ export interface Draft {
   reply: string;
   handoff: boolean;
   reason: HandoffReason | null;
-  // Коротко для администратора: чего хочет пациент
+  // Short note for the administrator: what the patient wants
   summary: string | null;
   // The service the person wants (shown to the administrator and used for the length of the visit)
   service: string | null;
-  // Варианты времени (проверены по расписанию): в Telegram показываются кнопками
+  // Time options (checked against the schedule): shown as buttons in Telegram
   options: SlotOption[];
   // What the doctor choice saved about the request (the doctor, why him, the state of the dialogue); written by the caller
   requestPatch?: RequestPatch;
@@ -113,7 +120,7 @@ export class ChatAssistantService {
     private choice: DoctorChoiceService,
   ) {}
 
-  // Готовит черновик ответа для сотрудника. Сам ничего не отправляет.
+  // Prepares a draft reply for the staff. Sends nothing itself.
   async draft(clinicId: string, channel: string, chatId: string): Promise<Draft> {
     const rows = await this.prisma.chatMessage.findMany({ where: { clinicId, channel, chatId }, orderBy: { createdAt: 'desc' }, take: HISTORY });
     if (!rows.length) throw new NotFoundException('conversation_not_found');
@@ -127,12 +134,12 @@ export class ChatAssistantService {
     const openRequest = await this.prisma.bookingRequest.findFirst({ where: { clinicId, channel, chatId, status: 'NEW', kind: { in: ['BOOKING', 'RESCHEDULE'] } }, orderBy: { createdAt: 'desc' } });
     const patientTexts = msgs.filter((m) => m.direction === 'IN').map((m) => m.text).reverse();
 
-    // До модели доходят только безопасные сообщения: опасная тема или затянувшийся диалог сразу уходят человеку
+    // Only safe messages reach the model: a dangerous topic or a long-running dialogue goes to a person at once
     const today = await this.prisma.chatMessage.count({ where: { clinicId, channel, chatId, direction: 'IN', createdAt: { gt: new Date(Date.now() - 86_400_000) } } });
     // A very long day-long conversation goes to a person; the limit is the clinic's per-chat limit (the same number as for the AI's own replies)
     const cap = (await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { aiRepliesPerChatDay: true } }))?.aiRepliesPerChatDay ?? 20;
     if (today > cap) return handoff('long', lang);
-    // Опасную тему ищем только в последнем сообщении: прежние уже получили свой ответ или передачу человеку
+    // A dangerous topic is looked for only in the last message: earlier ones already got their reply or a hand-over to a person
     const patientWords = msgs.filter((m) => m.direction === 'IN').slice(-3).map((m) => m.text).join(' ');
     const kbFacts = await this.kb.factsFor(clinicId, new Date(), `${patientWords} ${expandForSearch(patientWords)}`);
     // A sudden problem (acute pain, a swelling, bleeding, a broken tooth): no model, no advice; the nearest time and an urgent mark for the staff
@@ -140,7 +147,7 @@ export class ChatAssistantService {
     const topic = incomingHandoff(last.text, kbFacts.pricesKnown);
     if (topic) return handoff(topic, lang);
 
-    // Для модели: чередующиеся реплики, начиная с пациента. Имя и телефон пациента наружу не передаются.
+    // For the model: alternating turns, starting with the patient. The patient's name and phone are never passed out.
     const turns: { role: 'user' | 'assistant'; content: string }[] = [];
     for (const m of msgs) {
       const role = m.direction === 'IN' ? 'user' : 'assistant';
@@ -150,7 +157,7 @@ export class ChatAssistantService {
     }
 
     const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { name: true, workHours: true, publicAddress: true, publicPhone: true, publicDirections: true } });
-    // Часы работы называем, только если клиника сама их настроила: «по умолчанию» могут быть неправдой
+    // Working hours are named only if the clinic set them itself: the defaults may be untrue
     const configured = clinic.workHours && typeof clinic.workHours === 'object' && Object.keys(clinic.workHours as object).length > 0;
     const hours = configured ? formatHours(readWorkHours(clinic.workHours), 'uk') : null;
 
@@ -184,8 +191,8 @@ export class ChatAssistantService {
           if (dec.kind !== 'NONE') return draftFromDecision(dec, parsed.summary, svc.title);
         }
       }
-      if (replyViolates(parsed.reply, kbFacts.allowedAmounts) || timesOutsideWindows(parsed.reply, [...windows, ...hourPoints])) return 'reply_check';
-      // Кнопки со временем: каждый вариант должен лежать в посчитанном окне (с запасом на 30 минут приёма), иначе ответ не отправляем
+      if (replyViolates(parsed.reply, kbFacts.allowedAmounts, { priced: kbFacts.priced, service: parsed.service }) || timesOutsideWindows(parsed.reply, [...windows, ...hourPoints])) return 'reply_check';
+      // Time buttons: every option must lie inside a calculated window (with room for a 30-minute visit), otherwise the reply is not sent
       const options: SlotOption[] = [];
       // the model may repeat a time: each time is offered once
       const seen = new Set<string>();
@@ -203,7 +210,7 @@ export class ChatAssistantService {
         const [, mm, dd] = o.date.split('-');
         options.push({ date: o.date, time: o.time, label: `${day.wd} ${dd}.${mm}, ${o.time}${o.doctor ? ` · ${o.doctor.split(' ')[0]}` : ''}`, ...(o.doctor ? { doctor: o.doctor } : {}) });
       }
-      return { intent: parsed.intent, reply: parsed.reply, handoff: false, reason: null, summary: parsed.summary, service: parsed.service, options };
+      return { intent: parsed.intent, reply: withPriceNotice(parsed.reply, lang), handoff: false, reason: null, summary: parsed.summary, service: parsed.service, options };
     };
     let result = await attempt('', true);
     if (typeof result === 'string') {
@@ -246,8 +253,8 @@ export class ChatAssistantService {
     return out;
   }
 
-  // Что мы знаем о пациенте из базы клиники (она копия Cliniccards): только итоговые факты без имени и телефона.
-  // Считает код, ШІ их лишь формулирует.
+  // What we know about the patient from the clinic's database (a copy of Cliniccards): only summary facts, no name or phone.
+  // The code calculates them, the AI only words them.
   private async facts(clinicId: string, patientId: string | null): Promise<string> {
     if (!patientId) return '- Пацієнта не ідентифіковано (не знайдено в базі за номером). Історії візитів ти не бачиш.';
     const now = new Date();
@@ -272,9 +279,9 @@ export class ChatAssistantService {
     return lines.join('\n');
   }
 
-  // Свободное время на ближайшие дни из расписания (то же, что в отчёте «Свободное время»).
-  // Если в Cliniccards есть смены врачей, окна считаются по каждому врачу, и пациент может выбрать врача; без смен (как у 112 dental)
-  // окна общие по кабинетам. Считает код, ШІ только формулирует предложение.
+  // Free time for the coming days from the schedule (the same as in the "Free time" report).
+  // If Cliniccards has doctor shifts, windows are calculated per doctor and the patient can choose a doctor; without shifts (like 112 dental)
+  // windows are shared across cabinets. The code calculates them, the AI only words the offer.
   private async slots(clinicId: string): Promise<Slots> {
     const rows = await this.reports.freeSlots(clinicId, 7);
     const toMin = (hm: string) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
@@ -282,7 +289,7 @@ export class ChatAssistantService {
     const today = clinicDate(new Date());
     const nowEarliest = Math.ceil((hmMinutes(clinicHm(new Date())) + 120) / 30) * 30;
 
-    // Объединение окон дня: с круглой получасовой отметки, на сегодня не раньше чем через 2 часа
+    // Merging the windows of a day: from a round half-hour mark, for today not earlier than in 2 hours
     const build = (subset: typeof rows): Map<string, { wd: string; windows: [number, number][] }> => {
       const byDay = new Map<string, [number, number][]>();
       for (const r of subset) {

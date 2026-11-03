@@ -22,7 +22,7 @@ export interface ExternalVisit {
   startsAt: Date;
   endsAt?: Date;
   bookedAt?: Date;
-  // Статус Cliniccards без преобразования (PLANNED, VISITED, DID_NOT_COME, ...)
+  // Cliniccards status without conversion (PLANNED, VISITED, DID_NOT_COME, ...)
   status: string;
   amount?: number;
 }
@@ -101,7 +101,7 @@ export interface ExternalCabinet {
 
 export interface ExternalPlan {
   externalId: string;
-  // Итог плана и выполненная часть, с учётом скидки, в основной валюте клиники
+  // Plan total and the completed part, with discount, in the clinic's main currency
   total: number;
   totalDone: number;
   createdAt: Date;
@@ -110,7 +110,7 @@ export interface ExternalPlan {
 export interface ExternalReminder {
   externalId: string;
   patientExternalId?: string;
-  // День напоминания (дата без времени)
+  // Reminder day (a date without time)
   dueDate: Date;
   note?: string;
   // NEW, DONE, CANCELLED, MOVED
@@ -118,7 +118,7 @@ export interface ExternalReminder {
 }
 
 export interface ExternalProfile {
-  // data-URI изображения (jpeg, png, webp, gif)
+  // image data URI (jpeg, png, webp, gif)
   logo?: string;
   // The name of the clinic as Cliniccards has it (GET /clinic-profile)
   name?: string;
@@ -155,23 +155,23 @@ export interface CreatePatientRequest {
   channel?: string;
 }
 
-// Единый интерфейс источника данных. Остальной код не знает про Cliniccards напрямую.
+// One interface of a data source. The rest of the code does not know about Cliniccards directly.
 export interface ClinicConnector {
   fetchPatients(): Promise<ExternalPatient[]>;
   fetchVisits(window: SyncWindow): Promise<ExternalVisit[]>;
   fetchTreatment(window: SyncWindow): Promise<ExternalPlanItem[]>;
   fetchFinance(window: SyncWindow): Promise<{ payments: ExternalPayment[]; invoices: ExternalInvoice[] }>;
-  // Необязательно: список кабинетов
+  // Optional: the list of cabinets
   fetchCabinets?(): Promise<ExternalCabinet[]>;
-  // Необязательно: врачи клиники (для выбора врача при записи)
+  // Optional: the clinic's doctors (for choosing a doctor when booking)
   fetchDoctors?(): Promise<ExternalDoctor[]>;
-  // Необязательно: рабочие часы клиники; null, если метод их не отдал или ответ не разобрался (часы тогда не угадываются)
+  // Optional: the clinic's working hours; null if the method did not return them or the answer was not understood (the hours are then not guessed)
   fetchWorkingHours?(): Promise<ExternalWorkingHours | null>;
-  // Необязательно: итоги планов лечения за период
+  // Optional: totals of treatment plans for a period
   fetchPlans?(window: SyncWindow): Promise<ExternalPlan[]>;
-  // Необязательно: напоминания сотрудникам за период
+  // Optional: reminders for staff for a period
   fetchReminders?(window: SyncWindow): Promise<ExternalReminder[]>;
-  // Необязательно: сведения о клинике (логотип). Их сбой не должен ломать основную загрузку.
+  // Optional: information about the clinic (logo). Its failure must not break the main load.
   fetchProfile?(): Promise<ExternalProfile>;
   // Optional write methods (only on an explicit staff action; disabled for real clinics until the manual verification stage)
   createVisit?(req: CreateVisitRequest): Promise<{ externalId: string }>;

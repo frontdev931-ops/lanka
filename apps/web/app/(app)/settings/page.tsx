@@ -102,7 +102,7 @@ export default function SettingsPage() {
       await navigator.clipboard.writeText(link);
       setCopied(true);
     } catch {
-      /* без доступа к буферу обмена ссылку можно выделить и скопировать вручную */
+      /* without access to the clipboard the link can be selected and copied by hand */
     }
   }
 

@@ -38,7 +38,7 @@ export default function InvitePage() {
     const f = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
     try {
       await api(`/invites/${token}/accept`, { method: 'POST', body: JSON.stringify(f) });
-      router.push('/dashboard'); // сервер уже вошёл в систему: сессионная cookie поставлена
+      router.push('/dashboard'); // the server has already signed in: the session cookie is set
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);

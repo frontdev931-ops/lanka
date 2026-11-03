@@ -8,22 +8,22 @@ const BAD = ['CANCELLED', 'MOVED'];
 
 export interface ResultRow {
   key: string;
-  label: string | null; // название рассылки для campaign:*
+  label: string | null; // campaign name for campaign:*
   channel: string;
   sent: number;
-  replied: number; // пациент написал боту в течение 7 дней
-  booked: number; // появилась новая запись в течение 14 дней после сообщения
-  attended: number; // и пациент пришёл
-  matured: number; // сообщений старше 14 дней: только по ним считается конверсия
+  replied: number; // the patient wrote to the bot within 7 days
+  booked: number; // a new appointment appeared within 14 days after the message
+  attended: number; // and the patient came
+  matured: number; // messages older than 14 days: only they count for conversion
   bookedMatured: number;
-  // только для напоминаний о визите: чем закончилась запись
+  // only for visit reminders: how the appointment ended
   attendedVisit?: number;
   noShowVisit?: number;
   cancelledVisit?: number;
 }
 
-// Замер результата сообщений: что произошло с пациентом после того, как ему написали. Это совпадение по времени, а не доказательство причины:
-// запись могла появиться и без сообщения. Поэтому окно короткое (14 дней), а в интерфейсе стоит оговорка.
+// Measuring the result of messages: what happened to the patient after they were written to. This is a coincidence in time, not proof of a cause:
+// an appointment could have appeared without the message. That is why the window is short (14 days) and the interface carries a caveat.
 @Injectable()
 export class ResultsService {
   constructor(private prisma: PrismaService) {}
@@ -58,7 +58,7 @@ export class ResultsService {
       if (mature) row.matured++;
       if ((repliesBy.get(m.patientId) ?? []).some((d) => d.getTime() >= at && d.getTime() <= at + REPLY_DAYS * DAY)) row.replied++;
       if (m.ruleKey === 'visit-reminder') {
-        // напоминание о записи: считаем исход самой записи
+        // visit reminder: we count the outcome of the appointment itself
         const st = m.visitId ? visitById.get(m.visitId) : undefined;
         row.attendedVisit = (row.attendedVisit ?? 0) + (st === 'VISITED' ? 1 : 0);
         row.noShowVisit = (row.noShowVisit ?? 0) + (st === 'DID_NOT_COME' ? 1 : 0);

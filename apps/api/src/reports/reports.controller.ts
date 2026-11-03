@@ -30,7 +30,7 @@ export class ReportsController {
     return this.reports.build(u.clinicId, id, days, lang, u.role, maxDays);
   }
 
-  // Excel и PDF: те же данные, что на экране и в CSV; выгрузка пишется в историю действий
+  // Excel and PDF: the same data as on screen and in CSV; the export is written to the action history
   @Get(':id/xlsx')
   async xlsx(
     @CurrentUser() u: AuthUser,
@@ -73,7 +73,7 @@ export class ReportsController {
     @Res() res: Response,
   ) {
     const report = await this.reports.build(u.clinicId, id, days, lang, u.role, maxDays);
-    // Выгрузка персональных данных в файл: кто и когда скачал, остаётся в истории действий
+    // An export of personal data to a file: who downloaded it and when stays in the action history
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'report.exported', details: { report: id, rows: report.rows.length } } });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${id}.csv"`);

@@ -58,7 +58,7 @@ export class PatientsController {
       page,
       pageSize,
       sources: sources.map((x) => x.source).filter(Boolean),
-      // Долг = выставлено − оплачено. Врач работает с лечением, а не с деньгами пациентов: ему долг не отдаётся
+      // Debt = billed − paid. The doctor works with treatment, not with patients' money: the debt is not given to them
       rows: rows.map(({ balanceIssued, balancePaid, ...rest }) => {
         if (u.role === Role.DOCTOR) return rest;
         const debt = Math.round((Number(balanceIssued ?? 0) - Number(balancePaid ?? 0)) * 100) / 100;
@@ -76,7 +76,7 @@ export class PatientsController {
       where: { id, clinicId: u.clinicId },
       include: {
         visits: { orderBy: { startsAt: 'desc' }, take: 100 },
-        // Подключённый мессенджер и последние сообщения пациенту (журнал рассылок)
+        // The connected messenger and the latest messages to the patient (the mailing log)
         channels: { select: { channel: true, username: true, linkedAt: true, optedOutAt: true } },
         outbox: { orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, ruleKey: true, status: true, text: true, scheduledFor: true, sentAt: true, error: true } },
         tasks: {
@@ -104,7 +104,7 @@ export class PatientsController {
     if (!p) throw new NotFoundException('patient_not_found');
   }
 
-  // Ручная запись о контакте с пациентом (звонок, сообщение, визит)
+  // A manual record of a contact with the patient (a call, a message, a visit)
   @Post(':id/contacts')
   @Roles(...WRITERS)
   async addContact(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ContactDto) {
@@ -126,7 +126,7 @@ export class PatientsController {
     return log;
   }
 
-  // Согласие на коммуникацию и пауза автоматизаций для пациента. Синхронизация эти поля не меняет.
+  // Consent to communication and pause of automations for the patient. Sync does not change these fields.
   @Patch(':id/consent')
   @Roles(...WRITERS)
   async consent(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ConsentDto) {

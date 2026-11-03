@@ -13,7 +13,7 @@ export class ChatService {
     private autoReply: AutoReplyService,
   ) {}
 
-  // Список диалогов: по последнему сообщению каждого чата, сверху новые; непрочитанные считаются отдельно
+  // List of dialogues: by the last message of each chat, newest first; unread ones are counted separately
   async conversations(clinicId: string) {
     const [last, unread, names] = await Promise.all([
       this.prisma.chatMessage.findMany({
@@ -24,7 +24,7 @@ export class ChatService {
         include: { patient: { select: { id: true, fullName: true } } },
       }),
       this.prisma.chatMessage.groupBy({ by: ['channel', 'chatId'], where: { clinicId, direction: 'IN', readAt: null }, _count: true }),
-      // имя известно только из входящих сообщений, а последним в диалоге может быть ответ
+      // the name is known only from incoming messages, while the last message in a dialogue may be a reply
       this.prisma.chatMessage.findMany({ where: { clinicId, contactName: { not: null } }, distinct: ['channel', 'chatId'], orderBy: { createdAt: 'desc' }, select: { channel: true, chatId: true, contactName: true } }),
     ]);
     const nameMap = new Map(names.map((n) => [`${n.channel}:${n.chatId}`, n.contactName]));
@@ -41,7 +41,7 @@ export class ChatService {
     }));
   }
 
-  // Открыть диалог: последние сообщения, входящие помечаются прочитанными
+  // Open a dialogue: the latest messages, incoming ones are marked as read
   async thread(clinicId: string, channel: string, chatId: string) {
     const messages = await this.prisma.chatMessage.findMany({ where: { clinicId, channel, chatId }, orderBy: { createdAt: 'desc' }, take: 200, include: { patient: { select: { id: true, fullName: true } } } });
     if (!messages.length) throw new NotFoundException('conversation_not_found');
@@ -63,7 +63,7 @@ export class ChatService {
     };
   }
 
-  // Ответ сотрудника. Уходит только при включённом главном выключателе и только в чат, который не отписался.
+  // A staff reply. It goes out only while the master switch is on and only to a chat that has not opted out.
   async reply(clinicId: string, userId: string, channel: string, chatId: string, text: string) {
     if (!CHANNELS.includes(channel)) throw new BadRequestException('bad_channel');
     const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { sendingEnabled: true } });
@@ -93,7 +93,7 @@ export class ChatService {
     return this.autoReply.resume(clinicId, channel, chatId);
   }
 
-  // Привязать неизвестный чат к карточке пациента вручную (когда номер не совпал)
+  // Link an unknown chat to a patient card by hand (when the number did not match)
   async link(clinicId: string, channel: string, chatId: string, patientId: string) {
     const [patient, known] = await Promise.all([
       this.prisma.patient.findFirst({ where: { id: patientId, clinicId, removedAt: null }, select: { id: true } }),

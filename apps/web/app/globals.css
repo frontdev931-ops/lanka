@@ -37,7 +37,7 @@ h1, h2, h3 { margin: 0; line-height: 1.2; }
 a { color: var(--primary-dark); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* ---------- каркас ---------- */
+/* ---------- frame ---------- */
 .app { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
 
 .sidebar {
@@ -157,7 +157,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .page-head h1 { font-size: 26px; letter-spacing: -0.01em; }
 .page-head p { margin: 6px 0 0; color: var(--muted); }
 
-/* ---------- переключатель языка ---------- */
+/* ---------- language switch ---------- */
 .lang { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--surface); }
 .lang-btn { border: none; background: transparent; padding: 6px 10px; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted); cursor: pointer; }
 .lang a.lang-btn { display: inline-flex; align-items: center; text-decoration: none; }
@@ -169,7 +169,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .user-box .lang { display: flex; }
 .user-box .lang-btn { flex: 1; }
 
-/* ---------- карточки ---------- */
+/* ---------- cards ---------- */
 .card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow);
@@ -191,7 +191,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .stat-foot a { white-space: nowrap; flex: none; }
 .table td:first-child { min-width: 130px; }
 
-/* ---------- кнопки и поля ---------- */
+/* ---------- buttons and fields ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   padding: 9px 15px; border-radius: 9px; border: 1px solid var(--border);
@@ -231,7 +231,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #93a1ad; }
 .search .input { width: 100%; padding-left: 38px; }
 
-/* ---------- вкладки ---------- */
+/* ---------- tabs ---------- */
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
 .tab {
   padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border);
@@ -240,7 +240,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .tab:hover { color: var(--text); }
 .tab.active { background: var(--primary); border-color: var(--primary); color: #fff; }
 
-/* ---------- таблицы ---------- */
+/* ---------- tables ---------- */
 .table-wrap { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .table th {
@@ -257,7 +257,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 
 .table-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 14px; flex-wrap: wrap; }
 
-/* ---------- бейджи и сообщения ---------- */
+/* ---------- badges and messages ---------- */
 .badge {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px;
   font-size: 12.5px; font-weight: 600; white-space: nowrap; background: var(--gray-soft); color: var(--muted);
@@ -297,7 +297,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .soon { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
 .soon ul { margin: 0; padding-left: 20px; color: var(--muted); display: grid; gap: 6px; }
 
-/* ---------- вход ---------- */
+/* ---------- sign-in ---------- */
 .auth-wrap { position: relative; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: linear-gradient(160deg, #e6f6f6 0%, var(--bg) 55%); }
 .auth-card { width: 100%; max-width: 410px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 10px 30px rgba(20, 33, 43, 0.08); padding: 30px; }
 .auth-card .brand { justify-content: center; margin-bottom: 22px; }
@@ -310,7 +310,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .clinic-pick { display: grid; gap: 10px; }
 .clinic-pick .btn { justify-content: flex-start; padding: 14px; }
 
-/* ---------- мелкие компоненты новых экранов ---------- */
+/* ---------- small components of the new screens ---------- */
 .tabbar { display: none; }
 .steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
 .step { padding: 6px 12px; border-radius: 999px; background: var(--gray-soft); color: var(--muted); font-size: 13.5px; font-weight: 600; }
@@ -344,11 +344,11 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .kv dt { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
 .kv dd { margin: 4px 0 0; font-weight: 500; word-break: break-word; }
 
-/* ---------- адаптив: планшет и телефон ---------- */
+/* ---------- responsive: tablet and phone ---------- */
 @media (max-width: 880px) {
   .app { grid-template-columns: minmax(0, 1fr); align-content: start; }
 
-  /* Сверху остаётся тонкая шапка, всё меню открывается кнопкой «Ещё» в нижней панели */
+  /* A thin header stays on top, the whole menu opens with the "More" button in the bottom bar */
   .sidebar { position: sticky; top: 0; z-index: 30; height: auto; flex-direction: row; align-items: center; padding: 10px 16px; border-right: none; border-bottom: 1px solid var(--border); }
   .sidebar-top { padding: 0; flex: 1; }
   .nav, .user-box { display: none; }
@@ -373,9 +373,9 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
   .table th, .table td { padding: 10px 12px; }
 }
 
-/* ---------- телефон ---------- */
+/* ---------- phone ---------- */
 @media (max-width: 700px) {
-  /* Поля ввода не меньше 16px: иначе iPhone приближает страницу при фокусе */
+  /* Inputs are at least 16px: otherwise an iPhone zooms the page on focus */
   .input, .select, .field .input { font-size: 16px; min-height: 44px; }
   .select.sm { font-size: 15px; min-height: 40px; }
   .btn { min-height: 44px; padding: 10px 16px; }
@@ -387,7 +387,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
   .page-head { flex-direction: column; align-items: stretch; }
   .page-head .toolbar .btn { width: 100%; }
 
-  /* Вкладки отчётов прокручиваются по горизонтали, а не занимают пол-экрана */
+  /* The report tabs scroll horizontally instead of taking half the screen */
   .tabs { flex-wrap: nowrap; overflow-x: auto; margin: 0 -16px 16px; padding: 0 16px 4px; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
   .tab { flex: none; min-height: 40px; }
@@ -396,7 +396,7 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
   .auth-card { padding: 22px 18px; }
   .auth-lang { top: 10px; right: 10px; }
 
-  /* Таблицы становятся списком карточек: строка — карточка, подпись колонки — слева от значения */
+  /* Tables become a list of cards: a row is a card, the column label is to the left of the value */
   .table, .table tbody, .table tr, .table td { display: block; width: 100%; }
   .table thead { display: none; }
   .table tbody tr { padding: 12px 16px; border-bottom: 1px solid var(--border); }
@@ -428,7 +428,7 @@ textarea.input { resize: vertical; min-height: 70px; font: inherit; }
 .msg-history { display: grid; gap: 10px; margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
 .msg-item { font-size: 14px; line-height: 1.45; }
 
-/* Листування */
+/* Messages (Listuvannia) */
 .chat-list { list-style: none; margin: 0; padding: 0; }
 .chat-item { display: grid; gap: 2px; width: 100%; text-align: left; padding: 12px 20px; min-height: 44px; background: none; border: 0; border-bottom: 1px solid var(--line, #e5e7eb); cursor: pointer; font: inherit; color: inherit; }
 .chat-name { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -472,7 +472,7 @@ textarea.input { resize: vertical; min-height: 70px; font: inherit; }
 .recovery-codes { list-style: none; margin: 0 0 10px; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; font-family: ui-monospace, Menlo, monospace; font-size: 15px; }
 @media (max-width: 400px) { .recovery-codes { grid-template-columns: 1fr; } }
 
-/* Установленное приложение (PWA): без отскока страницы, с отступами под вырезы экрана (viewport-fit=cover) */
+/* An installed app (PWA): no page bounce, with padding for screen cut-outs (viewport-fit=cover) */
 html { -webkit-text-size-adjust: 100%; }
 body { -webkit-tap-highlight-color: transparent; }
 @media (display-mode: standalone) and (max-width: 720px) {

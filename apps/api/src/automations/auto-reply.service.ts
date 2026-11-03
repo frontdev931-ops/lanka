@@ -7,9 +7,9 @@ import { RequestKind, RequestsService } from './requests.service';
 import { MessengerService, SendError } from './messenger.service';
 
 
-// Автоответ ШІ на входящее сообщение пациента. Работает только если клиника включила ШІ, автоответ и общую отправку.
-// Любой сбой или отказ (лимит, опасная тема, ошибка модели) возвращает false: тогда действует обычный путь с одним
-// вежливым ответом в сутки, а сообщение ждёт сотрудника в «Листування».
+// The AI's automatic reply to a patient's incoming message. Works only if the clinic turned on the AI, the automatic reply and sending in general.
+// Any failure or refusal (limit, dangerous topic, model error) returns false: the ordinary path then applies, with one
+// polite reply per day, and the message waits for the staff in "Listuvannia" (Messages).
 @Injectable()
 export class AutoReplyService {
   private readonly log = new Logger(AutoReplyService.name);
@@ -59,7 +59,7 @@ export class AutoReplyService {
       if (!hasFeature(clinic.plan, 'ai_autoreply')) return this.skip(clinicId, channel, 'plan_without_autoreply');
       const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel, externalId: chatId }, select: { optedOutAt: true, patientId: true } });
       if (ch?.optedOutAt) return this.skip(clinicId, channel, 'opted_out');
-      // Сотрудник уже подхватил диалог: ШІ не вмешивается
+      // A staff member has already taken the dialogue: the AI does not interfere
       if (await this.pausedUntil(clinicId, channel, chatId)) return this.skip(clinicId, channel, 'paused_after_staff_reply');
       const today = await this.prisma.chatMessage.count({ where: { clinicId, channel, chatId, byAi: true, createdAt: { gt: new Date(Date.now() - 86_400_000) } } });
       if (today >= clinic.aiRepliesPerChatDay) return this.skip(clinicId, channel, 'daily_ai_reply_cap');
@@ -74,7 +74,7 @@ export class AutoReplyService {
         return this.skip(clinicId, channel, `send_failed_${e instanceof SendError ? e.reason : 'error'}`);
       }
       await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, direction: 'OUT', text: d.reply, byAi: true, ...(d.options.length ? { buttons: d.options.map((o) => ({ label: o.label, payload: slotPayload(o) })) } : {}) } });
-      // Заявка администратору: запись, перенос, отмена или вопрос, переданный человеку
+      // A request to the administrator: a booking, a reschedule, a cancellation or a question handed to a person
       const kind: RequestKind | null = d.handoff ? 'HANDOFF' : ({ booking: 'BOOKING', reschedule: 'RESCHEDULE', cancel: 'CANCEL' } as Record<string, RequestKind>)[d.intent] ?? null;
       if (kind) {
         const lastIn = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, select: { text: true, contactName: true } });

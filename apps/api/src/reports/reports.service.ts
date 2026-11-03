@@ -6,9 +6,9 @@ import { readWorkHours } from '../clinic/work-hours';
 import { COLUMN_LABEL, Lang, REPORT_RULE, REPORT_TEXT, ReportId, VALUE_LABEL } from '../common/i18n';
 import { cellLabel } from './report-export';
 
-// Статусы Cliniccards: посещение состоялось / запись больше не действует.
+// Cliniccards statuses: the visit took place / the appointment is no longer valid.
 const DONE = 'VISITED';
-// Статусы записи, которые к концу приёма должны смениться на итог (пришёл, не пришёл, отмена, перенос)
+// Appointment statuses that must change to an outcome by the end of the visit (came, did not come, cancelled, moved)
 const UNCLOSED = ['PLANNED', 'CONFIRMED', 'NOT_CONFIRMED', 'IN_CLINIC', 'IN_CHAIR'];
 const INACTIVE = ['CANCELLED', 'DID_NOT_COME', 'MOVED'];
 const NO_SCHEDULE_NOTICE: Record<string, string> = {
@@ -34,19 +34,19 @@ export interface Report {
   canCreateTasks: boolean;
   // A reason shown instead of data that would only be a guess (for example no reliable schedule for the free times), or null
   notice?: string | null;
-  // Значения kind (код статуса), rebooked (boolean) и пустой source подписывает клиент на своём языке
+  // The values kind (status code), rebooked (boolean) and an empty source are labelled by the client in its own language
   rows: Row[];
 }
 
 interface Meta {
   id: ReportId;
   defaultDays: number;
-  // Верхняя граница периода (для «давно не бывавших»): не старше стольких дней; null — без границы
+  // The upper bound of the period (for "long absent"): not older than this many days; null means no bound
   defaultMaxDays?: number;
-  // false — период в отчёте не применяется (поле скрывается в интерфейсе)
+  // false: the report's period is not applied (the field is hidden in the interface)
   usesDays: boolean;
   canCreateTasks: boolean;
-  // Если задано, отчёт доступен только этим ролям (финансовые показатели клиники)
+  // If set, the report is available only to these roles (the clinic's financial figures)
   roles?: Role[];
   columns: string[];
 }
@@ -68,7 +68,7 @@ const META: Meta[] = [
 
 const allowed = (m: Meta, role?: Role) => !m.roles || (!!role && m.roles.includes(role));
 
-// Пациент, о котором уже есть действующее напоминание (NEW) на сегодня или позже, в списках «вернуть пациента» не нужен
+// A patient who already has a valid reminder (NEW) for today or later is not needed in the "bring the patient back" lists
 const activeReminder = () => ({ status: 'NEW', dueDate: { gte: new Date(clinicDate(new Date()) + 'T00:00:00Z') } });
 
 const date = (d: Date | null | undefined) => (d ? clinicDate(d) : null);
@@ -111,7 +111,7 @@ export class ReportsService {
       canCreateTasks: meta.canCreateTasks,
       // a reason shown instead of times that would only be guesses
       notice: id === 'free-slots' && !rows.length && (await this.freeSlotsNotice(clinicId, undefined, d)) ? NO_SCHEDULE_NOTICE[lang] : null,
-      // Свободные окна по часам кабинета не привязаны к врачу: колонка «Лікар» тогда не нужна
+      // Free windows by cabinet hours are not tied to a doctor: the "Doctor" column is then not needed
       columns: meta.columns.filter((key) => !(id === 'free-slots' && key === 'doctor' && rows.every((r) => !r.doctor))).map((key) => ({ key, label: COLUMN_LABEL[lang][key] ?? key })),
       rows,
     };
@@ -140,8 +140,8 @@ export class ReportsService {
     }
   }
 
-  // Лечение начато (за период выполнен пункт плана), но в том же плане остались невыполненные пункты;
-  // пациенты с будущей действующей записью не включаются.
+  // Treatment started (a plan item was completed in the period), but incomplete items remain in the same plan;
+  // patients with a future valid appointment are not included.
   private async unfinishedTreatment(clinicId: string, days: number): Promise<Row[]> {
     const now = new Date();
     const since = new Date(now.getTime() - days * DAY);
@@ -150,7 +150,7 @@ export class ReportsService {
       select: { patientId: true, planId: true, name: true, status: true, price: true, markedDoneAt: true },
     });
 
-    // open — число разных услуг (у зубных услуг одна строка плана на зуб, считаем по названию)
+    // open is the number of different services (for dental services there is one plan row per tooth, we count by name)
     const plans = new Map<string, { patientId: string; planId: string; open: number; openSum: number; lastDone: Date | null; names: Set<string> }>();
     for (const i of items) {
       const p = plans.get(`${i.patientId}|${i.planId}`) ?? { patientId: i.patientId, planId: i.planId, open: 0, openSum: 0, lastDone: null, names: new Set<string>() };
@@ -166,7 +166,7 @@ export class ReportsService {
 
     const byPatient = new Map<string, { open: number; openSum: number; lastDone: Date }>();
     for (const p of plans.values()) {
-      if (!p.open || !p.lastDone) continue; // лечение не начато или уже всё выполнено
+      if (!p.open || !p.lastDone) continue; // treatment not started or everything already done
       const a = byPatient.get(p.patientId) ?? { open: 0, openSum: 0, lastDone: p.lastDone };
       a.open += p.open;
       a.openSum += p.openSum;
@@ -175,8 +175,8 @@ export class ReportsService {
     }
     if (!byPatient.size) return [];
 
-    // Остаток лечения берём из итогов плана (в валюте клиники, с фиксированным курсом и скидкой):
-    // цены пунктов могут быть в другой валюте, и складывать их нельзя
+    // We take the remaining treatment from the plan totals (in the clinic's currency, with a fixed rate and discount):
+    // item prices may be in another currency, and they must not be added up
     const planIds = [...new Set([...plans.values()].map((p) => p.planId))];
     const totals = new Map(
       (await this.prisma.treatmentPlan.findMany({ where: { clinicId, externalId: { in: planIds } } })).map((t) => [t.externalId, Math.max(0, Number(t.total) - Number(t.totalDone))]),
@@ -216,7 +216,7 @@ export class ReportsService {
       .sort((a, b) => (b.daysSince as number) - (a.daysSince as number));
   }
 
-  // Долг считается по карточке Cliniccards: выставлено к оплате минус оплачено
+  // Debt is calculated from the Cliniccards card: billed for payment minus paid
   private async debtors(clinicId: string): Promise<Row[]> {
     const patients = await this.prisma.patient.findMany({ where: { clinicId, removedAt: null, balanceIssued: { gt: 0 } } });
     return patients
@@ -253,10 +253,10 @@ export class ReportsService {
       .map(([month, m]) => ({ month, invoiced: Math.round(m.invoiced), paid: Math.round(m.paid), paymentsCount: m.paymentsCount }));
   }
 
-  // Свободное время. Если в Cliniccards есть смены врачей: смена минус записи врача минус зарезервированное время
-  // его кабинета. Если смен нет (клиника не заводит профили врачей): рабочие часы клиники минус записи
-  // кабинета минус серые блоки кабинета (блоки в расписании обозначают «здесь никого не записывать»).
-  // Дни и часы считаются в часовом поясе клиники.
+  // Free time. If Cliniccards has doctor shifts: the shift minus the doctor's appointments minus the reserved time
+  // of their cabinet. If there are no shifts (the clinic keeps no doctor profiles): the clinic's working hours minus the appointments
+  // of the cabinet minus the grey blocks of the cabinet (blocks in the schedule mean "book nobody here").
+  // Days and hours are calculated in the clinic's time zone.
   // Why the report of free time may be empty: no shifts in Cliniccards and no working hours set. Null when there is a reliable schedule.
   async freeSlotsNotice(clinicId: string, from = startOfClinicDay(new Date()), days = 7): Promise<'no_schedule' | null> {
     const [shifts, clinic] = await Promise.all([
@@ -286,7 +286,7 @@ export class ReportsService {
     if (!shifts.length && !hoursSet) return [];
 
     const hhmm = (t: number) => clinicHm(t);
-    // Промежутки внутри [start, end], не занятые отрезками busy, не короче MIN_GAP_MINUTES
+    // Gaps inside [start, end] not taken by the busy segments and not shorter than MIN_GAP_MINUTES
     const freeGaps = (start: number, end: number, busy: [number, number][]) => {
       const clipped = busy
         .map(([a, b]): [number, number] => [Math.max(a, start), Math.min(b, end)])
@@ -329,8 +329,8 @@ export class ReportsService {
         const day = new Date(Date.UTC(y, m - 1, d0 + i));
         const ymd = day.toISOString().slice(0, 10);
         const h = hours[String(day.getUTCDay() || 7)];
-        if (!h) continue; // выходной
-        const open = Math.max(localToUtc(`${ymd} ${h.from}:00`).getTime(), now); // прошедшее время не считаем
+        if (!h) continue; // day off
+        const open = Math.max(localToUtc(`${ymd} ${h.from}:00`).getTime(), now); // we do not count time that has passed
         const close = localToUtc(`${ymd} ${h.to}:00`).getTime();
         if (close <= open) continue;
         for (const id of ids) {
@@ -352,7 +352,7 @@ export class ReportsService {
     return rows.sort((a, b) => String(a.dayAt).localeCompare(String(b.dayAt)) || String(a.doctor ?? '').localeCompare(String(b.doctor ?? '')) || String(a.cabinet).localeCompare(String(b.cabinet)));
   }
 
-  // Пациент с состоявшимся посещением за период и без будущих действующих записей.
+  // A patient with a visit that took place in the period and with no future valid appointments.
   private async noNextVisit(clinicId: string, days: number): Promise<Row[]> {
     const now = new Date();
     const since = new Date(now.getTime() - days * DAY);
@@ -390,7 +390,7 @@ export class ReportsService {
       .sort((a, b) => (b.daysSince as number) - (a.daysSince as number));
   }
 
-  // Записи со статусами DID_NOT_COME, CANCELLED, MOVED за период; отмечаем, записался ли пациент заново.
+  // Appointments with the statuses DID_NOT_COME, CANCELLED, MOVED in the period; we mark whether the patient booked again.
   private async missedVisits(clinicId: string, days: number): Promise<Row[]> {
     const now = new Date();
     const since = new Date(now.getTime() - days * DAY);
@@ -421,9 +421,9 @@ export class ReportsService {
     });
   }
 
-  // Дата последнего визита берётся из карточки Cliniccards (patient.lastVisitAt), а не из окна синхронизации.
-  // Записи, время которых прошло, но итог так и не выставлен («Заплановано», «Підтверджено», «У клініці»…): неизвестно, пришёл
-  // ли человек. Из-за них воронка и отчёты о неявках занижают приход. Закрыть запись нужно в Cliniccards (мы ничего там не меняем).
+  // The date of the last visit is taken from the Cliniccards card (patient.lastVisitAt), not from the sync window.
+  // Appointments whose time has passed but whose outcome was never set ("Planned", "Confirmed", "In the clinic"…): it is unknown whether
+  // the person came. Because of them the funnel and the no-show reports understate attendance. The appointment has to be closed in Cliniccards (we change nothing there).
   private async unclosedVisits(clinicId: string, days: number): Promise<Row[]> {
     const now = new Date();
     const since = new Date(now.getTime() - days * DAY);
@@ -442,7 +442,7 @@ export class ReportsService {
     ]);
     const names = new Map(cabinets.map((c) => [c.externalId, c.name]));
     return visits
-      // запись ещё идёт или только что закончилась: итог рано требовать
+      // the appointment is still going or has just ended: it is too early to demand an outcome
       .filter((v) => (v.endsAt ?? new Date(v.startsAt.getTime() + 30 * MIN)).getTime() < now.getTime() - 2 * 3600_000)
       .map((v) => ({
         patientId: v.patient.id,
@@ -456,8 +456,8 @@ export class ReportsService {
       }));
   }
 
-  // Пациенты, которых давно не было: последний визит от days до maxDays дней назад (давнишние почти не возвращаются).
-  // Порядок звонков: сначала те, у кого есть незавершённое лечение (по сумме), потом по сумме оплат за всё время.
+  // Patients who have not been for a long time: the last visit between days and maxDays days ago (very old ones hardly ever return).
+  // Order of calls: first those with unfinished treatment (by sum), then by the sum of payments over all time.
   private async lapsed(clinicId: string, days: number, maxDays: number): Promise<Row[]> {
     const now = new Date();
     const cutoff = new Date(now.getTime() - days * DAY);
@@ -486,8 +486,8 @@ export class ReportsService {
       .sort((a, b) => Number(b.openSum > 0) - Number(a.openSum > 0) || b.openSum - a.openSum || b.lifetimePaid - a.lifetimePaid || b.daysSince - a.daysSince);
   }
 
-  // Сколько осталось выполнить по планам лечения пациентов: итог плана в валюте клиники (с курсом и скидкой),
-  // а если итогов плана нет, сумма цен невыполненных пунктов. Только пациенты, у которых есть невыполненные пункты.
+  // How much is left to do under patients' treatment plans: the plan total in the clinic's currency (with rate and discount),
+  // and if there are no plan totals, the sum of prices of the incomplete items. Only patients who have incomplete items.
   private async openTreatment(clinicId: string, patientIds: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     if (!patientIds.length) return out;
@@ -517,7 +517,7 @@ export class ReportsService {
         visits: { where: { status: DONE, startsAt: { gte: since } }, select: { amount: true } },
       },
     });
-    // Пустой источник остаётся null: подпись «не указан» ставит клиент на своём языке
+    // An empty source stays null: the label "not specified" is added by the client in its own language
     const agg = new Map<string | null, { patients: number; active: number; visits: number; revenue: number }>();
     for (const p of patients) {
       const key = p.source || null;
@@ -533,12 +533,12 @@ export class ReportsService {
       .sort((a, b) => b.patients - a.patients);
   }
 
-  // BOM и разделитель «;» для корректного открытия в Excel
+  // BOM and the ";" separator for correct opening in Excel
   toCsv(report: Report, lang: Lang) {
     const text = (key: string, value: Cell): string => {
       const label = cellLabel(lang, key, value);
-      // Имена и заметки приходят из внешней системы: ячейка, начинающаяся с = или @ (или + / - с текстом), в Excel
-      // превращается в формулу. Такие значения помечаются апострофом, обычные телефоны и числа остаются как есть.
+      // Names and notes come from an external system: a cell starting with = or @ (or + / - followed by text) turns
+      // into a formula in Excel. Such values are marked with an apostrophe; ordinary phones and numbers stay as they are.
       if (typeof value === 'string' && /^([=@\t\r]|[+-](?![\d\s().-]*$))/.test(value)) return `'${label}`;
       return label;
     };

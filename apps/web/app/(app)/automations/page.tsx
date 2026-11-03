@@ -119,7 +119,7 @@ export default function AutomationsPage() {
   useEffect(loadAll, [loadAll]);
   useEffect(loadMsgs, [loadMsgs]);
 
-  // Общая ссылка на бота (для QR на ресепшн)
+  // The shared link to the bot (for a QR code at the reception)
   useEffect(() => {
     if (data?.telegram.connected) api<{ url: string }>('/automations/telegram/link').then((r) => setLink(r.url)).catch(() => undefined);
     else setLink('');
@@ -178,7 +178,7 @@ export default function AutomationsPage() {
       {error && <Alert tone="error">{error}</Alert>}
       {info && <Alert tone="success">{info}</Alert>}
 
-      {/* Подключение Telegram */}
+      {/* Telegram connection */}
       <Card title={t('au.tgTitle')}>
         {data.telegram.connected ? (
           <>
@@ -248,7 +248,7 @@ export default function AutomationsPage() {
         )}
       </Card>
 
-      {/* Режим работы: один выбор вместо отдельных переключателей */}
+      {/* Operating mode: one choice instead of separate switches */}
       {ai && (
         <Card title={t('mode.title')}>
           <p className="rule" style={{ marginTop: 0 }}>{t('mode.intro')}</p>
@@ -415,7 +415,7 @@ export default function AutomationsPage() {
       <WebChatCard />
       <LeadsCard />
 
-      {/* Сценарии */}
+      {/* Scenarios */}
       <Card title={t('au.rulesTitle')}>
         <p className="rule">{t('au.rulesIntro')}</p>
         <div className="rules">
@@ -557,7 +557,7 @@ export default function AutomationsPage() {
 
       <CampaignsCard onChanged={() => { loadAll(); loadMsgs(); }} />
 
-      {/* Очередь и журнал */}
+      {/* Queue and log */}
       <Card
         flush
         title={t('au.logTitle')}

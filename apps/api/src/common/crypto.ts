@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 
-// Ключ шифрования берётся из ENCRYPTION_KEY (любая длинная строка), приводится к 32 байтам.
+// The encryption key is taken from ENCRYPTION_KEY (any long string) and reduced to 32 bytes.
 function key() {
   const secret = process.env.ENCRYPTION_KEY;
   if (!secret) throw new Error('ENCRYPTION_KEY не задан');

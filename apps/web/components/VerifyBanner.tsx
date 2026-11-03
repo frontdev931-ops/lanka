@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { useT } from '../lib/i18n';
 import { Alert } from './ui';
 
-// Пока почта не подтверждена, нельзя подключать данные клиники: напоминаем и даём отправить письмо ещё раз
+// Until the email is confirmed, the clinic's data cannot be connected: we remind and let the user send the letter again
 export function VerifyBanner() {
   const t = useT();
   const [state, setState] = useState<'idle' | 'sent' | string>('idle');

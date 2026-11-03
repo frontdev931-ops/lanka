@@ -1,14 +1,14 @@
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { AddressInfo } from 'net';
 
-// Крошечный PNG 1×1: имитация логотипа клиники
+// A tiny 1×1 PNG: an imitation of the clinic's logo
 const MOCK_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
-// Локальная имитация API Cliniccards по документации (https://cliniccards.com/api): те же адреса,
-// заголовки, формат ответа {data, result, error}, постраничная выдача пациентов, лимит запросов.
-// Нужна, чтобы проверять коннектор без доступа к настоящей клинике. Данные искусственные, но
-// содержат «грязные» случаи, которые бывают в реальности (пустой телефон, дата 0000-00-00,
-// price_items = null, числовые и строковые ID вперемешку, пункты плана неизвестного пациента).
+// A local imitation of the Cliniccards API per the documentation (https://cliniccards.com/api): the same addresses,
+// headers, answer format {data, result, error}, paged patients, request limit.
+// Needed to check the connector without access to a real clinic. The data is artificial, but
+// it contains the "dirty" cases that happen in reality (an empty phone, the date 0000-00-00,
+// price_items = null, numeric and string IDs mixed, plan items of an unknown patient).
 
 export const MOCK_KEY = 'mock-api-key-12345';
 const DAY = 86_400_000;
@@ -16,10 +16,10 @@ const DAY = 86_400_000;
 export interface MockOptions {
   key?: string;
   patients?: number;
-  // Запросов в минуту на ключ (в настоящем API 60)
+  // Requests per minute per key (60 in the real API)
   rateLimitPerMinute?: number;
   seed?: number;
-  // Имитация потолков сервера (в тестах запасных вариантов коннектора): больше строк за страницу или дней за период он не отдаёт
+  // Imitation of the server's ceilings (in tests of the connector's fallbacks): it returns no more rows per page or days per period
   maxPageSize?: number;
   maxPeriodDays?: number;
 }
@@ -67,7 +67,7 @@ function rng(seed: number) {
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
-// Время клиники приходит без часового пояса: формат «YYYY-MM-DD HH:MM:SS»
+// Clinic time arrives without a time zone: the format "YYYY-MM-DD HH:MM:SS"
 const dt = (d: Date) => `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 19)}`;
 const day = (d: Date) => d.toISOString().slice(0, 10);
 const atMidnight = (offsetDays: number) => {
@@ -124,7 +124,7 @@ export function buildData(opts: MockOptions = {}): MockData {
     let paid = 0;
 
     for (let k = 0; k < count; k++) {
-      const offset = Math.floor(rand() * 260) - 200; // от -200 до +60 дней
+      const offset = Math.floor(rand() * 260) - 200; // from -200 to +60 days
       const start = atMidnight(offset);
       start.setUTCHours(9 + Math.floor(rand() * 8), rand() < 0.5 ? 0 : 30, 0, 0);
       const end = new Date(start.getTime() + (30 + Math.floor(rand() * 2) * 30) * 60_000);
@@ -137,11 +137,11 @@ export function buildData(opts: MockOptions = {}): MockData {
       const picked = services.slice(0, 1 + Math.floor(rand() * 2));
       const priceItems =
         rand() < 0.2
-          ? null // записи без услуг приходят как null
+          ? null // appointments without services arrive as null
           : picked.map((s) => ({ price_item_id: s.id, price_item_name: s.name, price_item_code: null, price: s.price.toFixed(2) }));
       visits.push({
         visit_id: String(visitId++),
-        patient_id: rand() < 0.5 ? String(patientId) : patientId, // ID приходят и строкой, и числом
+        patient_id: rand() < 0.5 ? String(patientId) : patientId, // IDs arrive both as strings and as numbers
         status,
         doctor: doctorName(doc.doctor_id),
         doctor_id: doc.doctor_id,
@@ -168,12 +168,12 @@ export function buildData(opts: MockOptions = {}): MockData {
             invoice_type: 'STANDARD',
           });
           issued += total;
-          // не все счета оплачены полностью: создаёт задолженность
+          // not all invoices are paid in full: this creates a debt
           const payShare = rand() < 0.8 ? 1 : 0.5;
           paid += total * payShare;
           payments.push({
             payment_id: String(payId++),
-            patient_id: rand() < 0.05 ? null : String(patientId), // бывают платежи без пациента
+            patient_id: rand() < 0.05 ? null : String(patientId), // there are payments without a patient
             date: dt(start),
             amount: String(total * payShare),
             type: rand() < 0.5 ? 'CASH' : 'CREDIT_CARD',
@@ -184,7 +184,7 @@ export function buildData(opts: MockOptions = {}): MockData {
       }
     }
 
-    // План лечения у части пациентов: часть пунктов выполнена, часть ждёт
+    // A treatment plan for some patients: some items done, some waiting
     if (rand() < 0.4) {
       const pid = planId++;
       const total = 3 + Math.floor(rand() * 3);
@@ -234,13 +234,13 @@ export function buildData(opts: MockOptions = {}): MockData {
     });
   }
 
-  // Пункт плана неизвестного пациента (например, архивного): коннектор должен его пропустить
+  // A plan item of an unknown patient (for example an archived one): the connector must skip it
   planItems.push({
     plan_item_id: String(itemId++), patient_id: '999999', plan_id: '1', stage_id: '1', name: 'Консультація', price: '300', amount: '1',
     status: 'NEW', date_created: dt(atMidnight(-10)), done_by_doctor_id: null, marked_done_date: null,
   });
 
-  // Смены врачей: будни, ±30 дней; Шевченко работає у другу половину дня
+  // Doctors' shifts: weekdays, ±30 days; Shevchenko works in the second half of the day
   const shifts: Json[] = [];
   const spaces: Json[] = [];
   let shiftId = 1_200_000;
@@ -263,7 +263,7 @@ export function buildData(opts: MockOptions = {}): MockData {
         shift_end: dt(e),
       });
     }
-    // Обідня перерва в кабінеті 1 щодня
+    // A lunch break in cabinet 1 every day
     const bs = new Date(d);
     bs.setUTCHours(13, 0, 0, 0);
     const be = new Date(d);
@@ -281,8 +281,8 @@ export function buildData(opts: MockOptions = {}): MockData {
     });
   }
 
-  // Напоминания сотрудникам: по умолчанию пусто, тесты добавляют их сами
-  // Итоги планов считаются из пунктов, как в Cliniccards (в тестах отдельные планы подменяются)
+  // Reminders for staff: empty by default, tests add them themselves
+  // Plan totals are calculated from the items, as in Cliniccards (in tests separate plans are replaced)
   const byPlan = new Map<string, { total: number; done: number; created: string }>();
   for (const i of planItems) {
     const a = byPlan.get(String(i.plan_id)) ?? { total: 0, done: 0, created: String(i.date_created) };
@@ -389,7 +389,7 @@ export async function startMock(opts: MockOptions = {}, port = 0): Promise<MockH
     const path = url.pathname.replace(/^\/api/, '').replace(/\/+$/, '') || '/';
     const q = Object.fromEntries(url.searchParams.entries());
 
-    // Настоящее API требует оба заголовка в каждом запросе
+    // The real API requires both headers in every request
     if (req.headers.token !== key) return fail(res, 401, 'Wrong API key');
     if (!String(req.headers['content-type'] ?? '').includes('application/json')) return fail(res, 400, 'Content-Type must be application/json');
 

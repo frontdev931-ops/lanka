@@ -6,13 +6,13 @@ export interface FunnelRow {
   key: string;
   label: string;
   value: number;
-  // Подсказка: что это за этап и как считается
+  // Hint: what this stage is and how it is calculated
   hint: string;
 }
 
-// Воронка горизонтальными столбцами: длина = число людей, ширина всегда от нуля (не от первого этапа), подписи значений
-// на конце столбца, процент от начала и от предыдущего этапа в тексте. Все столбцы одного цвета: цвет не несёт смысла,
-// смысл в длине. Каждый столбец доступен с клавиатуры и показывает подсказку.
+// The funnel as horizontal bars: length = the number of people, the width always starts from zero (not from the first stage), value labels
+// at the end of the bar, the percent of the start and of the previous stage in the text. All bars are one colour: colour carries no meaning,
+// the meaning is in the length. Each bar is reachable by keyboard and shows a hint.
 export function FunnelBars({ rows, ariaLabel, ofStart, ofPrev, fmt }: {
   rows: FunnelRow[];
   ariaLabel: string;

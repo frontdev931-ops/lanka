@@ -1,10 +1,10 @@
 import { readStoredLocale, translate } from './i18n';
 
-// Все запросы идут на наш же адрес и проксируются на сервер (см. next.config.mjs).
-// Сессия хранится в httpOnly-cookie: скрипты страницы токен не видят.
+// All requests go to our own address and are proxied to the server (see next.config.mjs).
+// The session is stored in an httpOnly cookie: page scripts do not see the token.
 const BASE = '/backend';
 
-// Язык читаем из хранилища при каждом запросе: дочерние компоненты запрашивают данные раньше, чем провайдер языка успевает обновиться
+// We read the language from storage on every request: child components request data before the language provider manages to update
 const langHeader = () => ({ 'Accept-Language': readStoredLocale() });
 
 export class ApiError extends Error {
@@ -36,7 +36,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
-// Загрузка файла (multipart): Content-Type выставляет браузер
+// File upload (multipart): the browser sets Content-Type
 export async function upload<T>(path: string, file: File): Promise<T> {
   const form = new FormData();
   form.append('file', file);
@@ -62,7 +62,7 @@ export async function download(path: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-// Скачать файл, который сервер собирает по телу запроса (например, отчёт из конструктора)
+// Download a file that the server builds from the request body (for example a report from the builder)
 export async function downloadPost(path: string, body: unknown, filename: string) {
   const res = await send(path, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
   if (!res.ok) await fail(res);
@@ -74,5 +74,5 @@ export async function downloadPost(path: string, body: unknown, filename: string
   URL.revokeObjectURL(url);
 }
 
-// Старое имя для CSV-отчётов
+// The old name for CSV reports
 export const downloadCsv = download;

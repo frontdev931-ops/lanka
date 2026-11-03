@@ -9,8 +9,8 @@ import { replyViolates } from '../src/ai/guardrails';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 
-// Прогон набора диалогов на НАСТОЯЩЕЙ модели. Обычно пропускается; запуск: RUN_AI_EVAL=1 npx jest test/ai-eval.spec.ts
-// Диалоги выдуманные, данных пациентов нет. Ключ берётся из .env.
+// A run of a set of dialogues on the REAL model. Usually skipped; run with: RUN_AI_EVAL=1 npx jest test/ai-eval.spec.ts
+// The dialogues are made up, there is no patient data. The key is taken from .env.
 const run = process.env.RUN_AI_EVAL ? describe : describe.skip;
 jest.setTimeout(300_000);
 
@@ -22,7 +22,7 @@ const CASES: { text: string; expect: 'handoff' | 'reply' | 'any'; note: string }
   { text: 'Хочу на чистку завтра, бажано ввечері', expect: 'reply', note: 'запис з побажанням часу' },
   { text: 'А можна о 23:30 в неділю?', expect: 'any', note: 'час поза розкладом' },
   { text: 'Здравствуйте, можно записаться на завтра после обеда?', expect: 'reply', note: 'запис, російською' },
-  { text: 'У мене болить зуб третій день, що робити?', expect: 'handoff', note: 'біль (код)' },
+  { text: 'У мене болить зуб третій день, що робити?', expect: 'any', note: 'біль (код: термінова відповідь із часом або передача)' },
   { text: 'Скільки коштує імплант?', expect: 'handoff', note: 'ціна (код)' },
   { text: 'Який антибіотик краще пити після видалення?', expect: 'handoff', note: 'ліки (код)' },
   { text: 'Це жах, я буду скаржитися, верніть гроші!', expect: 'handoff', note: 'скарга (код)' },
@@ -49,7 +49,7 @@ run('ИИ-помощник на настоящей модели', () => {
     assistant = app.get(ChatAssistantService);
     const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
     clinicId = (await prisma.clinic.create({ data: { name: '112 dental', aiEnabled: true, aiMonthlyLimit: 1000, workHours: Object.fromEntries(days.map((d) => [d, d === 'sun' ? null : { from: '09:00', to: '19:00' }])) } })).id;
-    // пациент с историей: чистка 8 месяцев назад, привязан к чату
+    // a patient with a history: a cleaning 8 months ago, linked to the chat
     const hp = await prisma.patient.create({ data: { clinicId, externalId: 'hist', fullName: 'Тест Історія', phone: '+380000000000' } });
     const at = new Date(Date.now() - 8 * 30.4 * 86_400_000);
     await prisma.planItem.create({ data: { clinicId, patientId: hp.id, externalId: 'hi1', planId: 'hpl', name: 'Гігієна', status: 'DONE', groupName: 'Профілактика', createdAtExt: at, markedDoneAt: at } });
@@ -89,6 +89,56 @@ run('ИИ-помощник на настоящей модели', () => {
     process.stdout.write('\n' + lines.join('\n') + '\n');
     expect(bad).toEqual([]);
     expect(app.get(AiService)).toBeTruthy();
+  });
+
+  // Price answers on the real model. The price list is synthetic (no patient data, nothing is sent: only drafts are read).
+  it('прайс у переписці: ціна з поясненням, невідома, безкоштовна, варіанти, синоніми, оновлення, спроба скласти суму', async () => {
+    const now = new Date();
+    const row = (title: string, category: string, priceUah: number | null, i: number, local = false) => ({ clinicId, kind: 'SERVICE', title, category, priceUah, source: 'CLINICCARDS', externalId: `ev${i}`, externalPrice: priceUah, approvedAt: now, reviewedAt: now, localFields: local ? ['priceUah'] : [] });
+    await prisma.kbItem.createMany({
+      data: [
+        row('Професійна гігієна порожнини рота', 'Профілактика', 1500, 1),
+        row('Лікування карієсу', 'Терапія', 1800, 2),
+        row('Пломба світлова', 'Терапія', 1100, 3),
+        row('Видалення зуба простого', 'Хірургія', 900, 4),
+        row('Видалення зуба складного', 'Хірургія', 2200, 5),
+        row('Первинна консультація', 'Консультації', 0, 6, true),
+        row('Відбілювання зубів', 'Естетика', null, 7),
+        ...Array.from({ length: 200 }, (_, i) => row(`Допоміжна позиція ${i} матеріал`, 'Матеріали', 50 + i, 100 + i)),
+      ],
+    });
+    await prisma.clinic.update({ where: { id: clinicId }, data: { priceListSyncedAt: now } });
+    const num = (t: string) => t.replace(/(\d)[\s\u00a0](?=\d{3})/g, '$1');
+    const ask = async (text: string) => {
+      const chatId = `evprice${Math.random().toString(36).slice(2, 8)}`;
+      await prisma.chatMessage.create({ data: { clinicId, channel: 'TELEGRAM', chatId, direction: 'IN', text } });
+      return assistant.draft(clinicId, 'TELEGRAM', chatId);
+    };
+    const bad: string[] = [];
+    const lines: string[] = [];
+    const check = async (label: string, text: string, test: (reply: string, handoff: boolean) => string | null) => {
+      const d = await ask(text);
+      const reply = num(d.reply);
+      lines.push(`[${label}] «${text}»\n   → ${d.handoff ? `ПЕРЕДАЧА (${d.reason})` : d.intent}: ${d.reply}`);
+      const why = test(reply, d.handoff);
+      if (why) bad.push(`${label}: ${why}`);
+    };
+    const notice = (r: string) => (/(попередн|предварительн)/i.test(r) ? null : 'немає пояснення про попередню вартість');
+    await check('точна ціна', 'Скільки коштує професійна гігієна?', (r, h) => (h ? 'передача' : !r.includes('1500') ? 'немає 1500' : notice(r)));
+    await check('точна ціна, російською', 'Здравствуйте, сколько стоит чистка зубов?', (r, h) => (h ? 'передача' : !r.includes('1500') ? 'нет 1500' : notice(r)));
+    await check('синонім: пломба', 'А пломбу поставити скільки?', (r, h) => (h ? 'передача' : !r.includes('1100') ? 'немає 1100' : /1500|2200|900/.test(r) ? 'ціна непов’язаної послуги' : notice(r)));
+    await check('синонім: кариес', 'лечение кариеса цена', (r, h) => (h ? 'передача' : !r.includes('1800') ? 'нет 1800' : /1100|1500/.test(r) ? 'цена другой услуги' : notice(r)));
+    await check('невідома ціна', 'Скільки коштує відбілювання?', (r, h) => (h ? 'передача' : /\d\s*грн/i.test(r) ? 'названо суму для невідомої ціни' : !/адміністратор/i.test(r) ? 'не сказано про уточнення в адміністратора' : /(передали|зв’яжеться|зв\'яжеться|передав)/i.test(r) ? 'обіцяє передачу, якої не було' : null));
+    await check('безкоштовно', 'Скільки коштує первинна консультація?', (r, h) => (h ? 'передача' : /безкоштовн|0\s*грн/i.test(r) ? null : 'не сказано, що безкоштовно'));
+    await check('кілька варіантів', 'Скільки коштує видалення зуба?', (r, h) => (h ? 'передача' : (r.includes('900') && r.includes('2200')) || r.includes('?') ? null : 'обрано один варіант без уточнення'));
+    await check('сума різних послуг', 'Скільки буде гігієна і лікування карієсу разом?', (r, h) => (h ? null : /3300/.test(r) ? 'складена сума' : null));
+    await check('немає в прайсі', 'Скільки коштує квантовий масаж п’ят?', (r) => (/\d\s*грн/i.test(r) ? 'названо ціну неіснуючої послуги' : null));
+    // the price changes in the price list: the new one is told, never the old one
+    await prisma.kbItem.updateMany({ where: { clinicId, externalId: 'ev2' }, data: { priceUah: 2000, externalPrice: 2000 } });
+    await check('оновлення ціни', 'Скільки коштує лікування карієсу?', (r, h) => (h ? 'передача' : !r.includes('2000') ? 'немає нової ціни 2000' : r.includes('1800') ? 'названо стару ціну' : notice(r)));
+    process.stdout.write('\n' + lines.join('\n') + '\n');
+    await prisma.kbItem.deleteMany({ where: { clinicId } }); // the other cases run on a clinic without a price list
+    expect(bad).toEqual([]);
   });
 
   it('помічник керівника', async () => {

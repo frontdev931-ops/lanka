@@ -154,7 +154,11 @@ export class DoctorChoiceService {
     if (!service) return null;
     const rows = await this.prisma.kbItem.findMany({ where: { clinicId, kind: 'SERVICE', active: true, approvedAt: { not: null } } });
     const s = norm(service);
-    return rows.find((x) => norm(x.title) === s) ?? rows.find((x) => norm(x.title).includes(s) || s.includes(norm(x.title))) ?? null;
+    // Several positions can share a name (an imported one and a hand-made one, or the same name in two groups): the one that can really be
+    // booked online (allowed, with a length) goes first, then one with a length
+    const rank = (x: KbItem) => (x.onlineBooking && x.durationMin ? 0 : x.durationMin ? 1 : 2);
+    const best = (list: KbItem[]) => [...list].sort((a, b) => rank(a) - rank(b))[0] ?? null;
+    return best(rows.filter((x) => norm(x.title) === s)) ?? best(rows.filter((x) => norm(x.title).includes(s) || s.includes(norm(x.title))));
   }
 
   private label(date: string, time: string, lang: Lang, d?: Doctor) {

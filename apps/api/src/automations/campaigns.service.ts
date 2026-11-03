@@ -9,24 +9,24 @@ const CLOSED_BAD = ['CANCELLED', 'DID_NOT_COME', 'MOVED'];
 export const PLACEHOLDERS = new Set(['name', 'clinic', 'date', 'time', 'months']);
 
 export interface CampaignFilters {
-  // давно не были: от N месяцев и/или до N месяцев с последнего визита
+  // long-absent patients: from N months and/or up to N months since the last visit
   monthsSinceVisitMin?: number;
   monthsSinceVisitMax?: number;
-  // только тем, у кого нет будущей записи
+  // only those with no future appointment
   noFutureVisit?: boolean;
 }
 
 export interface AudienceReport {
-  matched: number; // подходит по фильтрам
-  noConsent: number; // нет согласия на рекламные сообщения
-  paused: number; // отказался или на паузе
-  noChannel: number; // не подключён к Telegram
-  tooSoon: number; // маркетинговое сообщение уже было недавно
+  matched: number; // matches the filters
+  noConsent: number; // no consent to marketing messages
+  paused: number; // opted out or paused
+  noChannel: number; // not connected to Telegram
+  tooSoon: number; // a marketing message was already sent recently
   toQueue: number;
   sample: { patient: string; text: string }[];
 }
 
-// Своя рассылка (например, акция). Это всегда маркетинг: согласие пациента обязательно, подтверждение сотрудником обязательно.
+// A custom campaign (for example a promotion). This is always marketing: the patient's consent is required, and confirmation by staff is required.
 @Injectable()
 export class CampaignsService {
   constructor(
@@ -59,7 +59,7 @@ export class CampaignsService {
     return { ok: true };
   }
 
-  // Считает аудиторию (и при commit создаёт сообщения в очереди «ждёт подтверждения»)
+  // Counts the audience (and with commit creates messages in the "waiting for confirmation" queue)
   async audience(clinicId: string, id: string, commit: boolean, now = new Date()): Promise<AudienceReport> {
     const c = await this.prisma.campaign.findFirst({ where: { id, clinicId } });
     if (!c) throw new NotFoundException('campaign_not_found');

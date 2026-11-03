@@ -39,7 +39,7 @@ interface People {
 const PATH_STAGES = ['card', 'booked', 'came', 'started', 'paid'] as const;
 const RETURN_STAGES = ['came', 'repeat', 'active'] as const;
 const HEAT_COLS = ['booked', 'came', 'started', 'paid', 'repeat', 'active'] as const;
-// Причины остановки в порядке пути пациента; «записан, приём впереди» не потеря, а ожидание
+// Reasons for stopping in the order of the patient's path; "booked, the visit is ahead" is not a loss but waiting
 const LEAKS = ['no-booking', 'unclosed', 'cancelled', 'no-show', 'moved', 'upcoming', 'not-started', 'not-paid', 'no-return', 'lost'] as const;
 const FRESH_DAYS = 90;
 

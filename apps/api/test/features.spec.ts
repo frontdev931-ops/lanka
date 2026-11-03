@@ -73,8 +73,8 @@ describe('вход через cookie', () => {
     const body = { title: 'Позвонить пациенту' };
     await http().post('/tasks').set('Cookie', cookie).set('Origin', 'https://evil.example.com').send(body).expect(403);
     await http().post('/tasks').set('Cookie', cookie).set('Origin', 'http://localhost:3000').send(body).expect(201);
-    await http().post('/tasks').set('Cookie', cookie).send(body).expect(201); // не браузер: Origin нет
-    await http().get('/tasks').set('Cookie', cookie).set('Origin', 'https://evil.example.com').expect(200); // чтение не меняет данных
+    await http().post('/tasks').set('Cookie', cookie).send(body).expect(201); // not a browser: there is no Origin
+    await http().get('/tasks').set('Cookie', cookie).set('Origin', 'https://evil.example.com').expect(200); // reading changes no data
   });
 
   it('выход очищает cookie', async () => {
@@ -125,13 +125,13 @@ describe('приглашения сотрудников', () => {
     const owner = await register();
     const newbie = await invite(owner.token, 'ADMIN');
     await http().post(`/invites/${newbie.token}/accept`).send({ password: 'password123' }).expect(400);
-    await http().post(`/invites/${newbie.token}/accept`).send({ name: 'Н', password: 'password123' }).expect(400); // слишком короткое имя
+    await http().post(`/invites/${newbie.token}/accept`).send({ name: 'Н', password: 'password123' }).expect(400); // the name is too short
 
     const existing = await register();
     const inv = await invite(owner.token, 'MANAGER', existing.email);
     expect((await http().get(`/invites/${inv.token}`).expect(200)).body.existingUser).toBe(true);
     await http().post(`/invites/${inv.token}/accept`).send({ password: 'неверный-пароль' }).expect(400);
-    // неудачная попытка не сжигает ссылку
+    // a failed attempt does not burn the link
     await http().post(`/invites/${inv.token}/accept`).send({ password: 'password123' }).expect(201);
   });
 
@@ -225,7 +225,7 @@ describe('импорт Excel и CSV', () => {
       a: await mkPatient(owner.clinicId, 'Іваненко Олег', '+38 (050) 111-22-33'),
       b: await mkPatient(owner.clinicId, 'Петренко Ірина', '0672223344'),
       c1: await mkPatient(owner.clinicId, 'Коваль Марія', '0633334455'),
-      c2: await mkPatient(owner.clinicId, 'Коваль Марія Друга', '380633334455'), // тот же телефон: неоднозначно
+      c2: await mkPatient(owner.clinicId, 'Коваль Марія Друга', '380633334455'), // the same phone: ambiguous
     };
     return { owner, patients };
   }
@@ -245,9 +245,9 @@ describe('импорт Excel и CSV', () => {
     const { owner, patients } = await setup();
     const csv = [
       'Телефон;Джерело;Коментар',
-      '0501112233;Instagram;Алергія на лідокаїн', // Іваненко: найден по телефону в другой записи
+      '0501112233;Instagram;Алергія на лідокаїн', // Ivanenko: found by phone in another row
       '+380672223344;Google;', // Петренко
-      '0633334455;Рекомендація;Неоднозначно', // два пациента с одним телефоном
+      '0633334455;Рекомендація;Неоднозначно', // two patients with one phone
       '0990000000;Facebook;Такого пациента нет',
       ';Instagram;Нет телефона',
       '0501112233;Google;Повтор того же телефона', // дубль ключа в файле
@@ -258,21 +258,21 @@ describe('импорт Excel и CSV', () => {
     expect(dry).toMatchObject({ total: 6, matched: 3, unmatched: 1, ambiguous: 1, emptyKey: 1, duplicateKeys: 1, patientsToUpdate: 2 });
     expect(dry.samples.unmatched[0]).toMatchObject({ row: 5, key: '0990000000' });
     expect(dry.samples.ambiguous[0].row).toBe(4);
-    expect((await prisma.patient.findUniqueOrThrow({ where: { id: patients.a.id } })).extra).toEqual({}); // предпросмотр не пишет
+    expect((await prisma.patient.findUniqueOrThrow({ where: { id: patients.a.id } })).extra).toEqual({}); // the preview writes nothing
 
     const applied = (await http().post(`/imports/${batch.id}/apply`).set(auth(owner.token)).send(extraMapping()).expect(200)).body;
     expect(applied).toEqual(dry);
 
     const a = (await prisma.patient.findUniqueOrThrow({ where: { id: patients.a.id } })).extra as Record<string, { v: string; b: string }>;
-    // у Іваненка две строки с одним телефоном: побеждает последняя (повтор виден в сводке как duplicateKeys)
+    // Ivanenko has two rows with one phone: the last one wins (the repeat is visible in the summary as duplicateKeys)
     expect(a['Звідки дізналась']).toEqual({ v: 'Google', b: batch.id });
     expect(a['Коментар'].v).toBe('Повтор того же телефона');
     const b = (await prisma.patient.findUniqueOrThrow({ where: { id: patients.b.id } })).extra as Record<string, { v: string }>;
     expect(b['Звідки дізналась'].v).toBe('Google');
     expect(b['Коментар']).toBeUndefined(); // пустое значение не создаёт поле
-    expect((await prisma.patient.findUniqueOrThrow({ where: { id: patients.c1.id } })).extra).toEqual({}); // неоднозначные не тронуты
+    expect((await prisma.patient.findUniqueOrThrow({ where: { id: patients.c1.id } })).extra).toEqual({}); // ambiguous ones are untouched
 
-    // повторно применить нельзя
+    // it cannot be applied again
     await http().post(`/imports/${batch.id}/apply`).set(auth(owner.token)).send(extraMapping()).expect(409);
     await http().post(`/imports/${batch.id}/dry-run`).set(auth(owner.token)).send(extraMapping()).expect(409);
 
@@ -284,7 +284,7 @@ describe('импорт Excel и CSV', () => {
     expect(csvOut.text).toContain('Неоднозначно');
     expect(csvOut.text).not.toContain('Алергія на лідокаїн');
 
-    // отмена применённого импорта: поля возвращаются, повторно отменить нельзя, чужая клиника не может
+    // undoing an applied import: the fields come back, it cannot be undone twice, another clinic cannot
     const stranger = await register();
     await http().post(`/imports/${batch.id}/undo`).set(auth(stranger.token)).expect(404);
     const undone = (await http().post(`/imports/${batch.id}/undo`).set(auth(owner.token)).expect(200)).body;
@@ -351,17 +351,17 @@ describe('импорт Excel и CSV', () => {
     expect(logs.every((l) => l.source === 'IMPORT' && l.channel === 'PHONE' && l.importBatchId === batch.id)).toBe(true);
     const byPatient = (id: string) => logs.filter((l) => l.patientId === id);
     expect(byPatient(patients.a.id)[0]).toMatchObject({ outcome: 'BOOKED', note: 'На чистку' });
-    expect(byPatient(patients.b.id).map((l) => l.outcome)).toEqual([null, 'NO_ANSWER'].reverse()); // 15.09 — NO_ANSWER, 20.09 — не распознан
+    expect(byPatient(patients.b.id).map((l) => l.outcome)).toEqual([null, 'NO_ANSWER'].reverse()); // 15.09 is NO_ANSWER, 20.09 is not recognised
     expect(byPatient(patients.b.id).find((l) => l.outcome === null)?.note).toBe('Обговорили ціни · Подумає');
 
-    // та же таблица второй раз: дублей нет
+    // the same table a second time: no duplicates
     const again = (await upload(owner.token, file).expect(201)).body;
     const dry2 = (await http().post(`/imports/${again.id}/dry-run`).set(auth(owner.token)).send(mapping).expect(200)).body;
     expect(dry2).toMatchObject({ contactsToCreate: 0, contactsDuplicate: 3 });
     await http().post(`/imports/${again.id}/apply`).set(auth(owner.token)).send(mapping).expect(200);
     expect(await prisma.contactLog.count({ where: { clinicId: owner.clinicId } })).toBe(3);
 
-    // записи видны в карточке пациента
+    // the records are visible in the patient's card
     const card = (await http().get(`/patients/${patients.b.id}`).set(auth(owner.token)).expect(200)).body;
     expect(card.contacts).toHaveLength(2);
   });
@@ -379,7 +379,7 @@ describe('импорт Excel и CSV', () => {
     expect((await http().get('/imports').set(auth(b.token)).expect(200)).body).toHaveLength(0);
 
     await http().post(`/imports/${batch.id}/apply`).set(auth(a.owner.token)).send(extraMapping({ fields: [{ column: 'Джерело' }] })).expect(200);
-    expect((await prisma.patient.findUniqueOrThrow({ where: { id: bPatient.id } })).extra).toEqual({}); // пациент другой клиники не тронут
+    expect((await prisma.patient.findUniqueOrThrow({ where: { id: bPatient.id } })).extra).toEqual({}); // a patient of another clinic is untouched
   });
 
   it('права: врач не может загружать; администратор может', async () => {
@@ -393,7 +393,7 @@ describe('импорт Excel и CSV', () => {
 
   it('ошибки: не файл, повреждённый файл, слишком большой, неверные настройки', async () => {
     const owner = await register();
-    await http().post('/imports').set(auth(owner.token)).expect(400); // без файла
+    await http().post('/imports').set(auth(owner.token)).expect(400); // without a file
     await upload(owner.token, { buffer: Buffer.from('PK\u0003\u0004не-архив'), filename: 'x.xlsx', contentType: 'application/octet-stream' }).expect(400);
     await upload(owner.token, { buffer: Buffer.alloc(0), filename: 'x.csv', contentType: 'text/csv' }).expect(400);
     const big = await upload(owner.token, { buffer: Buffer.alloc(5 * 1024 * 1024 + 10, 'a'), filename: 'big.csv', contentType: 'text/csv' }).expect(413);
@@ -469,7 +469,7 @@ describe('история действий, экспорт и удаление д
     await mkPatient(other.clinicId, 'Залишиться', '0502223344');
     const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } });
 
-    // сотрудник, у которого есть и другая клиника, не удаляется
+    // a staff member who also has another clinic is not deleted
     const shared = await register('Спільний');
     const inv = await invite(owner.token, 'MANAGER', shared.email);
     await http().post(`/invites/${inv.token}/accept`).send({ password: 'password123' }).expect(201);
@@ -486,7 +486,7 @@ describe('история действий, экспорт и удаление д
     expect(await prisma.patient.count({ where: { clinicId: owner.clinicId } })).toBe(0);
     expect(await prisma.user.count({ where: { email: owner.email } })).toBe(0);
     expect(await prisma.user.count({ where: { email: staff.email } })).toBe(0);
-    expect(await prisma.user.count({ where: { email: shared.email } })).toBe(1); // у него есть своя клиника
-    expect(await prisma.patient.count({ where: { clinicId: other.clinicId } })).toBe(1); // чужая клиника цела
+    expect(await prisma.user.count({ where: { email: shared.email } })).toBe(1); // they have their own clinic
+    expect(await prisma.patient.count({ where: { clinicId: other.clinicId } })).toBe(1); // another clinic is intact
   });
 });

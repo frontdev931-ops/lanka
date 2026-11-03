@@ -21,13 +21,13 @@ import {
 import { CliniccardsClient, CliniccardsError } from './cliniccards.client';
 import { clinicDate, clinicHm, localToUtc } from '../common/clinic-time';
 
-// Проверено на живой клинике: Cliniccards отдаёт тысячи строк за один запрос (все пациенты за 0,7 с,
-// три года пунктов планов — 25 тысяч строк за 1,9 с). Лимит запросов 60 в минуту, поэтому важнее число запросов,
-// чем размер ответа. Если на какой-то клинике большой период не пройдёт, коннектор сам перейдёт на мелкие отрезки.
+// Checked on a live clinic: Cliniccards returns thousands of rows in one request (all patients in 0.7 s,
+// three years of plan items: 25 thousand rows in 1.9 s). The limit is 60 requests per minute, so the number of requests matters more
+// than the size of the answer. If a large period does not go through on some clinic, the connector switches to small segments by itself.
 const PAGE = 1000;
 const CHUNK_DAYS = 365;
 const SMALL_CHUNK_DAYS = 31;
-// Логотип хранится строкой в базе и отдаётся в каждом /auth/me: ограничиваем размер (~700 КБ картинки)
+// The logo is stored as a string in the database and returned in every /auth/me: we limit the size (~700 KB of picture)
 const MAX_LOGO = 1_000_000;
 const DAY = 86_400_000;
 
@@ -145,7 +145,7 @@ interface RawReminder {
   status?: string;
 }
 
-// Дата без времени остаётся «чистой» датой (полночь UTC), чтобы день не сдвигался
+// A date without time stays a "pure" date (midnight UTC), so the day does not shift
 const toDate = (s?: string | null) => {
   if (!s || s.startsWith('0000')) return undefined;
   return s.length > 10 ? localToUtc(s) : new Date(s + 'T00:00:00Z');
@@ -157,8 +157,8 @@ const str = (v: Id | null | undefined) => (v === null || v === undefined ? undef
 export class CliniccardsConnector implements ClinicConnector {
   constructor(private readonly client: CliniccardsClient) {}
 
-  // Период режем на крупные отрезки (год). Если Cliniccards отказал на большом отрезке (ошибка запроса, не лимит
-  // частоты), этот отрезок перечитывается мелкими по 31 дню, чтобы загрузка не ломалась из-за размера ответа.
+  // The period is cut into large segments (a year). If Cliniccards refused a large segment (a request error, not a rate
+  // limit), that segment is re-read in small 31-day pieces, so the load does not break because of the size of the answer.
   private async chunked<T>(path: string, { from, to }: SyncWindow, days = CHUNK_DAYS): Promise<T[]> {
     const out: T[] = [];
     for (let start = new Date(from); start <= to; start = new Date(start.getTime() + days * DAY)) {
@@ -345,7 +345,7 @@ export class CliniccardsConnector implements ClinicConnector {
     const p = await this.client.get<{ logo?: string | null; name?: string | null }>('/clinic-profile');
     // the name comes with HTML entities like the other texts of Cliniccards; a sane length only
     const name = decodeEntities(p?.name ?? '').trim();
-    // Только растровые форматы и разумный размер: SVG не принимаем, он может содержать скрипты
+    // Only raster formats and a reasonable size: we do not accept SVG, it may contain scripts
     const logo = p?.logo;
     const ok = typeof logo === 'string' && logo.length <= MAX_LOGO && /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(logo);
     return { logo: ok ? logo : undefined, ...(name && name.length <= 120 ? { name } : {}) };
@@ -353,8 +353,8 @@ export class CliniccardsConnector implements ClinicConnector {
 
   async fetchPatients(): Promise<ExternalPatient[]> {
     const out: ExternalPatient[] = [];
-    // Читаем до пустой страницы и сдвигаем начало на число реально пришедших строк: если сервер когда-нибудь
-    // отдаст страницу меньше запрошенной (свой потолок), пациенты не потеряются
+    // We read until an empty page and move the start by the number of rows that really arrived: if the server ever
+    // returns a page smaller than requested (its own ceiling), no patients are lost
     for (let offset = 0; ; ) {
       const page = await this.client.get<RawPatient[]>('/patients', { limit: PAGE, offset });
       if (!page.length) return out;
@@ -400,7 +400,7 @@ export class CliniccardsConnector implements ClinicConnector {
     return dedupe(out);
   }
 
-  // Период в /planItems, по нашему допущению, отбирает пункты по дате создания (в документации не уточняется)
+  // The period in /planItems, by our assumption, selects items by creation date (the documentation does not say)
   async fetchTreatment(window: SyncWindow): Promise<ExternalPlanItem[]> {
     const out: ExternalPlanItem[] = [];
     for (const i of await this.chunked<RawPlanItem>('/planItems', window)) {
@@ -467,7 +467,7 @@ export class CliniccardsConnector implements ClinicConnector {
   }
 }
 
-// Отрезки периода могут пересекаться на границах: убираем повторы по ID
+// Period segments may overlap at the borders: we remove repeats by ID
 function dedupe<T extends { externalId: string }>(rows: T[]): T[] {
   return [...new Map(rows.map((r) => [r.externalId, r])).values()];
 }

@@ -7,9 +7,9 @@ import { AppModule } from './app.module';
 import { assertConfig } from './common/config';
 
 async function bootstrap() {
-  assertConfig(); // в продакшене слабые секреты и http-адреса — отказ запускаться
+  assertConfig(); // in production weak secrets and http addresses mean a refusal to start
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true }) // the raw body is needed to check the Instagram webhook signature;
-  // Сервер стоит за прокси хостинга: берём настоящий адрес клиента (нужен для лимитов попыток)
+  // The server stands behind the hosting proxy: we take the real client address (needed for the attempt limits)
   app.set('trust proxy', 1);
   app.use(helmet());
   // The site's own address for the app; the public chat widget (/webchat) answers CORS itself, per clinic, from the sites the clinic listed

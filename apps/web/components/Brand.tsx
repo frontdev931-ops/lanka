@@ -1,4 +1,4 @@
-// Логотип и название сервиса
+// The service's logo and name
 export const BRAND_NAME = 'LANKA';
 
 export function Brand() {

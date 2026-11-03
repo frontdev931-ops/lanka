@@ -102,7 +102,7 @@ export default function PatientPage() {
   if (error && !p) return <Alert tone="error">{error}</Alert>;
   if (!p) return <Loading />;
 
-  // Врачу сервер деньги пациента не отдаёт
+  // The server does not give the patient's money to the doctor
   const showMoney = p.balanceIssued !== undefined;
   const issued = Number(p.balanceIssued ?? 0);
   const paid = Number(p.balancePaid ?? 0);
