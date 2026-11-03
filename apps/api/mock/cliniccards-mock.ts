@@ -300,6 +300,9 @@ const inRange = (value: unknown, from?: string, to?: string) => {
   return (!from || d >= from) && (!to || d <= to);
 };
 
+// Visit statuses accepted by POST/PUT /visits (official documentation)
+const VISIT_STATUSES = ['PLANNED', 'CONFIRMED', 'NOT_CONFIRMED', 'VISITED', 'MOVED', 'DID_NOT_COME', 'IN_CLINIC', 'BOOKING', 'CANCELLED', 'IN_CHAIR'];
+
 export async function startMock(opts: MockOptions = {}, port = 0): Promise<MockHandle> {
   const key = opts.key ?? MOCK_KEY;
   const limit = opts.rateLimitPerMinute ?? 60;
@@ -328,33 +331,39 @@ export async function startMock(opts: MockOptions = {}, port = 0): Promise<MockH
       return ok(res, payload);
     };
     if (path === '/visits') {
-      const need = ['status', 'patient_id', 'cabinet_id', 'date', 'time_start', 'time_end', 'note'];
-      for (const f of need) if (body[f] === undefined || body[f] === '') return fail(res, 400, `Field ${f} is required`);
+      // Official documentation (POST and PUT /visits): every field below is REQUIRED, doctor_id included; PUT also needs visit_id
+      const need = ['status', 'patient_id', 'cabinet_id', 'doctor_id', 'note', 'date', 'time_start', 'time_end', ...(req.method === 'PUT' ? ['visit_id'] : [])];
+      for (const f of need) if (body[f] === undefined || body[f] === null || body[f] === '') return fail(res, 400, `Field ${f} is required`);
+      if (!VISIT_STATUSES.includes(String(body.status))) return fail(res, 400, 'Unknown status');
       if (String(body.note).length > 400) return fail(res, 400, 'note is too long');
-      if (!/^\d{2}:\d{2}$/.test(String(body.time_start)) || Number(String(body.time_start).slice(3)) % 5) return fail(res, 400, 'time must be a multiple of 5 minutes');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.date))) return fail(res, 400, 'date must be YYYY-MM-DD');
+      for (const f of ['time_start', 'time_end']) if (!/^\d{2}:\d{2}$/.test(String(body[f])) || Number(String(body[f]).slice(3)) % 5) return fail(res, 400, 'time must be HH:MM, multiples of 5 minutes');
       if (!data.patients.some((p) => String(p.patient_id) === String(body.patient_id))) return fail(res, 400, 'Unknown patient');
       const cab = data.cabinets.find((c) => String(c.cabinet_id) === String(body.cabinet_id));
       if (!cab) return fail(res, 400, 'Unknown cabinet');
       const row = {
-        status: body.status, patient_id: String(body.patient_id), doctor_id: body.doctor_id !== undefined ? String(body.doctor_id) : null, doctor: '', cabinet_id: String(body.cabinet_id), cabinet: cab.name,
+        status: body.status, patient_id: String(body.patient_id), doctor_id: String(body.doctor_id), doctor: ((data.staff.find((x) => String(x.doctor_id) === String(body.doctor_id)) as Json | undefined)?.lastname as string | undefined) ?? '', cabinet_id: String(body.cabinet_id), cabinet: cab.name,
         date_created: dt(new Date()), date_edited: dt(new Date()), visit_start: `${body.date} ${body.time_start}:00`, visit_end: `${body.date} ${body.time_end}:00`, note: body.note, price_items: null,
       };
       if (req.method === 'POST') {
         const id = String(nextVisit++);
         data.visits.push({ visit_id: id, ...row });
-        return reply({ visit_id: id });
+        return reply({ visit_id: id, ...row });
       }
       const cur = data.visits.find((v) => String(v.visit_id) === String(body.visit_id));
       if (!cur) return fail(res, 404, 'Visit not found');
       Object.assign(cur, row, { visit_id: cur.visit_id, date_created: cur.date_created, price_items: cur.price_items });
-      return reply({ visit_id: String(cur.visit_id) });
+      return reply({ ...cur });
     }
     if (path === '/patients') {
       if (req.method === 'POST') {
-        for (const f of ['lastname', 'firstname', 'phone']) if (!body[f]) return fail(res, 400, `Field ${f} is required`);
+        // Official documentation (POST /patients): lastname and firstname are REQUIRED (1 to 50 characters); phone is optional and its non-digits are removed
+        for (const f of ['lastname', 'firstname']) if (!body[f]) return fail(res, 400, `Field ${f} is required`);
+        if (String(body.lastname).length > 50 || String(body.firstname).length > 50) return fail(res, 400, 'lastname and firstname are up to 50 characters');
         const id = String(nextPatient++);
-        data.patients.push({ patient_id: id, lastname: body.lastname, firstname: body.firstname, phone: String(body.phone).replace(/\D/g, ''), source: body.source ?? '', date_created: dt(new Date()) });
-        return reply({ patient_id: id });
+        const row = { patient_id: id, lastname: body.lastname, firstname: body.firstname, phone: body.phone ? String(body.phone).replace(/\D/g, '') : '', source: body.source ?? '', preferred_contact: body.preferred_contact ?? null, date_created: dt(new Date()) };
+        data.patients.push(row);
+        return reply(row);
       }
     }
     return fail(res, 404, `Unknown method ${path}`);
@@ -425,7 +434,8 @@ export async function startMock(opts: MockOptions = {}, port = 0): Promise<MockH
     if (path === '/invoices') return ok(res, range(data.invoices, 'date_created'));
     if (path === '/schedule-shifts') return ok(res, range(data.shifts, 'shift_start'));
     if (path === '/schedule-spaces') return ok(res, range(data.spaces, 'space_start'));
-    if (path === '/clinic-profile') return ok(res, { id: 1, name: 'Mock', type: 'CLINIC', logo: MOCK_LOGO });
+    // Fields as in the official documentation of GET /clinic-profile
+    if (path === '/clinic-profile') return ok(res, { id: 1, name: 'Mock', type: 'CLINIC', website: 'www.mock.example', email: 'mock@example.com', phone: '0440000000', address: 'Mock Street, 1', logo: MOCK_LOGO, date_created: '2023-11-19 18:14:57' });
     if (path === '/plans') return ok(res, range(data.plans, 'date_created'));
     if (path === '/reminders') return ok(res, range(data.reminders, 'date').filter((r) => !q.patient_id || String(r.patient_id) === q.patient_id));
     if (path === '/prices') {

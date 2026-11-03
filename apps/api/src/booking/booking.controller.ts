@@ -31,9 +31,10 @@ class VerifyDto {
   @IsOptional() @IsString() chatId?: string;
 }
 class NewPatientDto {
-  @IsString() @MinLength(3) @MaxLength(120) fullName: string;
+  // the surname and the first name are separate fields: they are never told apart by the order of words
+  @IsString() @MinLength(1) @MaxLength(50) lastName: string;
+  @IsString() @MinLength(1) @MaxLength(50) firstName: string;
   @IsString() @MaxLength(40) phone: string;
-  @IsOptional() @IsString() @MaxLength(60) source?: string;
   @IsOptional() @IsString() channel?: string;
   @IsOptional() @IsString() chatId?: string;
 }

@@ -72,7 +72,7 @@ export class DemoService implements OnApplicationBootstrap, OnModuleDestroy {
     await this.sync.run(clinic.id, null);
     await this.seedMessaging(clinic.id);
     await this.seedKnowledge(clinic.id);
-    return { accessToken: await this.jwt.signAsync({ sub: user.id, clinicId: clinic.id, role: 'OWNER' }), clinicId: clinic.id };
+    return { accessToken: await this.jwt.signAsync({ sub: user.id, clinicId: clinic.id, role: 'OWNER', iatMs: Date.now() }), clinicId: clinic.id };
   }
 
   // Conversations, requests, inquiries and ratings, so that the inbox, quality and funnel pages are not empty

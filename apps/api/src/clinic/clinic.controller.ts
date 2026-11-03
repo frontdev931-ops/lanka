@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, DefaultValuePipe, Delete, Get, H
 import { Role } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import type { Request, Response } from 'express';
-import { IsString } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { AuthGuard, AuthUser, CurrentUser, Roles, SESSION_COOKIE } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseWorkHours, readWorkHours } from './work-hours';
@@ -10,6 +10,12 @@ import { TERMS_VERSION } from '../common/terms';
 
 class AcceptTermsDto {
   @IsString() version: string;
+}
+
+class ContactsDto {
+  @IsOptional() @IsString() @MaxLength(300) address?: string;
+  @IsOptional() @IsString() @MaxLength(40) phone?: string;
+  @IsOptional() @IsString() @MaxLength(500) directions?: string;
 }
 
 class DeleteClinicDto {
@@ -46,6 +52,22 @@ export class ClinicController {
     await this.prisma.clinic.update({ where: { id: u.clinicId }, data: { workHours: hours } });
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'clinic.work_hours' } });
     return hours;
+  }
+
+  // What the chat assistant may tell patients: the address, the administrator's phone and how to get there (empty means unknown to the bot)
+  @Get('contacts')
+  async contacts(@CurrentUser() u: AuthUser) {
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: u.clinicId }, select: { publicAddress: true, publicPhone: true, publicDirections: true } });
+    return { address: c.publicAddress ?? '', phone: c.publicPhone ?? '', directions: c.publicDirections ?? '' };
+  }
+
+  @Put('contacts')
+  @Roles(Role.OWNER, Role.MANAGER)
+  async setContacts(@CurrentUser() u: AuthUser, @Body() dto: ContactsDto) {
+    const v = (x?: string) => (x?.trim() ? x.trim() : null);
+    await this.prisma.clinic.update({ where: { id: u.clinicId }, data: { publicAddress: v(dto.address), publicPhone: v(dto.phone), publicDirections: v(dto.directions) } });
+    await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'clinic.contacts' } });
+    return this.contacts(u);
   }
 
   // История действий сотрудников и автоматических процессов

@@ -66,7 +66,35 @@ const nextStart = () => {
   d.setUTCHours(8, 0, 0, 0);
   return d;
 };
-const body = (c: Awaited<ReturnType<typeof clinic>>, startsAt: Date, over: Record<string, unknown> = {}) => ({ patientId: c.patient.id, startsAt: startsAt.toISOString(), durationMin: 30, cabinetId: c.cabinet.externalId, ...over });
+// doctor_id is REQUIRED by the official documentation of POST /visits, so every booking names a doctor ('501' is a doctor of the mock)
+const body = (c: Awaited<ReturnType<typeof clinic>>, startsAt: Date, over: Record<string, unknown> = {}) => ({ patientId: c.patient.id, startsAt: startsAt.toISOString(), durationMin: 30, cabinetId: c.cabinet.externalId, doctorId: '501', ...over });
+
+describe('вимоги офіційної документації Cliniccards до запису', () => {
+  it('doctor_id обов’язковий: запис без лікаря не відправляється взагалі, а відправлений запит містить усі обов’язкові поля', async () => {
+    const c = await clinic();
+    const start = nextStart();
+    // no doctor: refused before any call to Cliniccards
+    await http().post('/bookings').set(auth(c.token)).send({ ...body(c, start), doctorId: undefined }).expect(400);
+    expect(mock.writes).toHaveLength(0);
+    expect(await prisma.bookingAttempt.count({ where: { clinicId: c.clinicId } })).toBe(0);
+    // with a doctor: the request has every REQUIRED field of POST /visits and the status is one of the documented values
+    await http().post('/bookings').set(auth(c.token)).send(body(c, start)).expect(200);
+    const w = mock.writes.find((x) => x.path === '/visits')!;
+    for (const f of ['status', 'patient_id', 'cabinet_id', 'doctor_id', 'note', 'date', 'time_start', 'time_end']) expect(w.body).toHaveProperty(f);
+    expect(w.body).toMatchObject({ status: 'PLANNED', doctor_id: 501 });
+    expect(String(w.body.time_start)).toMatch(/^\d{2}:\d{2}$/);
+    expect(Number(String(w.body.time_end).slice(3)) % 5).toBe(0);
+  });
+
+  it('мок відхиляє запит без doctor_id так, як сказано в документації (мок сам не підлаштований під код)', async () => {
+    const c = await clinic();
+    const res = await fetch(`${mock.url}/visits`, { method: 'POST', headers: { token: MOCK_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'PLANNED', patient_id: c.patient.externalId, cabinet_id: c.cabinet.externalId, note: 'x', date: '2030-01-10', time_start: '10:00', time_end: '10:30' }) });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('doctor_id');
+    const bad = await fetch(`${mock.url}/visits`, { method: 'POST', headers: { token: MOCK_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'WAITING', patient_id: c.patient.externalId, cabinet_id: c.cabinet.externalId, doctor_id: '501', note: 'x', date: '2030-01-10', time_start: '10:00', time_end: '10:30' }) });
+    expect(bad.status).toBe(400);
+  });
+});
 
 describe('запис у Cliniccards (на імітації)', () => {
   it('вимкнений за замовчуванням: ні запису, ні виклику Cliniccards; вмикає лише власник сервісу (прапорець клініки)', async () => {
@@ -221,24 +249,27 @@ describe('пацієнт при записі', () => {
   it('нова картка створюється в Cliniccards один раз і без дублів: той самий телефон повертає наявну', async () => {
     const c = await clinic();
     const phone = `050${Math.floor(1000000 + Math.random() * 8999999)}`;
-    const a = (await http().post('/bookings/patients').set(auth(c.token)).send({ fullName: 'Новак Тарас', phone, source: 'Instagram', channel: 'INSTAGRAM', chatId: 'n1' }).expect(200)).body;
+    const a = (await http().post('/bookings/patients').set(auth(c.token)).send({ lastName: 'Новак', firstName: 'Тарас', phone, channel: 'INSTAGRAM', chatId: 'n1' }).expect(200)).body;
     expect(a.existing).toBe(false);
-    const b = (await http().post('/bookings/patients').set(auth(c.token)).send({ fullName: 'Новак Тарас', phone: `+38${phone}` }).expect(200)).body;
+    const b = (await http().post('/bookings/patients').set(auth(c.token)).send({ lastName: 'Новак', firstName: 'Тарас', phone: `+38${phone}` }).expect(200)).body;
     expect(b).toMatchObject({ existing: true, patientId: a.patientId });
     expect(mock.writes.filter((w) => w.path === '/patients')).toHaveLength(1);
-    expect(mock.writes.find((w) => w.path === '/patients')!.body).toMatchObject({ lastname: 'Новак', firstname: 'Тарас', source: 'Instagram' });
+    expect(mock.writes.find((w) => w.path === '/patients')!.body).toMatchObject({ lastname: 'Новак', firstname: 'Тарас', phone: `38${phone}`, preferred_contact: 'INSTAGRAM' });
+    // `source` is not sent (it takes only sources the clinic configured) and the phone has no plus sign (documentation: international format without +)
+    expect(mock.writes.find((w) => w.path === '/patients')!.body).not.toHaveProperty('source');
     expect(await prisma.patientChannel.findFirst({ where: { patientId: a.patientId } })).toMatchObject({ channel: 'INSTAGRAM', externalId: 'n1' });
-    await http().post('/bookings/patients').set(auth(c.token)).send({ fullName: 'Одинслово', phone: '0501234567' }).expect(400);
+    await http().post('/bookings/patients').set(auth(c.token)).send({ lastName: 'Одинслово', phone: '0501234567' }).expect(400);
+    await http().post('/bookings/patients').set(auth(c.token)).send({ lastName: 'Н'.repeat(51), firstName: 'Тарас', phone: '0501234567' }).expect(400);
   });
 
   it('втрачена відповідь при створенні картки: повтор знаходить створену, а не робить другу', async () => {
     const c = await clinic();
     const phone = `067${Math.floor(1000000 + Math.random() * 8999999)}`;
     mock.control.dropReplyAfterWrite = true;
-    await http().post('/bookings/patients').set(auth(c.token)).send({ fullName: 'Втрата Відповіді', phone }).expect(409);
+    await http().post('/bookings/patients').set(auth(c.token)).send({ lastName: 'Втрата', firstName: 'Відповіді', phone }).expect(409);
     mock.control.dropReplyAfterWrite = false;
     // the phone filter of the mock finds the card; the retry reconciles instead of writing again
-    const r = await http().post('/bookings/patients').set(auth(c.token)).send({ fullName: 'Втрата Відповіді', phone }).expect(200);
+    const r = await http().post('/bookings/patients').set(auth(c.token)).send({ lastName: 'Втрата', firstName: 'Відповіді', phone }).expect(200);
     expect(r.body.existing).toBe(false);
     expect(mock.writes.filter((w) => w.path === '/patients')).toHaveLength(1);
   });

@@ -80,6 +80,13 @@ export interface SyncWindow {
   to: Date;
 }
 
+// A doctor of the clinic (GET /staff, role DOCTOR). The phone of a staff member is deliberately not read.
+export interface ExternalDoctor {
+  externalId: string;
+  lastName: string;
+  firstName: string;
+}
+
 export interface ExternalCabinet {
   externalId: string;
   name: string;
@@ -112,8 +119,8 @@ export interface ExternalProfile {
 export interface CreateVisitRequest {
   patientExternalId: string;
   cabinetId: string;
-  // Whether a doctor is required is to be verified on a live clinic (112 dental has doctor profiles for only some doctors)
-  doctorId?: string;
+  // Required by the official documentation of POST /visits (doctor_id REQUIRED); a booking without a known doctor is not sent
+  doctorId: string;
   startsAt: Date;
   endsAt: Date;
   // Cliniccards requires a note of 1-400 characters
@@ -134,8 +141,9 @@ export interface CreatePatientRequest {
   lastName: string;
   firstName: string;
   phone: string;
-  // The inquiry source (Cliniccards `source`), for example Instagram
-  source?: string;
+  // The channel the person wrote from (TELEGRAM, INSTAGRAM, MESSENGER, WHATSAPP, VIBER); sent as preferred_contact, which has a documented list of
+  // values. The `source` field of Cliniccards is NOT sent: it takes only sources the clinic has configured, and which names they are is unknown.
+  channel?: string;
 }
 
 // Единый интерфейс источника данных. Остальной код не знает про Cliniccards напрямую.
@@ -146,6 +154,8 @@ export interface ClinicConnector {
   fetchFinance(window: SyncWindow): Promise<{ payments: ExternalPayment[]; invoices: ExternalInvoice[] }>;
   // Необязательно: список кабинетов
   fetchCabinets?(): Promise<ExternalCabinet[]>;
+  // Необязательно: врачи клиники (для выбора врача при записи)
+  fetchDoctors?(): Promise<ExternalDoctor[]>;
   // Необязательно: итоги планов лечения за период
   fetchPlans?(window: SyncWindow): Promise<ExternalPlan[]>;
   // Необязательно: напоминания сотрудникам за период

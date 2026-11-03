@@ -72,7 +72,11 @@ export class IntakeService {
       }
     }
     const slot = payload ? SLOT.exec(payload) : null;
-    if (!text && !slot) return; // photos, stickers and the like are not handled yet
+    // "yes, confirm" / "no, another time" under the question of the automatic booking
+    const answer = payload ? /^book(yes|no)\|([A-Za-z0-9]{10,40})$/.exec(payload) : null;
+    // the doctor: one of several named, or the answer to a proposed doctor
+    const doc = payload ? /^doc(pick|yes|no)\|([A-Za-z0-9]{1,40})$/.exec(payload) : null;
+    if (!text && !slot && !answer && !doc) return; // photos, stickers and the like are not handled yet
 
     let ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel, externalId: chatId }, select: { patientId: true, optedOutAt: true } });
     if (!ch && m.verifiedPhone) {
@@ -88,7 +92,7 @@ export class IntakeService {
     if (!contactName && m.profileName) contactName = await m.profileName().catch(() => null);
 
     const label = slot ? `${slot[3]}.${slot[2]} ${slot[4]}${slot[5] ? `, лікар ${slot[5]}` : ''}` : null;
-    const stored = label ? `Обрав час: ${label}` : text.slice(0, 4000);
+    const stored = label ? `Обрав час: ${label}` : doc ? text.slice(0, 200) || (doc[1] === 'yes' ? 'Так' : doc[1] === 'no' ? 'Ні' : 'Обрав лікаря') : answer ? text.slice(0, 200) || (answer[1] === 'yes' ? 'Так, підтверджую' : 'Ні, інший час') : text.slice(0, 4000);
     try {
       await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, contactName, direction: 'IN', text: stored, externalId: m.mid } });
     } catch (e) {
@@ -105,6 +109,16 @@ export class IntakeService {
     // messages are kept for staff, nothing is answered automatically
     if (ch?.optedOutAt) return;
     if (!ch && (await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN', OR: ['stop', '/stop', 'зупинити', 'остановить'].map((t) => ({ text: { equals: t, mode: 'insensitive' as const } })) }, select: { id: true } }))) return;
+
+    if (doc) {
+      await this.flow.onDoctorAnswer({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, doc[1] as 'pick' | 'yes' | 'no', doc[2]);
+      return;
+    }
+
+    if (answer) {
+      await this.flow.onConfirmAnswer({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, answer[1] === 'yes', answer[2]);
+      return;
+    }
 
     if (slot) {
       // The person chose a time on a button: the booking flow keeps the choice, asks for the name and the phone, then hands the request over

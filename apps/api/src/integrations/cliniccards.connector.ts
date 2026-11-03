@@ -6,6 +6,7 @@ import {
   ExternalBlock,
   ExternalInvoice,
   ExternalCabinet,
+  ExternalDoctor,
   ExternalPatient,
   ExternalPlan,
   ExternalReminder,
@@ -183,11 +184,13 @@ export class CliniccardsConnector implements ClinicConnector {
     const note = req.note.trim();
     if (!note || note.length > 400) throw new CliniccardsError('Примітка до запису має бути від 1 до 400 символів');
     this.checkTimes(req.startsAt, req.endsAt);
+    // doctor_id is REQUIRED by the documentation: the write is refused here, before it is sent, instead of being sent without it
+    if (!req.doctorId || !Number.isFinite(Number(req.doctorId))) throw new CliniccardsError('Для запису в Cliniccards потрібен лікар (doctor_id)');
     const data = await this.client.post<{ visit_id?: number | string } | number | string>('/visits', {
       status: VISIT_STATUS.created,
       patient_id: Number(req.patientExternalId),
       cabinet_id: Number(req.cabinetId),
-      ...(req.doctorId ? { doctor_id: Number(req.doctorId) } : {}),
+      doctor_id: Number(req.doctorId),
       note,
       date: clinicDate(req.startsAt),
       time_start: clinicHm(req.startsAt),
@@ -208,12 +211,14 @@ export class CliniccardsConnector implements ClinicConnector {
     const endsAt = req.endsAt ?? (req.startsAt ? new Date(req.startsAt.getTime() + ((toDate(cur.visit_end)?.getTime() ?? startsAt.getTime() + 1_800_000) - toDate(cur.visit_start)!.getTime())) : toDate(cur.visit_end)!);
     this.checkTimes(startsAt, endsAt);
     const doctorId = req.doctorId ?? str(cur.doctor_id);
+    // PUT repeats every required field, doctor_id included
+    if (!doctorId) throw new CliniccardsError('У записі в Cliniccards немає лікаря: оновити його через API не можна');
     await this.client.put('/visits', {
       visit_id: Number(externalId),
       status: req.status ?? cur.status,
       patient_id: Number(cur.patient_id),
       cabinet_id: Number(req.cabinetId ?? cur.cabinet_id),
-      ...(doctorId ? { doctor_id: Number(doctorId) } : {}),
+      doctor_id: Number(doctorId),
       // the existing note is kept; Cliniccards requires a non-empty one
       note: (cur.note ?? '').trim() || 'LANKA',
       date: clinicDate(startsAt),
@@ -229,12 +234,18 @@ export class CliniccardsConnector implements ClinicConnector {
     return rows.filter((p) => [p.phone, p.phone2].some((x) => (x ?? '').replace(/\D/g, '').endsWith(want.slice(-9)))).map((p) => String(p.patient_id));
   }
 
+  // POST /patients (official documentation): lastname and firstname are REQUIRED, 1 to 50 characters; phone is optional, international format
+  // (non-digits are removed by Cliniccards, so none are sent); preferred_contact is one of PHONE, SMS, EMAIL, VIBER, WHATSAPP, FACEBOOK, INSTAGRAM, TELEGRAM.
   async createPatient(req: CreatePatientRequest): Promise<{ externalId: string }> {
+    const lastname = req.lastName.trim();
+    const firstname = req.firstName.trim();
+    if (!lastname || !firstname || lastname.length > 50 || firstname.length > 50) throw new CliniccardsError("Прізвище та ім'я мають бути від 1 до 50 символів");
+    const preferred = ({ TELEGRAM: 'TELEGRAM', INSTAGRAM: 'INSTAGRAM', MESSENGER: 'FACEBOOK', WHATSAPP: 'WHATSAPP', VIBER: 'VIBER' } as Record<string, string>)[req.channel ?? ''];
     const data = await this.client.post<{ patient_id?: number | string } | number | string>('/patients', {
-      lastname: req.lastName,
-      firstname: req.firstName,
-      phone: req.phone,
-      ...(req.source ? { source: req.source } : {}),
+      lastname,
+      firstname,
+      phone: req.phone.replace(/\D/g, ''),
+      ...(preferred ? { preferred_contact: preferred } : {}),
     });
     const id = typeof data === 'object' && data !== null ? data.patient_id : data;
     if (id === undefined || id === null || id === '') throw new CliniccardsError('Cliniccards не повернув ідентифікатор пацієнта', true);
@@ -261,6 +272,15 @@ export class CliniccardsConnector implements ClinicConnector {
   async fetchCabinets(): Promise<ExternalCabinet[]> {
     const rows = await this.client.get<RawCabinet[]>('/cabinets');
     return (rows ?? []).filter((c) => c.cabinet_id !== undefined && c.cabinet_id !== null).map((c) => ({ externalId: String(c.cabinet_id), name: c.name?.trim() || `#${c.cabinet_id}` }));
+  }
+
+  // GET /staff: only people with the role DOCTOR, without their phones
+  async fetchDoctors(): Promise<ExternalDoctor[]> {
+    const rows = await this.client.get<{ doctor_id?: Id; lastname?: string | null; firstname?: string | null; role?: string | null }[]>('/staff');
+    return (rows ?? [])
+      .filter((r) => r.doctor_id !== undefined && r.doctor_id !== null && String(r.role ?? '').toUpperCase() === 'DOCTOR')
+      .map((r) => ({ externalId: String(r.doctor_id), lastName: (r.lastname ?? '').trim(), firstName: (r.firstname ?? '').trim() }))
+      .filter((d) => d.lastName || d.firstName);
   }
 
   async fetchPlans(window: SyncWindow): Promise<ExternalPlan[]> {

@@ -21,6 +21,7 @@ export interface BookInput {
   startsAt: Date;
   durationMin: number;
   cabinetId: string;
+  // Cliniccards requires a doctor for every visit (official documentation of POST /visits)
   doctorId?: string;
   note?: string;
   requestId?: string;
@@ -171,6 +172,8 @@ export class BookingService {
 
   async book(clinicId: string, userId: string | null, d: BookInput): Promise<BookingResult> {
     const connector = await this.connector(clinicId);
+    const doctorId = d.doctorId;
+    if (!doctorId) throw new BadRequestException('booking_doctor_needed');
     const patient = await this.prisma.patient.findFirst({ where: { id: d.patientId, clinicId, removedAt: null }, select: { id: true, externalId: true, fullName: true } });
     if (!patient || patient.externalId.startsWith('demo-')) throw new BadRequestException('patient_not_found');
     const startsAt = d.startsAt;
@@ -187,15 +190,15 @@ export class BookingService {
       patientId: patient.id,
       requestId: d.requestId,
       startsAt,
-      check: () => this.assertFree(connector, { patientExternalId: patient.externalId, startsAt, endsAt, cabinetId: d.cabinetId, doctorId: d.doctorId }),
+      check: () => this.assertFree(connector, { patientExternalId: patient.externalId, startsAt, endsAt, cabinetId: d.cabinetId, doctorId }),
       reconcile: find,
-      act: async () => (await connector.createVisit!({ patientExternalId: patient.externalId, cabinetId: d.cabinetId, doctorId: d.doctorId, startsAt, endsAt, note })).externalId,
+      act: async () => (await connector.createVisit!({ patientExternalId: patient.externalId, cabinetId: d.cabinetId, doctorId, startsAt, endsAt, note })).externalId,
       after: async (externalId) => {
         if (!externalId) return;
-        const doctorName = d.doctorId ? (await this.prisma.shift.findFirst({ where: { clinicId, doctorId: d.doctorId }, select: { doctorName: true } }))?.doctorName : undefined;
+        const doctorName = doctorId ? (await this.prisma.shift.findFirst({ where: { clinicId, doctorId }, select: { doctorName: true } }))?.doctorName : undefined;
         await this.prisma.visit.upsert({
           where: { clinicId_externalId: { clinicId, externalId } },
-          create: { clinicId, patientId: patient.id, externalId, doctorId: d.doctorId, doctorName, cabinetId: d.cabinetId, startsAt, endsAt, status: VISIT_STATUS.created, bookedAt: new Date() },
+          create: { clinicId, patientId: patient.id, externalId, doctorId, doctorName, cabinetId: d.cabinetId, startsAt, endsAt, status: VISIT_STATUS.created, bookedAt: new Date() },
           update: {},
         });
         if (d.requestId) await this.prisma.bookingRequest.updateMany({ where: { id: d.requestId, clinicId, status: 'NEW' }, data: { status: 'DONE', handledById: userId, handledAt: new Date() } });
@@ -301,11 +304,13 @@ export class BookingService {
   }
 
   // A new card without duplicates: an existing card with the same phone is returned instead; the write is guarded like a booking
-  async createPatient(clinicId: string, userId: string | null, d: { fullName: string; phone: string; source?: string }): Promise<{ patientId: string; existing: boolean }> {
+  async createPatient(clinicId: string, userId: string | null, d: { lastName: string; firstName: string; phone: string; channel?: string }): Promise<{ patientId: string; existing: boolean }> {
     const norm = normalizePhone(d.phone);
     if (!norm) throw new BadRequestException('bad_phone');
-    const [lastName, ...rest] = d.fullName.trim().split(/\s+/);
-    if (!lastName || !rest.length) throw new BadRequestException('patient_name_needed');
+    // the surname and the first name are given separately: they are never told apart by the order of words
+    const lastName = d.lastName.trim();
+    const firstName = d.firstName.trim();
+    if (!lastName || !firstName) throw new BadRequestException('patient_name_needed');
     const existing = await this.prisma.patient.findFirst({ where: { clinicId, removedAt: null, phoneNorm: norm }, select: { id: true } });
     if (existing) return { patientId: existing.id, existing: true };
     const connector = await this.connector(clinicId);
@@ -313,7 +318,7 @@ export class BookingService {
     const local = async (externalId: string) => {
       await this.prisma.patient.upsert({
         where: { clinicId_externalId: { clinicId, externalId } },
-        create: { clinicId, externalId, fullName: d.fullName.trim(), phone: d.phone.trim(), phoneNorm: norm, source: d.source ?? null },
+        create: { clinicId, externalId, fullName: `${lastName} ${firstName}`, phone: d.phone.trim(), phoneNorm: norm, source: d.channel ?? null },
         update: {},
       });
     };
@@ -330,7 +335,7 @@ export class BookingService {
         const ids = await connector.findPatientIdsByPhone(norm);
         return ids.length === 1 ? ids[0] : ids.length === 0 ? null : 'unknown';
       },
-      act: async () => (await connector.createPatient!({ lastName, firstName: rest.join(' '), phone: `+${norm}`, source: d.source })).externalId,
+      act: async () => (await connector.createPatient!({ lastName, firstName, phone: norm, channel: d.channel })).externalId,
       after: async (externalId) => {
         if (!externalId) return;
         await local(externalId);

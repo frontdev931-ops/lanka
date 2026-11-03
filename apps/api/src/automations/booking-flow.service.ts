@@ -1,19 +1,22 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BookingRequest, Prisma } from '@prisma/client';
 import { bookingWriteSupported } from '../ai/ai.service';
 import { ChatAssistantService, SlotOption } from '../ai/chat-assistant.service';
 import { languageOf } from '../ai/guardrails';
+import { AvailabilityService } from '../booking/availability.service';
 import { BookingService } from '../booking/booking.service';
+import { DoctorChoiceService, isNo, isYes, serves } from '../booking/doctor-choice.service';
 import { clinicDate, clinicHm, localToUtc } from '../common/clinic-time';
 import { normalizePhone } from '../common/phone';
 import { SyncService } from '../integrations/sync.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportsService } from '../reports/reports.service';
+import { slotPayload } from './channels';
 import { MessengerService, SendError } from './messenger.service';
 import { RequestsService } from './requests.service';
 
 // After the bot asks this many times for the name and the phone it stops and hands the request over with what it has
-const MAX_ASKS = 3;
+const MAX_ASKS = 6;
 // A confirmation message that has been "being sent" this long is probably lost (the server stopped); only an explicit retry sends it again
 const NOTICE_STUCK_MS = 5 * 60_000;
 // A request still waiting for a name or a phone this long after its last change no longer holds the dialog
@@ -35,32 +38,53 @@ export interface ConfirmInput {
   doctor?: string;
 }
 
+const REASON_UK: Record<string, string> = { CLIENT_CHOICE: 'побажання клієнта', CONTINUATION: 'продовження лікування', PRIMARY: 'лікар для первинного запису', SERVICE_MATCH: 'підходить за послугою', URGENT: 'термінове звернення' };
 const fmtDate = (ymd: string) => ymd.split('-').reverse().join('.');
 const titleCase = (w: string) => w.charAt(0).toLocaleUpperCase('uk') + w.slice(1).toLocaleLowerCase('uk');
 
-const FILLER = new Set(['мене', 'звати', 'звуть', 'мое', 'моє', 'моё', 'мій', 'мой', 'имя', 'ім’я', 'ім\'я', 'прізвище', 'фамилия', 'піб', 'фио', 'номер', 'телефон', 'тел', 'це', 'вот', 'ось', 'дякую', 'спасибо', 'будь', 'ласка', 'пожалуйста', 'и', 'та', 'і', 'я', 'мобільний', 'мобильный', 'мій', 'номер']);
-
 // Words of an ordinary answer or question: text that holds one of them is a sentence, not a name
-const NOT_A_NAME = new Set(['не', 'знаю', 'так', 'ні', 'да', 'нет', 'ок', 'окей', 'добре', 'привіт', 'привет', 'що', 'шо', 'як', 'коли', 'де', 'чи', 'чому', 'скільки', 'сколько', 'когда', 'что', 'как', 'почему', 'хочу', 'можна', 'можно', 'буду', 'потрібно', 'нужно', 'запишіть', 'запишите', 'будь', 'ласка', 'хотів', 'хотела', 'хотіла', 'хотел', 'є', 'есть', 'ціна', 'цена', 'коштує']);
+const NOT_A_NAME = new Set(['не', 'знаю', 'так', 'ні', 'да', 'нет', 'ок', 'окей', 'добре', 'привіт', 'привет', 'що', 'шо', 'як', 'коли', 'де', 'чи', 'чому', 'скільки', 'сколько', 'когда', 'что', 'как', 'почему', 'хочу', 'можна', 'можно', 'буду', 'потрібно', 'нужно', 'запишіть', 'запишите', 'будь', 'ласка', 'хотів', 'хотела', 'хотіла', 'хотел', 'є', 'есть', 'ціна', 'цена', 'коштує', 'дякую', 'спасибо']);
+const NAME_WORD = /^[\p{L}][\p{L}'’ʼ-]{1,49}$/u;
+const LAST_LABEL = /(?:прізвище|прізвищем|фамилия|фамилию|фамилией)\s*[:\-–—]?\s*([\p{L}][\p{L}'’ʼ-]{1,49})/iu;
+const FIRST_LABEL = /(?:ім['’ʼ`]?я|імʼя|имя)\s*[:\-–—]?\s*([\p{L}][\p{L}'’ʼ-]{1,49})/iu;
 
-// A name and a phone out of free text ("Ірина Коваль 097 123 45 67"). A name needs at least two words (surname and first name).
-export function parseContact(text: string): { name: string | null; phone: string | null } {
+// The phone out of free text ("097 123 45 67", "+38 (097) 123-45-67")
+export function parsePhone(text: string): string | null {
   const m = /\+?\d[\d\s().-]{7,}\d/.exec(text);
-  const phone = m ? normalizePhone(m[0]) : null;
-  const rest = m ? text.replace(m[0], ' ') : text;
-  const words = rest.split(/[^\p{L}'’ʼ-]+/u).filter((w) => w.length > 0 && !FILLER.has(w.toLowerCase()));
-  const sentence = words.some((w) => NOT_A_NAME.has(w.toLowerCase()));
-  const name = !sentence && words.length >= 2 && words.length <= 4 && words.every((w) => w.length >= 2) ? words.map(titleCase).join(' ') : null;
-  return { name, phone };
+  return m ? normalizePhone(m[0]) : null;
 }
+
+// Only explicitly labelled fields ("Прізвище Коваль, ім'я Ірина") tell the surname from the first name. Two bare words never do:
+// their order cannot be trusted ("Наталія Бойко" and "Бойко Наталія" are both normal).
+export function parseLabeledNames(text: string): { lastName?: string; firstName?: string } {
+  const last = LAST_LABEL.exec(text)?.[1];
+  const first = FIRST_LABEL.exec(text)?.[1];
+  const ok = (w?: string) => (w && !NOT_A_NAME.has(w.toLowerCase()) ? titleCase(w) : undefined);
+  return { ...(ok(last) ? { lastName: ok(last) } : {}), ...(ok(first) ? { firstName: ok(first) } : {}) };
+}
+
+// An answer to "your surname?" or "your first name?": exactly one word
+export function singleNameWord(text: string): string | null {
+  const t = text.replace(/\+?\d[\d\s().-]{7,}\d/, ' ').trim().replace(/[.,;!]+$/, '');
+  return NAME_WORD.test(t) && !NOT_A_NAME.has(t.toLowerCase()) ? titleCase(t) : null;
+}
+
+const YES = /^\s*(так|да|yes|ок|окей|добре|гаразд|підтверджую|подтверждаю|згоден|согласен|угу|ага|звичайно|конечно)(?![\p{L}])/iu;
+const NO = /^\s*(ні|нет|no|не\s+треба|не\s+надо|інший|другой|скасувати|отмена)(?![\p{L}])/iu;
 
 const T = {
   uk: {
-    askBoth: 'Щоб передати заявку адміністратору, підкажіть, будь ласка, ваше прізвище та ім’я і номер телефону.',
-    askName: 'Дякуємо! Підкажіть, будь ласка, ваше прізвище та ім’я повністю.',
+    askAll: 'Щоб оформити запис, напишіть, будь ласка, прізвище, ім’я та номер телефону. Можна одним повідомленням, наприклад: «Прізвище Коваль, ім’я Ірина, телефон 0971234567».',
+    askLast: 'Підкажіть, будь ласка, ваше прізвище (одним словом).',
+    askFirst: 'Дякуємо! Тепер, будь ласка, ваше ім’я (одним словом).',
     askPhone: 'Дякуємо! Підкажіть, будь ласка, номер телефону для зв’язку.',
     handed: (service: string | null, date: string, time: string) => `Дякуємо! Передали заявку на ${service ?? 'запис'} на ${date} о ${time} адміністратору. Очікуйте підтвердження запису.`,
     handedPlain: 'Дякуємо! Передали заявку адміністратору. Очікуйте підтвердження запису.',
+    confirmAsk: (service: string | null, date: string, time: string, doctor: string | null) => `Підтверджуєте запис${service ? ` на ${service}` : ''} ${date} о ${time}${doctor ? `, лікар ${doctor}` : ''}? Натисніть кнопку або напишіть «так» чи «ні».`,
+    yes: 'Так, підтверджую',
+    no: 'Ні, інший час',
+    again: 'Гаразд. Оберіть, будь ласка, інший зручний час кнопкою нижче.',
+    againNoTimes: 'Гаразд. Адміністратор підбере інший час і напише вам.',
     busy: 'На жаль, цей час уже зайнятий. Оберіть, будь ласка, інший зручний час кнопкою нижче.',
     busyNoOptions: 'На жаль, цей час уже зайнятий. Адміністратор підбере інший і напише вам. Очікуйте підтвердження запису.',
     head: 'Ваш запис підтверджено ✅',
@@ -72,11 +96,17 @@ const T = {
     address: 'Адреса',
   },
   ru: {
-    askBoth: 'Чтобы передать заявку администратору, подскажите, пожалуйста, вашу фамилию и имя и номер телефона.',
-    askName: 'Спасибо! Подскажите, пожалуйста, вашу фамилию и имя полностью.',
+    askAll: 'Чтобы оформить запись, напишите, пожалуйста, фамилию, имя и номер телефона. Можно одним сообщением, например: «Фамилия Ковалёв, имя Ирина, телефон 0971234567».',
+    askLast: 'Подскажите, пожалуйста, вашу фамилию (одним словом).',
+    askFirst: 'Спасибо! Теперь, пожалуйста, ваше имя (одним словом).',
     askPhone: 'Спасибо! Подскажите, пожалуйста, номер телефона для связи.',
     handed: (service: string | null, date: string, time: string) => `Спасибо! Передали заявку на ${service ?? 'запись'} на ${date} в ${time} администратору. Ожидайте подтверждения записи.`,
     handedPlain: 'Спасибо! Передали заявку администратору. Ожидайте подтверждения записи.',
+    confirmAsk: (service: string | null, date: string, time: string, doctor: string | null) => `Подтверждаете запись${service ? ` на ${service}` : ''} ${date} в ${time}${doctor ? `, врач ${doctor}` : ''}? Нажмите кнопку или напишите «да» или «нет».`,
+    yes: 'Да, подтверждаю',
+    no: 'Нет, другое время',
+    again: 'Хорошо. Выберите, пожалуйста, другое удобное время кнопкой ниже.',
+    againNoTimes: 'Хорошо. Администратор подберёт другое время и напишет вам.',
     busy: 'К сожалению, это время уже занято. Выберите, пожалуйста, другое удобное время кнопкой ниже.',
     busyNoOptions: 'К сожалению, это время уже занято. Администратор подберёт другое и напишет вам. Ожидайте подтверждения записи.',
     head: 'Ваша запись подтверждена ✅',
@@ -116,6 +146,8 @@ export class BookingFlowService {
     private assistant: ChatAssistantService,
     private reports: ReportsService,
     private sync: SyncService,
+    private choice: DoctorChoiceService,
+    private availability: AvailabilityService,
   ) {}
 
   private async lang(c: FlowCtx): Promise<Lang> {
@@ -144,7 +176,7 @@ export class BookingFlowService {
         text,
         // a scripted message of the booking flow: not a model reply (it must not use up the AI's daily allowance) and not a person (it must not pause the AI)
         byAi: false,
-        ...(options.length ? { buttons: options.map((o) => ({ label: o.label, payload: `slot|${o.date}|${o.time}${o.doctor ? `|${o.doctor.slice(0, 16)}` : ''}` })) } : {}),
+        ...(options.length ? { buttons: options.map((o) => ({ label: o.label, payload: slotPayload(o) })) } : {}),
       },
     });
     return true;
@@ -168,8 +200,18 @@ export class BookingFlowService {
       // the staff is told when the request is complete, not at every step
       true,
     );
-    // a different time than before: the request is collected again for the new time
-    await this.prisma.bookingRequest.update({ where: { id: row.id }, data: { slotAt, doctor: slot.doctor ?? null, stage: 'COLLECT', autoState: null } });
+    // The button may carry the doctor as an id of Cliniccards ("#501"); only a doctor the clinic really has is stored, by id and by name.
+    // A tap without a doctor never wipes the doctor of the request.
+    let doctorPatch: Prisma.BookingRequestUpdateInput = {};
+    if (slot.doctor?.startsWith('#')) {
+      const d = await this.prisma.doctor.findUnique({ where: { clinicId_externalId: { clinicId: c.clinicId, externalId: slot.doctor.slice(1) } } });
+      if (d) {
+        doctorPatch = { doctorId: d.externalId, doctor: `${d.lastName} ${d.firstName}`.trim(), doctorReason: open?.doctorReason ?? 'CLIENT_CHOICE' };
+        if (open?.doctorId !== d.externalId) await this.prisma.auditLog.create({ data: { clinicId: c.clinicId, userId: null, action: 'booking_request.doctor', details: { request: row.id, doctorId: d.externalId, reason: open?.doctorReason ?? 'CLIENT_CHOICE' } } });
+      }
+    } else if (slot.doctor) doctorPatch = { doctor: slot.doctor };
+    // a different time or doctor than before: the request is collected again, and the automatic mode asks the person's yes again
+    await this.prisma.bookingRequest.update({ where: { id: row.id }, data: { slotAt, ...doctorPatch, stage: 'COLLECT', autoState: null, asks: 0 } });
     await this.advance(c, row.id);
   }
 
@@ -178,11 +220,37 @@ export class BookingFlowService {
   // Returns true only when the message was taken as an answer AND the bot replied to it (otherwise the message goes on to the AI, never into silence)
   async onText(c: FlowCtx, text: string): Promise<boolean> {
     const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
-    if (!open || open.stage !== 'COLLECT') return false;
+    // A proposed doctor waits for the person's "yes" or "no"
+    if (open?.doctorState === 'PROPOSED' && open.stage !== 'CONFIRM' && !text.includes('?')) {
+      if (isYes(text)) return this.onDoctorAnswer(c, 'yes', open.pendingDoctorId);
+      if (isNo(text)) return this.onDoctorAnswer(c, 'no', open.pendingDoctorId);
+    }
+    if (!open || (open.stage !== 'COLLECT' && open.stage !== 'CONFIRM')) return false;
     // A forgotten question from long ago does not hold the dialog
     if (Date.now() - open.updatedAt.getTime() > COLLECT_STALE_MS) return this.skipCollect(c, 'stale');
-    const got = parseContact(text);
-    if (!got.name && !got.phone) {
+    if (open.stage === 'CONFIRM') {
+      const yes = YES.test(text);
+      const no = NO.test(text);
+      if (yes !== no) return this.onConfirmAnswer(c, yes, open.id);
+      if (text.includes('?') || open.asks >= MAX_ASKS) return this.skipCollect(c, 'question');
+      const claim = await this.prisma.bookingRequest.updateMany({ where: { id: open.id, stage: 'CONFIRM', asks: open.asks }, data: { asks: open.asks + 1 } });
+      if (!claim.count) return true;
+      await this.askConfirm(c, open.id);
+      return true;
+    }
+    const phone = parsePhone(text);
+    const labeled = parseLabeledNames(text);
+    const patch: Prisma.BookingRequestUpdateInput = {};
+    if (phone) patch.phone = phone;
+    if (labeled.lastName) patch.lastName = labeled.lastName;
+    if (labeled.firstName) patch.firstName = labeled.firstName;
+    if (!labeled.lastName && !labeled.firstName) {
+      // an answer to "your surname?" / "your first name?" is one word; anything else is never guessed (the order of words proves nothing)
+      const word = singleNameWord(text);
+      if (word && open.askField === 'lastName' && !open.lastName) patch.lastName = word;
+      else if (word && open.askField === 'firstName' && !open.firstName) patch.firstName = word;
+    }
+    if (!Object.keys(patch).length) {
       // a question is for the AI; anything else is asked again a few times, then the request goes on as it is
       if (text.includes('?')) return this.skipCollect(c, 'question');
       if (open.asks >= MAX_ASKS) {
@@ -191,9 +259,6 @@ export class BookingFlowService {
       }
       return this.advance(c, open.id);
     }
-    const patch: Prisma.BookingRequestUpdateInput = {};
-    if (got.name) patch.fullName = got.name;
-    if (got.phone) patch.phone = got.phone;
     await this.prisma.bookingRequest.update({ where: { id: open.id }, data: patch });
     return this.advance(c, open.id);
   }
@@ -204,12 +269,18 @@ export class BookingFlowService {
   }
 
   // Asks for what is missing, or completes the request when everything is known. Returns true when the bot sent a message.
+  // A person with a card needs nothing but a phone missing from the card; for anyone else the surname, the first name and the phone are
+  // asked for: all at once the first time (labelled fields), then one at a time in the order surname, first name, phone.
   private async advance(c: FlowCtx, id: string): Promise<boolean> {
     const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id }, include: { patient: { select: { fullName: true, phone: true } } } });
     if (r.stage === 'READY') return false;
-    const needName = !r.fullName && !r.patient?.fullName;
-    const needPhone = !r.phone && !normalizePhone(r.patient?.phone);
-    if (!needName && !needPhone) {
+    const known = !!r.patient?.fullName;
+    const missing: ('lastName' | 'firstName' | 'phone')[] = [
+      ...(known || r.lastName ? [] : (['lastName'] as const)),
+      ...(known || r.firstName ? [] : (['firstName'] as const)),
+      ...(r.phone || normalizePhone(r.patient?.phone) ? [] : (['phone'] as const)),
+    ];
+    if (!missing.length) {
       await this.complete(c, id, false);
       return true;
     }
@@ -219,41 +290,142 @@ export class BookingFlowService {
       await this.complete(c, id, true);
       return false;
     }
-    const lang = await this.lang(c);
-    const x = T[lang];
+    const x = T[await this.lang(c)];
+    const field = missing.length === 3 && r.asks === 0 ? 'all' : missing[0];
     // asks is raised first: a repeated delivery of the same event does not ask twice in a row
-    const claim = await this.prisma.bookingRequest.updateMany({ where: { id, asks: r.asks, stage: 'COLLECT' }, data: { asks: r.asks + 1 } });
+    const claim = await this.prisma.bookingRequest.updateMany({ where: { id, asks: r.asks, stage: 'COLLECT' }, data: { asks: r.asks + 1, askField: field } });
     if (!claim.count) return true;
-    const sentOk = await this.say(c, needName && needPhone ? x.askBoth : needName ? x.askName : x.askPhone);
+    const sentOk = await this.say(c, field === 'all' ? x.askAll : field === 'lastName' ? x.askLast : field === 'firstName' ? x.askFirst : x.askPhone);
     if (!sentOk) this.log.log(`Booking flow could not ask for the data: message not sent (clinic ${c.clinicId}, ${c.channel})`);
     return sentOk;
+  }
+
+  // ---- the answer to a question about the doctor (a button, or "так"/"ні") ----
+
+  // docpick: the person chose one of the doctors named; docyes/docno: the answer to a proposed doctor. A repeated answer does nothing twice.
+  async onDoctorAnswer(c: FlowCtx, kind: 'pick' | 'yes' | 'no', doctorId: string | null): Promise<boolean> {
+    const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
+    if (!open) return false;
+    if (kind === 'pick') {
+      if (open.doctorState === 'AGREED' && open.doctorId === doctorId) return true; // the same button again
+    } else {
+      // the claim: only the first answer to a proposal counts
+      const claim = await this.prisma.bookingRequest.updateMany({ where: { id: open.id, doctorState: 'PROPOSED' }, data: { doctorState: null } });
+      if (!claim.count) return true;
+    }
+    const lang = await this.lang(c);
+    const service = await this.choice.findService(c.clinicId, open.service);
+    const texts = (await this.prisma.chatMessage.findMany({ where: { clinicId: c.clinicId, channel: c.channel, chatId: c.chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, take: 6, select: { text: true } })).map((m) => m.text);
+    if (!service) {
+      await this.say(c, T[lang].handedPlain);
+      return true;
+    }
+    const dec = await this.choice.answer({ clinicId: c.clinicId, patientId: c.patientId, service, texts, lang, request: open }, kind, doctorId);
+    if (dec.kind === 'NONE') return true;
+    await this.prisma.bookingRequest.update({ where: { id: open.id }, data: this.requests.patchData(dec.patch) });
+    if (dec.patch.doctorId && dec.patch.doctorId !== open.doctorId) {
+      await this.prisma.auditLog.create({ data: { clinicId: c.clinicId, userId: null, action: 'booking_request.doctor', details: { request: open.id, doctorId: dec.patch.doctorId, reason: dec.patch.doctorReason ?? open.doctorReason ?? null } } });
+    }
+    const opts = (list: { label: string; date?: string; time?: string; doctorId?: string; payload?: string }[]) => list.map((b) => ({ label: b.label, date: b.date ?? '', time: b.time ?? '', ...(b.doctorId ? { doctorId: b.doctorId } : {}), ...(b.payload ? { payload: b.payload } : {}) }));
+    if (dec.kind === 'ASK') await this.say(c, dec.reply, opts(dec.buttons));
+    else if (dec.kind === 'OFFER') await this.say(c, dec.reply, opts(dec.options));
+    else {
+      // a person takes it: the doctor and why are on the request, no booking is promised
+      const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id: open.id } });
+      await this.prisma.bookingRequest.update({ where: { id: open.id }, data: { summary: `${r.summary}; ${r.doctor ? `бажаний лікар: ${r.doctor}; ` : ''}${dec.note}`.slice(0, 500) } });
+      await this.requests.notify(c.clinicId, open.id, false);
+      await this.say(c, dec.reply);
+    }
+    return true;
   }
 
   // ---- 3. complete: one full request for the administrator, or the automatic booking ----
 
   private async complete(c: FlowCtx, id: string, incomplete: boolean): Promise<void> {
+    const pre = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id } });
+    let note: string | undefined;
+    // The automatic mode asks the person to confirm first, and only when everything needed for the booking is known: the length of the
+    // visit (never guessed), a free place and a doctor (Cliniccards requires one). Otherwise a person completes the request.
+    if (!incomplete && pre.slotAt && (await this.autoMode(c.clinicId))) {
+      // A card with this phone exists and the chat is not tied to it: a phone alone proves nothing, so a person checks (no question to the client first)
+      const cards = !pre.patientId && pre.phone ? await this.booking.matches(c.clinicId, pre.phone) : [];
+      const duration = cards.length ? null : await this.durationFor(c.clinicId, pre.service);
+      // a sudden health problem is a priority request for a person; the bot never books it by itself
+      if (pre.urgent) note = 'термінове звернення: запис підтверджує адміністратор';
+      else if (cards.length) note = 'є картка з таким телефоном, потрібно підтвердити особу';
+      else if (duration === null) note = 'тривалість послуги невідома, запис потрібно внести вручну';
+      else {
+        const p = await this.placement(c, pre, duration);
+        if (!p.ok && p.busy) return this.busy(c, id, 'вікно вже не вільне');
+        if (!p.ok) note = `${p.note}, запис потрібно внести вручну`;
+      }
+      if (!note) {
+        const claim = await this.prisma.bookingRequest.updateMany({ where: { id, stage: 'COLLECT' }, data: { stage: 'CONFIRM', asks: 0 } });
+        if (claim.count) await this.askConfirm(c, id);
+        return;
+      }
+    }
+    const r = await this.finalize(c, id, note);
+    if (!r) return;
+    if (note) await this.prisma.bookingRequest.update({ where: { id }, data: { autoState: 'FAILED', autoNote: note } });
+    await this.tellHandedOver(c, r.service, r.slotAt);
+  }
+
+  // The request is complete: one summary for the staff, who are told once
+  private async finalize(c: FlowCtx, id: string, note?: string) {
     const claim = await this.prisma.bookingRequest.updateMany({ where: { id, stage: { not: 'READY' } }, data: { stage: 'READY' } });
-    if (!claim.count) return;
+    if (!claim.count) return null;
     const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id }, include: { patient: { select: { fullName: true, phone: true } } } });
-    const name = r.fullName ?? r.patient?.fullName ?? null;
+    const name = r.patient?.fullName ?? (r.lastName && r.firstName ? `прізвище ${r.lastName}, ім’я ${r.firstName}` : null);
     const phone = r.phone ?? r.patient?.phone ?? null;
+    if (r.lastName && r.firstName && !r.fullName) await this.prisma.bookingRequest.update({ where: { id }, data: { fullName: `${r.lastName} ${r.firstName}` } });
     const when = r.slotAt ? `${fmtDate(clinicDate(r.slotAt))} ${clinicHm(r.slotAt)}` : null;
     const summary = [
       r.kind === 'RESCHEDULE' ? 'Перенесення' : 'Запис',
       r.service ? `послуга: ${r.service}` : null,
       when ? `час: ${when}` : null,
-      r.doctor ? `лікар: ${r.doctor}` : null,
+      r.doctor ? `лікар: ${r.doctor}${r.doctorReason ? ` (${REASON_UK[r.doctorReason] ?? r.doctorReason})` : ''}` : null,
+      r.urgent ? 'ТЕРМІНОВО' : null,
       name ? `ПІБ: ${name}` : 'ПІБ не отримано',
       phone ? `тел.: ${phone}` : 'телефон не отримано',
       `канал: ${c.channel}`,
+      note ? `автозапис не виконано: ${note}` : null,
     ]
       .filter(Boolean)
       .join('; ');
     await this.prisma.bookingRequest.update({ where: { id }, data: { summary: summary.slice(0, 500) } });
     await this.requests.notify(c.clinicId, id, false);
+    return r;
+  }
 
-    if (!incomplete && r.slotAt && (await this.autoMode(c.clinicId))) return this.runAuto(c, id);
-    await this.tellHandedOver(c, r.service, r.slotAt);
+  // The automatic mode: the person confirms the booking in so many words before anything is written
+  private async askConfirm(c: FlowCtx, id: string) {
+    const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id } });
+    const x = T[await this.lang(c)];
+    const text = x.confirmAsk(r.service, fmtDate(clinicDate(r.slotAt!)), clinicHm(r.slotAt!), r.doctor);
+    await this.say(c, text, [
+      { label: x.yes, date: '', time: '', payload: `bookyes|${id}` },
+      { label: x.no, date: '', time: '', payload: `bookno|${id}` },
+    ]);
+  }
+
+  // The answer to the question above (a button or a typed "так"/"ні"). A repeated answer does nothing the second time.
+  async onConfirmAnswer(c: FlowCtx, yes: boolean, requestId: string | null): Promise<boolean> {
+    const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
+    if (!open || open.stage !== 'CONFIRM' || (requestId && open.id !== requestId)) return false;
+    if (!yes) {
+      const claim = await this.prisma.bookingRequest.updateMany({ where: { id: open.id, stage: 'CONFIRM' }, data: { stage: 'NONE', slotAt: null } });
+      if (!claim.count) return true;
+      const options = await this.freshFor(c, open);
+      const x = T[await this.lang(c)];
+      await this.say(c, options.length ? x.again : x.againNoTimes, options);
+      return true;
+    }
+    const r = await this.finalize(c, open.id);
+    if (!r) return true;
+    if (r.slotAt && (await this.autoMode(c.clinicId))) await this.runAuto(c, open.id);
+    else await this.tellHandedOver(c, r.service, r.slotAt);
+    return true;
   }
 
   private async tellHandedOver(c: FlowCtx, service: string | null, slotAt: Date | null) {
@@ -289,8 +461,8 @@ export class BookingFlowService {
         const found = r.phone ? await this.booking.matches(c.clinicId, r.phone) : [];
         // A card with this phone exists: a phone alone does not prove who writes, a person checks it
         if (found.length) return await this.handToAdmin(c, id, 'є картка з таким телефоном, потрібно підтвердити особу');
-        if (!r.fullName || !r.phone) return await this.handToAdmin(c, id, 'немає ПІБ або телефону');
-        const created = await this.booking.createPatient(c.clinicId, null, { fullName: r.fullName, phone: r.phone, source: c.channel });
+        if (!r.lastName || !r.firstName || !r.phone) return await this.handToAdmin(c, id, 'немає прізвища, імені або телефону');
+        const created = await this.booking.createPatient(c.clinicId, null, { lastName: r.lastName, firstName: r.firstName, phone: r.phone, channel: c.channel });
         if (created.existing) return await this.handToAdmin(c, id, 'картка пацієнта вже існує, потрібно підтвердити особу');
         patientId = created.patientId;
         // the card is ours (just created for this chat): the chat can be tied to it
@@ -298,8 +470,9 @@ export class BookingFlowService {
         await this.prisma.bookingRequest.update({ where: { id }, data: { patientId } });
       }
       const durationMin = await this.durationFor(c.clinicId, r.service);
-      const place = await this.place(c.clinicId, slotAt, durationMin, r.doctor);
-      if (!place) return await this.busy(c, id, 'вікно вже не вільне');
+      if (durationMin === null) return await this.handToAdmin(c, id, 'тривалість послуги невідома');
+      const place = await this.placement(c, r, durationMin);
+      if (!place.ok) return place.busy ? await this.busy(c, id, 'вікно вже не вільне') : await this.handToAdmin(c, id, place.note ?? 'лікаря не визначено');
       const doBook = () => this.booking.book(c.clinicId, null, { patientId: patientId!, startsAt: slotAt, durationMin, cabinetId: place.cabinetId, doctorId: place.doctorId, note: 'Запис створено ботом LANKA', requestId: id });
       let res;
       try {
@@ -319,32 +492,67 @@ export class BookingFlowService {
   }
 
   // The visit exists in Cliniccards: only now is the client told, with the real time
-  private async finishAuto(c: FlowCtx, id: string, r: { service: string | null; doctor: string | null }, startsAt: Date, doctorName: string | null, externalVisitId: string | null) {
+  private async finishAuto(c: FlowCtx, id: string, r: { service: string | null; doctor: string | null; doctorId: string | null; doctorReason: string | null }, startsAt: Date, doctorName: string | null, externalVisitId: string | null) {
     const claim = await this.prisma.bookingRequest.updateMany({
       where: { id, confirmedAt: null },
       data: { status: 'DONE', handledAt: new Date(), confirmedAt: new Date(), confirmedBy: 'AUTO', confirmSource: 'AUTO', confirmedStartsAt: startsAt, confirmedService: r.service, confirmedDoctor: doctorName ?? r.doctor, externalVisitId, noticeStatus: 'PENDING', autoState: 'DONE' },
     });
     if (!claim.count) return;
-    await this.prisma.auditLog.create({ data: { clinicId: c.clinicId, userId: null, action: 'booking_request.confirmed', details: { request: id, by: 'auto', visit: externalVisitId, at: startsAt.toISOString() } } });
+    await this.prisma.auditLog.create({ data: { clinicId: c.clinicId, userId: null, action: 'booking_request.confirmed', details: { request: id, by: 'auto', visit: externalVisitId, at: startsAt.toISOString(), doctorId: r.doctorId, doctorReason: r.doctorReason } } });
     await this.deliver(c.clinicId, id, null);
+  }
+
+  // Fresh times after the chosen one is gone or refused: of the SAME doctor when the request has one (never another without the person's yes),
+  // otherwise from the schedule report as before
+  private async freshFor(c: FlowCtx, r: { doctorId: string | null; doctor: string | null; service: string | null; slotAt?: Date | null }, taken = false): Promise<SlotOption[]> {
+    if (r.doctorId) {
+      const svc = await this.choice.findService(c.clinicId, r.service);
+      const gone = taken && r.slotAt ? { date: clinicDate(r.slotAt), time: clinicHm(r.slotAt) } : undefined;
+      const list = await this.choice.doctorOffers(c.clinicId, r.doctorId, svc?.durationMin ?? 30, await this.lang(c), gone);
+      return list.map((b) => ({ label: b.label, date: b.date ?? '', time: b.time ?? '', ...(b.doctorId ? { doctorId: b.doctorId } : {}) }));
+    }
+    return this.assistant.freshOptions(c.clinicId, r.doctor).catch(() => [] as SlotOption[]);
   }
 
   // The chosen time is gone: fresh times are offered, the request stays open
   private async busy(c: FlowCtx, id: string, note: string) {
-    const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id }, select: { doctor: true } });
-    const options = await this.assistant.freshOptions(c.clinicId, r.doctor).catch(() => [] as SlotOption[]);
+    const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id }, select: { doctor: true, doctorId: true, service: true, slotAt: true } });
+    // the time was found taken in Cliniccards: it is not offered again even if our copy of the schedule still shows it free
+    const options = await this.freshFor(c, r, true);
     await this.prisma.bookingRequest.update({ where: { id }, data: { stage: 'NONE', slotAt: null, autoState: null, autoNote: note.slice(0, 300) } });
     const x = T[await this.lang(c)];
     await this.say(c, options.length ? x.busy : x.busyNoOptions, options);
   }
 
-  // The length of the visit from the clinic's approved reference (default half an hour)
-  private async durationFor(clinicId: string, service: string | null): Promise<number> {
-    if (!service) return 30;
+  // Where and with whom the visit can be made. A request with a doctor of the clinic is checked against THAT doctor: he must provide the service
+  // (or have treated the person with it before), have a real schedule (shifts in Cliniccards or the schedule kept in LANKA) and be free for
+  // the whole visit, with a free cabinet. Without a doctor on the request the schedule report is used as before.
+  private async placement(c: FlowCtx, r: BookingRequest, minutes: number): Promise<{ ok: true; cabinetId: string; doctorId: string; doctorName: string | null } | { ok: false; busy: boolean; note?: string }> {
+    if (r.doctorId) {
+      const doc = await this.prisma.doctor.findUnique({ where: { clinicId_externalId: { clinicId: c.clinicId, externalId: r.doctorId } } });
+      if (!doc || !doc.active) return { ok: false, busy: false, note: 'лікаря немає серед лікарів Cliniccards' };
+      const svc = await this.choice.findService(c.clinicId, r.service);
+      const kind = svc ? serves(doc, svc) : 'unknown';
+      if (kind !== 'yes' && r.doctorReason !== 'CONTINUATION') return { ok: false, busy: false, note: kind === 'no' ? 'лікар не надає цю послугу' : 'не налаштовано, які послуги надає лікар' };
+      if ((await this.availability.source(c.clinicId, doc.externalId)) === 'NONE') return { ok: false, busy: false, note: 'у лікаря немає надійного розкладу (ні змін у Cliniccards, ні розкладу в LANKA)' };
+      const p = await this.availability.placeFor(c.clinicId, doc.externalId, r.slotAt!, minutes);
+      if (!p) return { ok: false, busy: true };
+      return { ok: true, cabinetId: p.cabinetId, doctorId: doc.externalId, doctorName: `${doc.lastName} ${doc.firstName}`.trim() };
+    }
+    const place = await this.place(c.clinicId, r.slotAt!, minutes, r.doctor);
+    if (!place) return { ok: false, busy: true };
+    if (!place.doctorId) return { ok: false, busy: false, note: 'лікаря не визначено (Cliniccards вимагає лікаря для запису), запис потрібно внести вручну' };
+    return { ok: true, cabinetId: place.cabinetId, doctorId: place.doctorId, doctorName: place.doctorName };
+  }
+
+  // The length of the visit from the clinic's approved reference
+  // null when the service is unknown or the reference has no length for it: the length is never guessed
+  private async durationFor(clinicId: string, service: string | null): Promise<number | null> {
+    if (!service) return null;
     const rows = await this.prisma.kbItem.findMany({ where: { clinicId, kind: 'SERVICE', active: true, approvedAt: { not: null }, durationMin: { not: null } }, select: { title: true, durationMin: true } });
     const s = service.toLowerCase();
     const hit = rows.find((x) => x.title.toLowerCase() === s) ?? rows.find((x) => x.title.toLowerCase().includes(s) || s.includes(x.title.toLowerCase()));
-    return Math.min(240, Math.max(15, hit?.durationMin ?? 30));
+    return hit?.durationMin ? Math.min(240, Math.max(15, hit.durationMin)) : null;
   }
 
   // A cabinet (and the doctor, if the clinic has shifts) that is free for the whole visit, from the same schedule the AI offered the time from
@@ -430,7 +638,7 @@ export class BookingFlowService {
       data: { status: 'DONE', handledById: userId, handledAt: new Date(), confirmedAt: new Date(), confirmedBy: 'ADMIN', confirmSource: hit ? 'CLINICCARDS' : 'MANUAL', confirmedStartsAt: startsAt, confirmedService: service, confirmedDoctor: hit?.doctor ?? doctor, externalVisitId: hit?.externalId ?? null, noticeStatus: 'PENDING', noticeError: null },
     });
     if (!claim.count) return this.state(clinicId, id, true);
-    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'booking_request.confirmed', details: { request: id, by: 'admin', source: hit ? 'cliniccards' : 'manual', at: startsAt.toISOString() } } });
+    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'booking_request.confirmed', details: { request: id, by: 'admin', source: hit ? 'cliniccards' : 'manual', at: startsAt.toISOString(), doctorId: r.doctorId, doctorReason: r.doctorReason } } });
     await this.deliver(clinicId, id, userId);
     return this.state(clinicId, id, false);
   }

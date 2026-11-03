@@ -104,6 +104,13 @@ model Clinic {
   // Разрешить ИИ самому создавать запись на приём. Выключено всегда по умолчанию; включить нельзя, пока коннектор не умеет записывать в систему клиники
   aiAutoBooking       Boolean              @default(false)
   // ШІ сам отвечает пациентам на безопасные темы (запись, перенос, отмена, история); остальное передаёт человеку. По умолчанию выключено
+  // What patients may be told about the clinic in a chat: set by the clinic itself (Cliniccards does not give them to us)
+  // The doctor a new patient without preferences is booked to (the id in Cliniccards, and the name as it was when it was chosen)
+  primaryDoctorId     String?
+  primaryDoctorName   String?
+  publicAddress       String?
+  publicPhone         String?
+  publicDirections    String?
   aiAutoReply         Boolean              @default(false)
   // How many AI replies one chat gets per day (a guard against loops and cost), and how long the AI stays silent after a person answered (0: no pause)
   aiRepliesPerChatDay Int                  @default(20)
@@ -163,6 +170,8 @@ model Clinic {
   reviews             Review[]
   pushSubscriptions   PushSubscription[]
   chatBotResumes ChatBotResume[]
+  doctors Doctor[]
+  doctorAvailability DoctorAvailability[]
 }
 
 // Приглашение сотрудника по ссылке. В базе только хэш токена: по базе ссылку не восстановить.
@@ -757,8 +766,22 @@ model BookingRequest {
   doctor      String?
   slotAt      DateTime?
   fullName    String?
+  // The surname and the first name are collected as two separate answers (or labelled fields), never told apart by the order of words
+  lastName    String?
+  firstName   String?
+  // The field the bot asked for last: all, lastName, firstName or phone
+  askField    String?
+  // The doctor of the request (the id in Cliniccards) and why him: CLIENT_CHOICE, CONTINUATION, PRIMARY, SERVICE_MATCH or URGENT
+  doctorId    String?
+  doctorReason String?
+  // PROPOSED: the person was offered a doctor (pendingDoctorId) and has not answered yet; AGREED: the person accepted the doctor
+  doctorState String?
+  pendingDoctorId String?
+  // A sudden health problem: a priority request, never booked automatically
+  urgent      Boolean   @default(false)
   phone       String?
-  // NONE (no time chosen yet), COLLECT (a time is chosen, name or phone still missing), READY (the request is complete and was passed on)
+  // NONE (no time chosen yet), COLLECT (a time is chosen, name or phone still missing), CONFIRM (the automatic mode waits for the person's yes),
+  // READY (the request is complete and was passed on)
   stage       String    @default("NONE")
   // How many times the bot asked for the missing data (it stops asking after a few tries)
   asks        Int       @default(0)
@@ -932,6 +955,41 @@ model BookingAttempt {
 
   @@unique([clinicId, key])
   @@index([clinicId, createdAt])
+}
+
+// A doctor of the clinic as Cliniccards lists them (GET /staff, role DOCTOR), with what LANKA knows about him: the services he provides
+// (ids of KbItem SERVICE; empty means unknown, so the bot never books him automatically) and whether he takes urgent patients.
+model Doctor {
+  id            String   @id @default(cuid())
+  clinicId      String
+  externalId    String
+  lastName      String
+  firstName     String
+  active        Boolean  @default(true)
+  serviceIds    String[] @default([])
+  acceptsUrgent Boolean  @default(false)
+  refreshedAt   DateTime @default(now())
+  clinic        Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, externalId])
+}
+
+// The schedule of online booking that the clinic sets in LANKA for a doctor whose shifts are not kept in Cliniccards: a weekly row (weekday,
+// hours, cabinet) or an exception for one date (closed, or other hours). It is only a rule of when he may be booked: the visits and blocks
+// of Cliniccards are always subtracted from it.
+model DoctorAvailability {
+  id        String  @id @default(cuid())
+  clinicId  String
+  doctorId  String
+  weekday   Int?
+  date      String?
+  closed    Boolean @default(false)
+  fromHm    String?
+  toHm      String?
+  cabinetId String?
+  clinic    Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, doctorId])
 }
 
 // What the AI may tell patients about the clinic. Only approved items reach the model; a change to the content needs a new approval;

@@ -5,6 +5,7 @@ import { LlmClient } from '../src/ai/llm.client';
 import { AppModule } from '../src/app.module';
 import { IntakeService } from '../src/automations/intake.service';
 import { ChatAssistantService } from '../src/ai/chat-assistant.service';
+import { contactReply, formatHours, wantsContacts } from '../src/ai/contacts';
 import { parseTypedTime } from '../src/automations/typed-time';
 import { MessengerService } from '../src/automations/messenger.service';
 import { ReportsService } from '../src/reports/reports.service';
@@ -90,7 +91,7 @@ describe('автовідповідь ШІ після сценарію запис
     const s = tomorrow();
     await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'INSTAGRAM', chatId: c.chat, kind: 'BOOKING', summary: 'x', service: 'Чистка' } });
     await write(c, '', `slot|${s.date}|${s.time}`);
-    await write(c, `Олена Сидоренко 0971234567`);
+    await write(c, `Прізвище Сидоренко, ім’я Олена, телефон 0971234567`);
     const req = await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: c.clinicId } });
     await http().post(`/requests/${req.id}/confirm`).set(auth(c.token)).send({ date: s.date, time: s.time }).expect(200);
     // the confirmation is a message of the system: it carries no author and does not pause the AI
@@ -111,7 +112,7 @@ describe('автовідповідь ШІ після сценарію запис
     for (let i = 0; i < 3; i++) {
       await prisma.bookingRequest.deleteMany({ where: { clinicId: c.clinicId } });
       await write(c, '', `slot|${s.date}|${s.time}`);
-      await write(c, `Олена Сидоренко 097123456${i}`);
+      await write(c, `Прізвище Сидоренко, ім’я Олена, телефон 097123456${i}`);
     }
     expect(await prisma.chatMessage.count({ where: { clinicId: c.clinicId, direction: 'OUT', byAi: true } })).toBe(0);
     sent.length = 0;
@@ -221,7 +222,7 @@ describe('автовідповідь ШІ після сценарію запис
     const calls = fake.calls;
     await write(c, label);
     expect(fake.calls).toBe(calls);
-    expect(sent.at(-1)!.text).toContain('прізвище та ім’я і номер телефону');
+    expect(sent.at(-1)!.text).toContain('прізвище, ім’я та номер телефону');
     expect(await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: c.clinicId } })).toMatchObject({ stage: 'COLLECT' });
     // a typed time that fits exactly one offered button is that button; a question about a time is not
     const c2 = await ready();
@@ -331,14 +332,71 @@ describe('автовідповідь ШІ після сценарію запис
     const calls = fake.calls;
     await write(c, 'давай на 11');
     expect(fake.calls).toBe(calls);
-    expect(sent.at(-1)!.text).toContain('прізвище та ім’я і номер телефону');
+    expect(sent.at(-1)!.text).toContain('прізвище, ім’я та номер телефону');
     expect(sent.map((m) => m.text).join('\n')).not.toContain('Передаю');
     const req = await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: c.clinicId } });
     expect(req.stage).toBe('COLLECT');
     expect(clinicHm(req.slotAt!)).toBe('11:00');
     // the next messages give the data and the request is complete
-    await write(c, 'Іван Петренко 0971234567');
+    await write(c, 'Прізвище Петренко, ім’я Іван, телефон 0971234567');
     expect(sent.at(-1)!.text).toContain('Передали заявку');
+  });
+
+  describe('адреса, телефон, графік', () => {
+    it('розбір питань і форматування годин', () => {
+      expect(wantsContacts('Дякую, а де ви знаходитесь?')).toEqual({ address: true, phone: false, hours: false });
+      expect(wantsContacts('какой у вас номер телефона?')).toMatchObject({ phone: true });
+      expect(wantsContacts('до котрої ви працюєте')).toMatchObject({ hours: true });
+      expect(wantsContacts('де ви знаходитесь і хочу записатися')).toBeNull();
+      expect(wantsContacts('Добрий день')).toBeNull();
+      const wk = { '1': { from: '09:00', to: '20:00' }, '2': { from: '09:00', to: '20:00' }, '3': { from: '09:00', to: '20:00' }, '4': { from: '09:00', to: '20:00' }, '5': { from: '09:00', to: '20:00' }, '6': { from: '10:00', to: '15:00' }, '7': null };
+      expect(formatHours(wk, 'uk')).toBe('пн–пт 09:00–20:00, сб 10:00–15:00, нд вихідний');
+      expect(formatHours(wk, 'ru')).toBe('пн–пт 09:00–20:00, сб 10:00–15:00, вс выходной');
+      expect(contactReply('де ви?', 'uk', { address: null, phone: null, directions: null, hours: null })).toBeNull();
+    });
+
+    it('«де ви знаходитесь» і «який телефон»: відповідь із контактів клініки без моделі й без передачі людині; порожніх полів бот не називає', async () => {
+      const c = await ready();
+      // nothing entered yet: the question still goes on its normal way (no invented address)
+      await http().get('/clinic/contacts').set(auth(c.token)).expect(200);
+      const calls = fake.calls;
+      await write(c, 'Дякую, а де ви знаходитесь?');
+      expect(fake.calls).toBe(calls + 1);
+
+      await http().put('/clinic/contacts').set(auth(c.token)).send({ address: 'м. Київ, вул. Тестова, 12, 2 поверх', phone: '+380441234567', directions: 'Вхід із двору, ліворуч від аптеки.' }).expect(200);
+      const after = fake.calls;
+      sent.length = 0;
+      await write(c, 'Дякую, а де ви знаходитесь?');
+      expect(fake.calls).toBe(after);
+      expect(sent.at(-1)!.text).toContain('Наша адреса: м. Київ, вул. Тестова, 12, 2 поверх.');
+      expect(sent.at(-1)!.text).toContain('Вхід із двору');
+      expect(sent.at(-1)!.text).not.toContain('Передаю');
+
+      sent.length = 0;
+      await write(c, 'а какой у вас номер телефона?');
+      expect(sent.at(-1)!.text).toContain('Телефон администратора: +380441234567.');
+      expect(fake.calls).toBe(after);
+
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { workHours: { '1': { from: '09:00', to: '20:00' }, '2': { from: '09:00', to: '20:00' }, '3': { from: '09:00', to: '20:00' }, '4': { from: '09:00', to: '20:00' }, '5': { from: '09:00', to: '20:00' }, '6': { from: '10:00', to: '15:00' }, '7': null } } });
+      sent.length = 0;
+      await write(c, 'до котрої ви працюєте?');
+      expect(sent.at(-1)!.text).toContain('Графік роботи: пн–пт 09:00–20:00, сб 10:00–15:00, нд вихідний.');
+      // the contacts are also known to the model, for a message that asks for a booking and the address at once
+      await write(c, 'хочу записатися і де ви знаходитесь');
+      expect(fake.system).toContain('вул. Тестова, 12');
+    });
+
+    it('контакти змінюють лише власник і керуючий, чужа клініка їх не бачить, межі довжини', async () => {
+      const a = await ready();
+      const b = await ready();
+      await http().put('/clinic/contacts').set(auth(a.token)).send({ address: 'Адреса А' }).expect(200);
+      expect((await http().get('/clinic/contacts').set(auth(b.token)).expect(200)).body).toEqual({ address: '', phone: '', directions: '' });
+      await http().put('/clinic/contacts').set(auth(a.token)).send({ phone: '1'.repeat(41) }).expect(400);
+      const inv = await http().post('/team/invitations').set(auth(a.token)).send({ email: `an${rnd()}@example.com`, role: 'ANALYST' }).expect(201);
+      const analyst = (await http().post(`/invites/${(inv.body.link as string).split('/invite/')[1]}/accept`).send({ name: 'Ан', password: PASSWORD }).expect(201)).body.accessToken as string;
+      await http().put('/clinic/contacts').set(auth(analyst)).send({ address: 'Хакер' }).expect(403);
+      expect((await http().get('/clinic/contacts').set(auth(a.token))).body.address).toBe('Адреса А');
+    });
   });
 
   it('повернення боту належить своїй клініці', async () => {

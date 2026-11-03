@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BookingModule } from '../booking/booking.module';
 import { KbModule } from '../kb/kb.module';
 import { ReportBuilderModule } from '../report-builder/report-builder.module';
 import { ReportsModule } from '../reports/reports.module';
@@ -10,7 +11,7 @@ import { AiService } from './ai.service';
 import { LlmClient } from './llm.client';
 
 @Module({
-  imports: [ReportsModule, ReportBuilderModule, KbModule],
+  imports: [ReportsModule, ReportBuilderModule, KbModule, BookingModule],
   controllers: [AiController, AssistantController],
   providers: [LlmClient, AiService, ChatAssistantService, AssistantService],
   exports: [AiService, ChatAssistantService],

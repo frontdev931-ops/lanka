@@ -75,6 +75,25 @@ describe('профіль: пароль', () => {
   });
 });
 
+describe('профіль: відкликання сесій до мілісекунди', () => {
+  it('сесія, видана за мить ДО зміни пароля в ту саму секунду, теж закривається; видана після зміни працює', async () => {
+    const u = await register();
+    const decode = (t: string) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url').toString()) as { iat: number; iatMs: number };
+    const before = (await http().post('/auth/login').send({ email: u.email, password: PASSWORD }).expect(201)).body.accessToken as string;
+    const { iatMs } = decode(before);
+    expect(iatMs).toBeGreaterThan(0);
+    // the revocation falls in the same second as the token and 1 ms after it: the old check (seconds only) let such a token live
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: u.email } });
+    await prisma.user.update({ where: { id: user.id }, data: { sessionsValidAfter: new Date(iatMs + 1) } });
+    expect(Math.floor((iatMs + 1) / 1000)).toBe(decode(before).iat);
+    await http().get('/auth/me').set(auth(before)).expect(401);
+    // a token issued after the revocation is valid
+    await new Promise((r) => setTimeout(r, 5));
+    const after = (await http().post('/auth/login').send({ email: u.email, password: PASSWORD }).expect(201)).body.accessToken as string;
+    await http().get('/auth/me').set(auth(after)).expect(200);
+  });
+});
+
 describe('профіль: пошта для входу', () => {
   it('пошта змінюється лише після переходу за посиланням з листа на нову адресу', async () => {
     const u = await register();

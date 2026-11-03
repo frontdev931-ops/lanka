@@ -5,6 +5,7 @@ import { AppModule } from '../src/app.module';
 import { InboundService } from '../src/automations/inbound.service';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { parkOtherDueEvents } from './park-events';
 
 jest.setTimeout(60_000);
 
@@ -44,7 +45,10 @@ async function clinic() {
   const clinicId = (await prisma.user.findUniqueOrThrow({ where: { email }, include: { memberships: true } })).memberships[0].clinicId;
   return { token: res.body.accessToken as string, clinicId };
 }
-const due = (id: string) => prisma.inboundEvent.update({ where: { id }, data: { nextAttemptAt: new Date(Date.now() - 1000) } });
+const due = async (id: string) => {
+  await parkOtherDueEvents(prisma, id);
+  return prisma.inboundEvent.update({ where: { id }, data: { nextAttemptAt: new Date(Date.now() - 1000) } });
+};
 
 describe('надійний вхідний ящик', () => {
   it('успішна подія стає DONE, повторна доставка того ж id ігнорується', async () => {

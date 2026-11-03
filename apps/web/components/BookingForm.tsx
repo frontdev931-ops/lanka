@@ -69,13 +69,13 @@ export function BookingForm({ patientId, requestId, onDone }: { patientId: strin
         <label className="field" style={{ margin: 0 }}>
           <span>{t('book.doctor')}</span>
           <select className="select" value={doctor} onChange={(e) => setDoctor(e.target.value)}>
-            <option value="">{t('book.anyDoctor')}</option>
+            <option value="">{t('book.pickDoctor')}</option>
             {opts?.doctors.map((d) => <option key={d.externalId} value={d.externalId}>{d.name}</option>)}
           </select>
         </label>
       </div>
       <div className="toolbar" style={{ marginTop: 8 }}>
-        <button className="btn btn-primary" disabled={busy || !date || !time || !cabinet} onClick={save}>{busy ? t('common.wait') : t('book.save')}</button>
+        <button className="btn btn-primary" disabled={busy || !date || !time || !cabinet || !doctor} onClick={save}>{busy ? t('common.wait') : t('book.save')}</button>
       </div>
     </div>
   );

@@ -3,6 +3,10 @@ export interface SlotOption {
   date: string;
   time: string;
   doctor?: string;
+  // The doctor of the time as an id in Cliniccards (carried in the button, so a name is never parsed back)
+  doctorId?: string;
+  // A button that is not an appointment time (for example "yes, confirm"): its own payload
+  payload?: string;
 }
 
 // What a channel allows. Scenarios and replies consult this instead of knowing channel names.
@@ -35,4 +39,4 @@ export interface ChannelAdapter {
   send(clinicId: string, chatId: string, text: string, options: SlotOption[]): Promise<void>;
 }
 
-export const slotPayload = (o: SlotOption) => `slot|${o.date}|${o.time}${o.doctor ? `|${o.doctor.slice(0, 16)}` : ''}`;
+export const slotPayload = (o: SlotOption) => o.payload ?? `slot|${o.date}|${o.time}${o.doctorId ? `|#${o.doctorId}` : o.doctor ? `|${o.doctor.slice(0, 16)}` : ''}`;

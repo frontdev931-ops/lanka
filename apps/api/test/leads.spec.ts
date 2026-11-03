@@ -7,6 +7,7 @@ import { channelFromUtm } from '../src/automations/leads.service';
 import { FacebookApi, MetaApiError } from '../src/automations/meta-graph.api';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { parkOtherDueEvents } from './park-events';
 
 jest.setTimeout(60_000);
 
@@ -166,6 +167,7 @@ describe('рекламні форми Meta (Lead Ads)', () => {
     expect(await prisma.inquiry.count({ where: { clinicId: c.clinicId } })).toBe(0);
     const ev = await prisma.inboundEvent.findFirstOrThrow({ where: { clinicId: c.clinicId, channel: 'LEADGEN' } });
     expect(ev).toMatchObject({ status: 'PENDING', attempts: 1 });
+    await parkOtherDueEvents(prisma, ev.id);
     await prisma.inboundEvent.update({ where: { id: ev.id }, data: { nextAttemptAt: new Date(Date.now() - 1000) } });
     await app.get((await import('../src/automations/inbound.service')).InboundService).retryDue();
     expect(await prisma.inquiry.findFirstOrThrow({ where: { clinicId: c.clinicId } })).toMatchObject({ channel: 'OTHER' });

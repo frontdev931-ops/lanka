@@ -310,7 +310,7 @@ export class AuthService {
   }
 
   private async token(userId: string, clinicId: string, role: Role) {
-    return { accessToken: await this.jwt.signAsync({ sub: userId, clinicId, role }, { jwtid: randomUUID() }) };
+    return { accessToken: await this.jwt.signAsync({ sub: userId, clinicId, role, iatMs: Date.now() }, { jwtid: randomUUID() }) };
   }
 
   private audit(clinicId: string, userId: string, action: string) {

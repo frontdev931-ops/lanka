@@ -576,3 +576,18 @@ body { -webkit-tap-highlight-color: transparent; }
   .land-cta .btn { flex: 1 1 100%; justify-content: center; }
   .mock-bar-row { grid-template-columns: 90px 1fr; }
 }
+
+/* Doctors and the booking schedule in the settings: wraps to one column on a phone */
+.doctor-card { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; background: var(--surface); }
+.doctor-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; min-height: 48px; padding: 8px 12px; border: none; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.doctor-body { padding: 4px 12px 14px; border-top: 1px solid var(--border); }
+.doctor-services { display: grid; gap: 2px; margin-bottom: 8px; }
+.doctor-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.doctor-row .input, .doctor-row .select { flex: 1 1 120px; min-width: 0; }
+.doctor-row .btn { flex: none; }
+@media (max-width: 480px) {
+  .doctor-row .input, .doctor-row .select { flex: 1 1 100%; }
+  .doctor-row .btn { width: 100%; }
+}
+
+.doctor-card .btn, .doctor-body .btn { min-height: 44px; }

@@ -219,7 +219,7 @@ describe('WhatsApp', () => {
     await incoming(c.id, '380671112233', { type: 'text', text: { body: 'Хочу на чистку' } }).expect(200);
     await incoming(c.id, '380671112233', { type: 'interactive', interactive: { button_reply: { id: 'slot|2026-11-03|10:00', title: 'Вт 03.11, 10:00' } } }).expect(200);
     expect((await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: c.clinicId, channel: 'WHATSAPP' } })).summary).toContain('03.11 10:00');
-    expect(wa.sent.at(-1)!.text).toContain('адміністратору');
+    expect(wa.sent.at(-1)!.text).toContain('номер телефону');
     await http().post('/conversations/WHATSAPP/380671112233/reply').set(auth(c.token)).send({ text: 'Підтверджуємо' }).expect(200);
     expect(wa.sent.at(-1)).toMatchObject({ phoneNumberId: c.id, to: '380671112233', text: 'Підтверджуємо' });
     const other = await clinic();

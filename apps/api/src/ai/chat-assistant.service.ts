@@ -1,10 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BookingRequest } from '@prisma/client';
 import { ReportsService } from '../reports/reports.service';
 import { clinicDate, clinicHm } from '../common/clinic-time';
 import { readWorkHours } from '../clinic/work-hours';
 import { PrismaService } from '../prisma/prisma.service';
 import { KbFacts, KbService } from '../kb/kb.service';
 import { AiService } from './ai.service';
+import { contactReply, formatHours } from './contacts';
+import { ChoiceButton, Decision, DoctorChoiceService, RequestPatch } from '../booking/doctor-choice.service';
 import { DENTAL_GLOSSARY, URGENT_TEXT, expandForSearch } from './dental';
 import { HandoffReason, handoffText, incomingHandoff, isUrgentSymptom, languageOf, parseModelJson, replyViolates, timesOutsideWindows } from './guardrails';
 
@@ -18,7 +21,7 @@ const todayText = () => {
 const hmMinutes = (hm: string) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
 const DAY_NAMES: Record<string, string> = { mon: 'пн', tue: 'вт', wed: 'ср', thu: 'чт', fri: 'пт', sat: 'сб', sun: 'нд' };
 
-const SYSTEM = (clinic: string, hours: string | null, slots: string | null, today: string, facts: string, kb: KbFacts) => `Ти — помічник адміністратора стоматологічної клініки «${clinic}». Ти пишеш у месенджері пацієнту від імені клініки.
+const SYSTEM = (clinic: string, hours: string | null, slots: string | null, today: string, facts: string, kb: KbFacts, contacts: string | null) => `Ти — помічник адміністратора стоматологічної клініки «${clinic}». Ти пишеш у месенджері пацієнту від імені клініки.
 
 Твоя робота: допомогти пацієнту ЗАПИСАТИСЯ на прийом, ПЕРЕНЕСТИ або СКАСУВАТИ запис, або відповісти на простий організаційний запитання.
 Для запису з’ясуй: яка послуга потрібна (консультація, чистка, лікування, інше) і який день чи час зручний. Для перенесення чи скасування, якщо пацієнта не ідентифіковано, не передавай одразу людині: попроси ПІБ і приблизні дату й час поточного запису, і напиши, що адміністратор знайде запис і підтвердить зміну. Не кажи, що запис уже зроблено: його підтверджує адміністратор.
@@ -31,6 +34,7 @@ ${slots ? `Орієнтовні вільні вікна у розкладі (з�
 ${facts}
 
 ${hours ? `Графік роботи клініки: ${hours}.` : 'Графік роботи тобі не відомий.'}
+${contacts ? `КОНТАКТИ КЛІНІКИ (їх вказала сама клініка, їх можна називати): ${contacts}.` : ''}
 ${kb.text ? `ДОВІДКА КЛІНІКИ (затверджена клінікою; тільки з неї можна називати послуги, тривалість, ціни, лікарів, адреси та відповіді на часті питання):\n${kb.text}\n\nПравила довідки: ціну називай ЛИШЕ якщо вона вказана в рядку послуги, дослівно в гривнях, без округлення, без знижок і без підсумків за кілька послуг. Якщо послуги немає в довідці, ціна не вказана або питання виходить за довідку, intent "handoff". Те, чого немає в довідці (адреса, телефон, лікарі), ти не знаєш.` : 'Адреси, телефону, цін і складу лікарів ти не знаєш.'}
 
 ${DENTAL_GLOSSARY}
@@ -52,12 +56,23 @@ ${DENTAL_GLOSSARY}
 {"intent": "booking|reschedule|cancel|info|offtopic|handoff", "reply": "текст відповіді", "summary": "одне речення для адміністратора: що хоче пацієнт (послуга, бажаний день і час, ПІБ якщо назвав), без медичних подробиць", "service": "назва послуги, яку хоче пацієнт: точно як у довідці клініки, якщо вона там є, інакше слова пацієнта; порожній рядок, якщо невідомо", "options": [{"date": "РРРР-ММ-ДД", "time": "ГГ:ХХ", "doctor": "ім’я лікаря точно як у списку, лише якщо пацієнт просить конкретного лікаря"}]}
 "options" заповнюй лише коли пропонуєш час: 2–3 варіанти СТРОГО з наведених вище вільних вікон (дата в дужках). Якщо в списку є лікарі: за замовчуванням бери вікна «Будь-який лікар» без поля doctor; якщо пацієнт просить конкретного лікаря, бери вікна цього лікаря й вказуй його ім’я в doctor. Тоді в "reply" час НЕ перелічуй: коротке вступне речення, запитання «Оберіть, будь ласка, зручний час кнопкою нижче» (мовою пацієнта) і речення, що запис підтверджує адміністратор. Якщо варіантів не пропонуєш, "options" порожній масив.`;
 
+// The answer of the doctor choice as a draft: a code-written reply, buttons (times with the id of the doctor, or yes/no and doctor buttons)
+export function draftFromDecision(d: Exclude<Decision, { kind: 'NONE' }>, summary: string | null, service: string | null): Draft {
+  const btn = (b: ChoiceButton): SlotOption => ({ label: b.label, date: b.date ?? '', time: b.time ?? '', ...(b.doctorId ? { doctorId: b.doctorId } : {}), ...(b.payload ? { payload: b.payload } : {}) });
+  const options = d.kind === 'ASK' ? d.buttons.map(btn) : d.kind === 'OFFER' ? d.options.map(btn) : [];
+  return { intent: 'booking', reply: d.reply, handoff: false, reason: null, summary: d.kind === 'HANDOFF' ? `${summary ?? 'Запис'}; ${d.note}` : summary, service, options, requestPatch: d.patch };
+}
+
 export interface SlotOption {
   date: string;
   time: string;
   label: string;
   // Если пациент выбирает врача (в клиниках со сменами врачей)
   doctor?: string;
+  // The doctor of the time as an id in Cliniccards (the button carries the id, not the name)
+  doctorId?: string;
+  // A button that is not an appointment time ("yes, confirm"): its own payload
+  payload?: string;
 }
 
 interface DayWindows {
@@ -82,6 +97,8 @@ export interface Draft {
   service: string | null;
   // Варианты времени (проверены по расписанию): в Telegram показываются кнопками
   options: SlotOption[];
+  // What the doctor choice saved about the request (the doctor, why him, the state of the dialogue); written by the caller
+  requestPatch?: RequestPatch;
 }
 
 const handoff = (reason: HandoffReason, lang: 'ru' | 'uk'): Draft => ({ intent: 'handoff', reply: handoffText(lang), handoff: true, reason, summary: null, service: null, options: [] });
@@ -93,6 +110,7 @@ export class ChatAssistantService {
     private ai: AiService,
     private reports: ReportsService,
     private kb: KbService,
+    private choice: DoctorChoiceService,
   ) {}
 
   // Готовит черновик ответа для сотрудника. Сам ничего не отправляет.
@@ -104,6 +122,10 @@ export class ChatAssistantService {
     if (last.direction !== 'IN') throw new BadRequestException('nothing_to_answer');
     // The language of the conversation: the newest message that shows one (a short message may show none)
     const lang = languageOf(msgs.filter((m) => m.direction === 'IN').map((m) => m.text).reverse());
+    // For the choice of a doctor: the card of the chat (set only by a real link, never by a typed phone), the open request, what the person wrote
+    const linkedPatientId = msgs.find((m) => m.patientId)?.patientId ?? null;
+    const openRequest = await this.prisma.bookingRequest.findFirst({ where: { clinicId, channel, chatId, status: 'NEW', kind: { in: ['BOOKING', 'RESCHEDULE'] } }, orderBy: { createdAt: 'desc' } });
+    const patientTexts = msgs.filter((m) => m.direction === 'IN').map((m) => m.text).reverse();
 
     // До модели доходят только безопасные сообщения: опасная тема или затянувшийся диалог сразу уходят человеку
     const today = await this.prisma.chatMessage.count({ where: { clinicId, channel, chatId, direction: 'IN', createdAt: { gt: new Date(Date.now() - 86_400_000) } } });
@@ -114,7 +136,7 @@ export class ChatAssistantService {
     const patientWords = msgs.filter((m) => m.direction === 'IN').slice(-3).map((m) => m.text).join(' ');
     const kbFacts = await this.kb.factsFor(clinicId, new Date(), `${patientWords} ${expandForSearch(patientWords)}`);
     // A sudden problem (acute pain, a swelling, bleeding, a broken tooth): no model, no advice; the nearest time and an urgent mark for the staff
-    if (isUrgentSymptom(last.text, kbFacts.pricesKnown)) return this.urgent(clinicId, lang);
+    if (isUrgentSymptom(last.text, kbFacts.pricesKnown)) return this.urgent(clinicId, lang, { patientId: linkedPatientId, request: openRequest, texts: patientTexts });
     const topic = incomingHandoff(last.text, kbFacts.pricesKnown);
     if (topic) return handoff(topic, lang);
 
@@ -127,25 +149,38 @@ export class ChatAssistantService {
       else turns.push({ role, content: m.text });
     }
 
-    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { name: true, workHours: true } });
+    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { name: true, workHours: true, publicAddress: true, publicPhone: true, publicDirections: true } });
     // Часы работы называем, только если клиника сама их настроила: «по умолчанию» могут быть неправдой
     const configured = clinic.workHours && typeof clinic.workHours === 'object' && Object.keys(clinic.workHours as object).length > 0;
-    const hours = configured
-      ? Object.entries(readWorkHours(clinic.workHours))
-          .map(([d, h]) => `${DAY_NAMES[d] ?? d} ${h ? `${h.from}–${h.to}` : 'вихідний'}`)
-          .join(', ')
-      : null;
+    const hours = configured ? formatHours(readWorkHours(clinic.workHours), 'uk') : null;
+
+    // Address, phone, working hours: answered by the code from what the clinic entered (no model, no hand-over)
+    const hoursIn = (l: 'ru' | 'uk') => (configured ? formatHours(readWorkHours(clinic.workHours), l) : null);
+    const direct = contactReply(last.text, lang, { address: clinic.publicAddress, phone: clinic.publicPhone, directions: clinic.publicDirections, hours: hoursIn(lang) });
+    if (direct) return { intent: 'info', reply: direct, handoff: false, reason: null, summary: null, service: null, options: [] };
+    const contactsLine = [clinic.publicAddress && `адреса: ${clinic.publicAddress}`, clinic.publicDirections && `як дістатися: ${clinic.publicDirections}`, clinic.publicPhone && `телефон адміністратора: ${clinic.publicPhone}`].filter(Boolean).join('; ') || null;
+    // times of the working hours may be named in an answer even when they are not free times
+    const hourPoints: [number, number][] = configured ? Object.values(readWorkHours(clinic.workHours)).flatMap((h) => (h ? [[hmMinutes(h.from), hmMinutes(h.from)], [hmMinutes(h.to), hmMinutes(h.to)]] as [number, number][] : [])) : [];
 
     const facts = await this.facts(clinicId, msgs.find((m) => m.patientId)?.patientId ?? null);
     const { text: slotText, windows, days, doctors } = await this.slots(clinicId);
     // One try: a finished draft, a hand-over the model itself asked for, or the code of the check the answer did not pass.
     // A failed check is tried once more (free of charge) with a reminder, before a person is bothered.
     const attempt = async (reminder: string, billable: boolean): Promise<Draft | HandoffReason> => {
-      const r = await this.ai.complete(clinicId, 'chat_draft', SYSTEM(clinic.name, hours, slotText, todayText(), facts, kbFacts) + reminder, turns, 1500, 'chat', billable);
+      const r = await this.ai.complete(clinicId, 'chat_draft', SYSTEM(clinic.name, hours, slotText, todayText(), facts, kbFacts, contactsLine) + reminder, turns, 1500, 'chat', billable);
       const parsed = parseModelJson(r.text);
       if (!parsed) return 'model';
       if (parsed.intent === 'handoff') return handoff('model', lang);
-      if (replyViolates(parsed.reply, kbFacts.allowedAmounts) || timesOutsideWindows(parsed.reply, windows)) return 'reply_check';
+      // Which doctor: the patient's wish, the continuation of treatment, the doctor for a first booking (see DoctorChoiceService). The reply
+      // and the buttons are then written by the code, and the doctor is settled before any time is shown.
+      if (parsed.intent === 'booking') {
+        const svc = await this.choice.findService(clinicId, parsed.service ?? openRequest?.service ?? null);
+        if (svc) {
+          const dec = await this.choice.decide({ clinicId, patientId: linkedPatientId, service: svc, texts: patientTexts, lang, request: openRequest });
+          if (dec.kind !== 'NONE') return draftFromDecision(dec, parsed.summary, svc.title);
+        }
+      }
+      if (replyViolates(parsed.reply, kbFacts.allowedAmounts) || timesOutsideWindows(parsed.reply, [...windows, ...hourPoints])) return 'reply_check';
       // Кнопки со временем: каждый вариант должен лежать в посчитанном окне (с запасом на 30 минут приёма), иначе ответ не отправляем
       const options: SlotOption[] = [];
       // the model may repeat a time: each time is offered once
@@ -175,11 +210,18 @@ export class ChatAssistantService {
 
   // The answer to a sudden health problem is written by the code: it does not evaluate the problem, offers the nearest times and tells
   // the staff the request is urgent (the summary starts with "ТЕРМІНОВО")
-  private async urgent(clinicId: string, lang: 'ru' | 'uk'): Promise<Draft> {
-    const options = await this.freshOptions(clinicId).catch(() => [] as SlotOption[]);
+  private async urgent(clinicId: string, lang: 'ru' | 'uk', ctx: { patientId: string | null; request: BookingRequest | null; texts: string[] }): Promise<Draft> {
     const summary = 'ТЕРМІНОВО: пацієнт описує гострий стан (біль, набряк, кровотеча чи подібне), потрібен найближчий час або дзвінок';
-    if (!options.length) return { intent: 'handoff', reply: URGENT_TEXT[lang], handoff: true, reason: 'urgent', summary, service: null, options: [] };
-    return { intent: 'booking', reply: `${URGENT_TEXT[lang]}\n\n${URGENT_TEXT.withTimes[lang]}`, handoff: false, reason: null, summary, service: null, options };
+    // With doctors known and some of them marked as taking urgent patients: only their nearest times, a doctor changed only with the person's yes
+    const service = ctx.request?.service ? await this.choice.findService(clinicId, ctx.request.service) : null;
+    const dec = await this.choice.urgent({ clinicId, patientId: ctx.patientId, service, texts: ctx.texts, lang, request: ctx.request });
+    if (dec.kind !== 'NONE') {
+      const d = draftFromDecision(dec, summary, null);
+      return { ...d, reply: `${URGENT_TEXT[lang]}\n\n${d.reply}`, summary, requestPatch: { ...d.requestPatch, urgent: true, doctorReason: d.requestPatch?.doctorReason ?? 'URGENT' } };
+    }
+    const options = await this.freshOptions(clinicId).catch(() => [] as SlotOption[]);
+    if (!options.length) return { intent: 'handoff', reply: URGENT_TEXT[lang], handoff: true, reason: 'urgent', summary, service: null, options: [], requestPatch: { urgent: true, doctorReason: 'URGENT' } };
+    return { intent: 'booking', reply: `${URGENT_TEXT[lang]}\n\n${URGENT_TEXT.withTimes[lang]}`, handoff: false, reason: null, summary, service: null, options, requestPatch: { urgent: true, doctorReason: 'URGENT' } };
   }
 
   // Up to three fresh times (one per day, the first free half hour), for when the time a person chose is no longer free.

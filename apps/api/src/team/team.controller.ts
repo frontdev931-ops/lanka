@@ -181,7 +181,7 @@ export class InvitePublicController {
     });
     await this.prisma.auditLog.create({ data: { clinicId: inv.clinicId, userId: user.id, action: 'team.joined', details: { role: inv.role } } });
 
-    const accessToken = await this.jwt.signAsync({ sub: user.id, clinicId: inv.clinicId, role: inv.role }, { jwtid: randomUUID() });
+    const accessToken = await this.jwt.signAsync({ sub: user.id, clinicId: inv.clinicId, role: inv.role, iatMs: Date.now() }, { jwtid: randomUUID() });
     setSessionCookie(res, accessToken);
     return { accessToken };
   }

@@ -281,6 +281,20 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Укажите корректные дату и время записи',
     en: 'Enter a valid date and time of the appointment',
   },
+  doctor_unknown: {
+    uk: 'Такого лікаря немає в Cliniccards. Оновіть список лікарів',
+    ru: 'Такого врача нет в Cliniccards. Обновите список врачей',
+    en: 'Cliniccards does not list this doctor. Refresh the list of doctors',
+  },
+  doctor_not_found: { uk: 'Лікаря не знайдено', ru: 'Врач не найден', en: 'Doctor not found' },
+  bad_services: { uk: 'Невірний перелік послуг', ru: 'Неверный перечень услуг', en: 'Invalid list of services' },
+  bad_availability: { uk: 'Невірний розклад: перевірте дні, години й кабінет', ru: 'Неверное расписание: проверьте дни, часы и кабинет', en: 'Invalid schedule: check the days, hours and cabinet' },
+  availability_conflict: { uk: 'Розклад суперечить іншому: години лікаря перетинаються або кабінет уже зайнятий іншим лікарем', ru: 'Расписание противоречит другому: часы врача пересекаются или кабинет уже занят другим врачом', en: 'The schedule conflicts with another: the hours of the doctor overlap or another doctor already has the cabinet' },
+  booking_doctor_needed: {
+    uk: 'Для запису в Cliniccards потрібно вибрати лікаря',
+    ru: 'Для записи в Cliniccards нужно выбрать врача',
+    en: 'Choose a doctor: Cliniccards requires one for every visit',
+  },
   booking_write_disabled: {
     uk: 'Запис у систему клініки не ввімкнено',
     ru: 'Запись в систему клиники не включена',

@@ -192,7 +192,7 @@ describe('відповіді в Instagram', () => {
     await hook(c.igUserId, 'u3', { mid: `m${++mid}${rnd()}`, text: 'Вт 03.11, 10:00', quick_reply: { payload: 'slot|2026-11-03|10:00' } }).expect(200);
     const req = await prisma.bookingRequest.findFirstOrThrow({ where: { clinicId: c.clinicId, channel: 'INSTAGRAM', chatId: 'u3' } });
     expect(req.summary).toContain('03.11 10:00');
-    expect(ig.sent.at(-1)!.text).toContain('адміністратору');
+    expect(ig.sent.at(-1)!.text).toContain('номер телефону');
   });
 
   it('«Зупинити»: людина прив’язана до картки більше не отримує автоматичних відповідей', async () => {

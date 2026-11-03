@@ -89,7 +89,7 @@ GET `/staff` (`doctor_id, role: MANAGER/DOCTOR/…, phone`), `/cabinets`, `/sub-
 2. **No "changed since".** Incremental sync works by window: periodically re-read visits for the last N days and the next M days, and patients in full once a day (by `limit/offset`). A deleted visit shows up only as missing when the window is re-read.
 3. **A method whitelist in the connector.** Only read (GET) methods are allowed now. Writing would be added one method at a time (`POST/PUT /visits`, `/reminders`, `/waitings`, `POST /stages/{id}`) and only on an explicit staff action. Forbidden: `DELETE *`, payments, invoices, deposits, spendings, stock.
    **Write support (2026-10-29, built on the mock, NOT verified on a live clinic):** `apps/api/src/booking/` (explicit staff action, unique key per write, fresh check of the place, lost answers are reconciled instead of repeated), `CliniccardsClient.post/put` for `/visits` and `/patients` only. Two server keys: `CLINICCARDS_WRITE_ENABLED=true` and, for the real address, `CLINICCARDS_WRITE_LIVE=true`; plus the clinic flag `bookingWriteEnabled` set by the service owner. To verify together with the owner: the `status` a new visit accepts (`VISIT_STATUS` in `cliniccards.connector.ts`), whether `doctor_id` is required, the shape of the POST answer, whether PUT needs `price_items_ids`, the `phone` filter of GET `/patients`, how a cancelled visit looks afterwards. Older note:
-   **Write draft (2026-10-28):** `CliniccardsClient.post` (only `/visits`, disabled unless the server sets `CLINICCARDS_WRITE_ENABLED=true`), `CliniccardsConnector.createVisit`, the `CreateVisitRequest` type in `connector.ts`. Before turning it on: verify on a live clinic the value of `status` for a new visit, whether `doctor_id` is required and what the method returns; wire it to the AI setting "create appointments itself" (`BOOKING_WRITE_SUPPORTED` in `ai.service.ts`); add tests against the mock; get the owner's explicit permission.
+   **(Superseded by the section "Write requirements" at the end of this file.)** **Write draft (2026-10-28):** `CliniccardsClient.post` (only `/visits`, disabled unless the server sets `CLINICCARDS_WRITE_ENABLED=true`), `CliniccardsConnector.createVisit`, the `CreateVisitRequest` type in `connector.ts`. Before turning it on: verify on a live clinic the value of `status` for a new visit, whether `doctor_id` is required and what the method returns; wire it to the AI setting "create appointments itself" (`BOOKING_WRITE_SUPPORTED` in `ai.service.ts`); add tests against the mock; get the owner's explicit permission.
 4. **The key** is stored encrypted; never log the `Token` header.
 5. **Visit statuses** are stored as they are (10 values), not collapsed to 4: the no-show and reschedule reports depend on them.
 6. Money arrives as strings and IDs as strings and numbers mixed: normalise while parsing.
@@ -117,3 +117,29 @@ Assumptions not covered by the documentation:
 - How the clinic uses `source`, patient statuses and the financial model (SIMPLE/STANDARD).
 - Where they keep notes and contact results with patients.
 - Several sub-clinics: a `subclinic_id` filter is not visible on read methods.
+
+## Write requirements: the official documentation against our code (checked 2026-11-03)
+Source: the public Postman collection of the official documentation (the address at the top of this file), read in full for the methods below. "Documented" means written there; it is NOT the same as verified on a live clinic. Nothing here was sent to a real clinic.
+
+### Documented (the code follows it, the mock now enforces it)
+| Method | Documented requirement | What we do |
+|---|---|---|
+| POST `/visits` | REQUIRED: `status`, `patient_id`, `cabinet_id`, **`doctor_id`**, `note` (1-400), `date` (YYYY-MM-DD), `time_start`, `time_end` (HH:MM, multiples of 5). Optional `price_items_ids` (ids from GET `/prices`, up to 10). `status` is one of PLANNED, CONFIRMED, NOT_CONFIRMED, VISITED, MOVED, DID_NOT_COME, IN_CLINIC, BOOKING, CANCELLED, IN_CHAIR | A booking without a doctor is refused before any request (`booking_doctor_needed`; the connector refuses too). We send `PLANNED`, the status of the documentation's example. `price_items_ids` is not sent |
+| PUT `/visits` | The same fields plus `visit_id`, all REQUIRED (a full replace); `price_items_ids` absent keeps the services | The connector reads the visit first and repeats every field; it refuses when the visit has no doctor |
+| POST `/patients` | REQUIRED: `lastname`, `firstname` (1-50 each). `phone` optional, international format without `+` (non-digits are removed). `source` must be one of the sources the clinic configured. `preferred_contact` one of PHONE, SMS, EMAIL, VIBER, WHATSAPP, FACEBOOK, INSTAGRAM, TELEGRAM | Surname and first name come from separate answers (never told apart by word order). Phone is sent as digits. The channel goes to `preferred_contact`; **`source` is not sent** |
+| GET `/patients?phone=` | Finds a patient by the FIRST phone number only; `380XXXXXXXXX` or `+380(XX)XXX-XX-XX` | Used to reconcile a lost answer and before creating a card. A person whose number is stored as `phone2` is not found by this call (a duplicate card is possible) |
+| Success answer | `{ "data": { ... }, "result": "success", "error": null }`; POST `/visits` returns the whole visit (`visit_id`, `doctor`, `doctor_id`, ...), POST `/patients` the whole card (`patient_id`, ...) | The connector reads `data.visit_id` / `data.patient_id`; a missing id is treated as an unknown result and reconciled |
+| GET `/schedule-shifts`, `/schedule-spaces`, `/visits`, `/cabinets` | Shifts (`doctor_id`, `schedule_cabinets_id`, `shift_start/end`), reserved blocks, visits | Free times are computed from them (tested end to end against the mock API, see `test/booking-auto-e2e.spec.ts`) |
+
+### Documented, and a correction of an earlier note
+- GET `/clinic-profile` is documented to return `name, website, email, phone, address, logo`. An earlier version of this file (and an earlier answer) said the address and phone are not available: that was based on our mock, not on the documentation. Not verified on a live clinic (only the logo was). GET `/sub-clinics` is documented to return `address` per branch.
+- GET `/schedule-settings` (working days with opening and closing time, holidays, `min_free_time`) and the online-booking methods `/booking-settings`, `/booking-items` exist. We use none of them yet.
+
+### Assumptions that remain (to verify on a live clinic with the owner)
+1. Which `status` a clinic wants for a visit made from outside (`PLANNED` is the documentation's example; `BOOKING` or `NOT_CONFIRMED` may fit better).
+2. Whether the API refuses an unknown `doctor_id`, a doctor who has no shift at that time, a cabinet that is not the doctor's, or a time outside the working hours (nothing of this is documented; the mock does not check it).
+3. Whether a visit made through the API needs `price_items_ids` for the service to show in the card (documented as optional).
+4. What `source` values a real clinic accepts, and whether an unknown one is refused or ignored (we do not send it).
+5. How a clinic without doctor shifts (112 dental) should name a doctor: the API demands one, so the automatic mode hands such requests to an administrator.
+6. Rate limits, error texts and the behaviour on a lost answer (the mock imitates a lost answer; the real API may behave differently).
+7. The exact status and fields of a cancelled or moved visit afterwards.

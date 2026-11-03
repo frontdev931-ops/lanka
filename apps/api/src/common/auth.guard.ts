@@ -63,7 +63,7 @@ export class AuthGuard implements CanActivate {
       if (origin && origin !== allowed) throw new ForbiddenException();
     }
 
-    let payload: { sub: string; clinicId: string; iat?: number; jti?: string };
+    let payload: { sub: string; clinicId: string; iat?: number; iatMs?: number; jti?: string };
     try {
       payload = await this.jwt.verifyAsync(token);
     } catch {
@@ -79,7 +79,9 @@ export class AuthGuard implements CanActivate {
     });
     if (!m) throw new UnauthorizedException();
     const after = m.user.sessionsValidAfter;
-    if (after && (payload.iat ?? 0) < Math.floor(after.getTime() / 1000)) throw new UnauthorizedException();
+    // The moment a token was issued is kept to the millisecond (iatMs): the standard iat has only seconds, so a token issued a moment BEFORE
+    // a password change in the same second would have stayed valid. Tokens without iatMs (issued before this change) fall back to seconds.
+    if (after && (payload.iatMs ?? (payload.iat ?? 0) * 1000) < after.getTime()) throw new UnauthorizedException();
     req.user = { userId: payload.sub, clinicId: payload.clinicId, role: m.role } as AuthUser;
     // A demo copy ends after a few hours; a demo cannot connect real systems, change the team, billing or upload files
     if (m.clinic.isDemo) {

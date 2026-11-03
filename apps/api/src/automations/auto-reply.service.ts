@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { hasFeature } from '../service/plans';
 import { ChatAssistantService } from '../ai/chat-assistant.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { slotPayload } from './channels';
 import { RequestKind, RequestsService } from './requests.service';
 import { MessengerService, SendError } from './messenger.service';
 
@@ -72,13 +73,13 @@ export class AutoReplyService {
         if (e instanceof SendError && e.blocked && channel === 'TELEGRAM') await this.prisma.patientChannel.updateMany({ where: { clinicId, channel, externalId: chatId }, data: { optedOutAt: new Date() } });
         return this.skip(clinicId, channel, `send_failed_${e instanceof SendError ? e.reason : 'error'}`);
       }
-      await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, direction: 'OUT', text: d.reply, byAi: true, ...(d.options.length ? { buttons: d.options.map((o) => ({ label: o.label, payload: `slot|${o.date}|${o.time}${o.doctor ? `|${o.doctor.slice(0, 16)}` : ''}` })) } : {}) } });
+      await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, direction: 'OUT', text: d.reply, byAi: true, ...(d.options.length ? { buttons: d.options.map((o) => ({ label: o.label, payload: slotPayload(o) })) } : {}) } });
       // Заявка администратору: запись, перенос, отмена или вопрос, переданный человеку
       const kind: RequestKind | null = d.handoff ? 'HANDOFF' : ({ booking: 'BOOKING', reschedule: 'RESCHEDULE', cancel: 'CANCEL' } as Record<string, RequestKind>)[d.intent] ?? null;
       if (kind) {
         const lastIn = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, select: { text: true, contactName: true } });
         const named = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, contactName: { not: null } }, orderBy: { createdAt: 'desc' }, select: { contactName: true } });
-        await this.requests.upsert(clinicId, { channel, chatId, patientId: ch?.patientId ?? null, contactName: named?.contactName ?? null, kind, summary: kind === 'HANDOFF' && !d.summary ? `Питання передано людині: «${(lastIn?.text ?? '').slice(0, 200)}»` : (d.summary ?? (lastIn?.text ?? '').slice(0, 200)), service: kind === 'BOOKING' ? d.service : null },
+        await this.requests.upsert(clinicId, { channel, chatId, patientId: ch?.patientId ?? null, contactName: named?.contactName ?? null, kind, summary: kind === 'HANDOFF' && !d.summary ? `Питання передано людині: «${(lastIn?.text ?? '').slice(0, 200)}»` : (d.summary ?? (lastIn?.text ?? '').slice(0, 200)), service: kind === 'BOOKING' ? d.service : null, patch: d.requestPatch },
           // an urgent request is announced to the staff even when an open request of this chat already exists
           !!d.summary?.startsWith('ТЕРМІНОВО'));
       }
