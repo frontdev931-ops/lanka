@@ -56,6 +56,11 @@ export interface ClientOptions {
 
 // The API address can be replaced (to imitate the server in development) only outside production,
 // otherwise a clinic's key could be sent to a foreign address through an environment variable.
+// Is a write to the REAL Cliniccards address allowed by the server? (against a mock address the first key CLINICCARDS_WRITE_ENABLED is enough)
+export function liveWriteAllowed(): boolean {
+  return resolveBaseUrl() !== DEFAULT_BASE || process.env.CLINICCARDS_WRITE_LIVE === 'true';
+}
+
 export function resolveBaseUrl(explicit?: string) {
   if (explicit) return explicit;
   if (process.env.NODE_ENV !== 'production' && process.env.CLINICCARDS_BASE_URL) return process.env.CLINICCARDS_BASE_URL;

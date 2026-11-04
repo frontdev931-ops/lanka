@@ -51,6 +51,8 @@ export class ChatService {
     return {
       channel,
       chatId,
+      // The internal identity of this dialog: the line for AUTOBOOKING_TEST_DIALOGS (clinic | channel | internal chat id, never a name or a username)
+      dialogKey: `${clinicId}|${channel}|${chatId}`,
       replyWindowOpen: await this.messenger.windowOpen(clinicId, channel, chatId),
       patient: named?.patient ?? null,
       contactName: messages.find((m) => m.contactName)?.contactName ?? null,

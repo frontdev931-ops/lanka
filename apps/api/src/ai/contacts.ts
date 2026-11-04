@@ -6,6 +6,8 @@ export interface Contacts {
   directions: string | null;
   // already formatted in the language of the answer, null when the clinic did not set its working hours
   hours: string | null;
+  // The clinic keeps its address or contacts in the knowledge base (the model answers from there): then "unknown" is not said by the code
+  inKnowledgeBase?: boolean;
 }
 
 const ADDRESS = /(адрес|де\s+ви\s+(знаходит|розташов)|де\s+знаходит|де\s+розташов|де\s+вас\s+знайти|куди\s+(їхати|йти|під)|як\s+(дістатися|добратися|доїхати)|де\s+паркув|парков|паркув|где\s+вы|где\s+находит|где\s+расположен|где\s+вас\s+найти|куда\s+(ехать|идти|подъезжать)|как\s+(добраться|доехать))/i;
@@ -30,6 +32,12 @@ export function contactReply(text: string, lang: 'ru' | 'uk', c: Contacts): stri
   else if (w.address && c.directions) parts.push(c.directions);
   if (w.phone && c.phone) parts.push(`${ru ? 'Телефон администратора' : 'Телефон адміністратора'}: ${c.phone}.`);
   if (w.hours && c.hours) parts.push(`${ru ? 'График работы' : 'Графік роботи'}: ${c.hours}.`);
+  // Asked, but the clinic has not entered it: said plainly, with no invented ban ("we cannot name it in this chat") and no promise of a call
+  const unknown: string[] = [];
+  if (w.address && !c.address && !c.directions) unknown.push(ru ? 'адрес клиники' : 'адреса клініки');
+  if (w.phone && !c.phone) unknown.push(ru ? 'телефон администратора' : 'телефон адміністратора');
+  if (w.hours && !c.hours) unknown.push(ru ? 'график работы' : 'графік роботи');
+  if (unknown.length && !c.inKnowledgeBase) parts.push(ru ? `Данных о том, что вы спросили (${unknown.join(', ')}), у нас сейчас нет, это нужно уточнить у администратора клиники.` : `Даних про те, що ви запитали (${unknown.join(', ')}), у нас зараз немає, це потрібно уточнити в адміністратора клініки.`);
   if (!parts.length) return null;
   parts.push(ru ? 'Если хотите записаться, напишите нам.' : 'Якщо хочете записатися, напишіть нам.');
   return parts.join('\n\n');

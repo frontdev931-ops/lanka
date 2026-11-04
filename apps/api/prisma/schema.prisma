@@ -827,6 +827,8 @@ model BookingRequest {
   // The automatic mode claims a request once: RUNNING, DONE, FAILED
   autoState         String?
   autoNote          String?
+  // Why a booking could not be offered online (a fixed code, see BookingBlock): shown to the administrator next to the request
+  blockCode         String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)

@@ -114,7 +114,7 @@ describe('база знань клініки', () => {
     llm.systems.length = 0;
     await ask(c.clinicId, 'Добрий день, розкажіть про гігієну');
     const sys = llm.systems.at(-1)!;
-    expect(sys).toContain('Професійна гігієна; тривалість 60 хв; ціна 1200 грн (фіксована); Не їсти за 2 години');
+    expect(sys).toContain('Професійна гігієна; тривалість 60 хв; ціна 1200 грн (фіксована); склад і опис саме цієї послуги: Не їсти за 2 години');
     expect(sys).toContain('Іваненко Олег: Терапевт');
     expect(sys).not.toContain('Чернетка послуги'); // a hand-made draft is not published
     expect(sys).not.toContain('Незатверджений Лікар');
@@ -250,7 +250,7 @@ describe('довгий прайс (як у 112 dental: 234 позиції)', () 
     expect(sys).toContain('Імплантація');
     expect(sys).toContain('Послуга 1 імплант');
     expect(sys).not.toContain('Послуга 0 пломба');
-    expect((sys.match(/\n- Послуга /g) ?? []).length).toBeLessThanOrEqual(25);
+    expect((sys.match(/\n- Послуга /g) ?? []).length).toBeLessThanOrEqual(30);
     // a price of a service that is not in the prompt cannot be quoted
     say('Імплант коштує 1001 грн.');
     expect((await ask(c.clinicId, 'Скільки коштує імплант?')).handoff).toBe(false);

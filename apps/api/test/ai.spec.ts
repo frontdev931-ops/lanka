@@ -150,9 +150,9 @@ describe('ИИ-помощник в переписке: границы', () => {
 
   it('фраза о передаче человеку — на языке пациента', () => {
     expect(handoffText(languageOf(['Добрий день, у мене болить зуб']))).toContain('адміністратору');
-    expect(handoffText(languageOf(['Здравствуйте, у меня болит зуб']))).toContain('администратору клиники, он ответит');
-    expect(handoffText(languageOf(['мне пора на чистку?']))).toContain('администратору клиники, он ответит');
-    expect(handoffText(languageOf(['Сколько стоит чистка?']))).toContain('администратору клиники, он ответит');
+    expect(handoffText(languageOf(['Здравствуйте, у меня болит зуб']))).toContain('Передали ваш вопрос администратору клиники');
+    expect(handoffText(languageOf(['мне пора на чистку?']))).toContain('Передали ваш вопрос администратору клиники');
+    expect(handoffText(languageOf(['Сколько стоит чистка?']))).toContain('Передали ваш вопрос администратору клиники');
     expect(handoffText(languageOf(['???']))).toContain('адміністратору');
     // short Russian messages without special letters are still Russian; the language of the conversation survives a message that shows none
     expect(languageOf(['какие есть окошки на завтра?'])).toBe('ru');

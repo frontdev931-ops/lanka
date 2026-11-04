@@ -4,8 +4,9 @@
 
 import { MEDICATION, stemsOf } from './dental';
 
-export const HANDOFF_TEXT = 'Передаю ваше запитання адміністратору клініки, він відповість найближчим часом.';
-export const HANDOFF_TEXT_RU = 'Передаю ваш вопрос администратору клиники, он ответит в ближайшее время.';
+// Said only together with a request that is really created for the administrator; no time of the answer is promised
+export const HANDOFF_TEXT = 'Передали ваше запитання адміністратору клініки.';
+export const HANDOFF_TEXT_RU = 'Передали ваш вопрос администратору клиники.';
 
 // The patient's language: і ї є ґ and Ukrainian words mean Ukrainian; ы э ъ ё and Russian words mean Russian; no signs means undetermined
 const RU_WORDS = /(?<![\p{L}])(какие|какой|какая|какое|как|что|где|когда|есть|нужно|можно|окна|окон|окошк\p{L}*|сегодня|сколько|врач|записаться|запишите|запись|пожалуйста|спасибо|здравствуйте|привет|меня|мне|мой|моя|подскажите|свободн\p{L}*|ближайш\p{L}*|хотел\p{L}*|болит|чтобы|можете|ещё|лечение|во сколько)(?![\p{L}])/iu;
@@ -115,15 +116,16 @@ function sumsMatchServices(reply: string, priced: PricedService[], hint?: string
 
 // allowedAmounts: the prices (UAH) of the clinic's own list that are known and current; any other amount in the reply is a violation.
 // With `check` also the binding of the sum to the service named for it (see above).
-export function replyViolates(reply: string, allowedAmounts: number[] = [], check?: { priced: PricedService[]; service?: string | null }): boolean {
-  if (FROM_PRICE.test(reply)) return true;
+export function replyProblem(reply: string, allowedAmounts: number[] = [], check?: { priced: PricedService[]; service?: string | null }): string | null {
+  if (FROM_PRICE.test(reply)) return 'from_price';
   for (const m of reply.matchAll(MONEY)) {
     const n = Number(m[1].replace(/\s/g, '').replace(',', '.'));
-    if (!/грн|₴|uah|грив/i.test(m[2]) || !allowedAmounts.includes(n)) return true;
+    if (!/грн|₴|uah|грив/i.test(m[2]) || !allowedAmounts.includes(n)) return 'amount_not_in_list';
   }
-  if (check && !sumsMatchServices(reply, check.priced, check.service)) return true;
-  return BAD_REPLY.some((re) => re.test(reply));
+  if (check && !sumsMatchServices(reply, check.priced, check.service)) return 'price_service_mismatch';
+  return BAD_REPLY.some((re) => re.test(reply)) ? 'medical_or_dosage' : null;
 }
+export const replyViolates = (reply: string, allowedAmounts: number[] = [], check?: { priced: PricedService[]; service?: string | null }): boolean => replyProblem(reply, allowedAmounts, check) !== null;
 
 // The model is asked to return JSON; anything that does not parse is treated as a hand-over to a person
 export interface ModelOption {

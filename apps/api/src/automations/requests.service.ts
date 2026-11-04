@@ -38,6 +38,7 @@ export class RequestsService {
       ...(p.urgent !== undefined ? { urgent: p.urgent } : {}),
       ...(p.scheduleMode !== undefined ? { scheduleMode: p.scheduleMode } : {}),
       ...(p.wishedDoctor !== undefined ? { wishedDoctor: p.wishedDoctor } : {}),
+      ...(p.blockCode !== undefined ? { blockCode: p.blockCode } : {}),
     };
   }
 

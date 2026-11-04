@@ -596,3 +596,8 @@ body { -webkit-tap-highlight-color: transparent; }
 .doctor-toolbar .btn, .doctor-row .btn { min-height: 44px; }
 
 .doctor-toolbar-btn { min-height: 44px; }
+
+/* The technical id of a dialogue (for the temporary automatic booking test) */
+.dialog-id { margin: 8px 0; }
+.dialog-id summary { cursor: pointer; padding: 10px 0; min-height: 44px; display: flex; align-items: center; }
+.dialog-key { display: block; word-break: break-all; margin: 6px 0 10px; padding: 8px 10px; background: var(--surface-2, #f1f5f9); border-radius: 8px; font-size: 14px; }

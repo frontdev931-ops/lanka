@@ -141,6 +141,61 @@ run('ИИ-помощник на настоящей модели', () => {
     expect(bad).toEqual([]);
   });
 
+  // The dialogue of the live Instagram test, in ONE conversation on the real model: prices of a cleaning, what is included, a filling, a removal,
+  // the same cleaning in Russian, a booking, the address. The price list is synthetic and shaped like the real one (a typo "гігєна", near-identical
+  // rows, many rows with the same generic word). Only drafts are read; nothing is sent, no patient data.
+  it('діалог з живого тесту Instagram в одній розмові', async () => {
+    const now = new Date();
+    const mk = (title: string, category: string, priceUah: number | null, text: string, i: number) => ({ clinicId, kind: 'SERVICE', title, category, priceUah, text, source: 'CLINICCARDS', externalId: `dlg${i}`, externalPrice: priceUah, approvedAt: now, reviewedAt: now });
+    const real: [string, string, number | null, string][] = [
+      ['Професійна гігєна "Air flow" 1 ступеня', 'Профілактика', 1200, '— AirFlow\n— Полірування'],
+      ['Ультразвукова чистка зубів', 'Профілактика', 900, '— Видалення каменю ультразвуком\n— Полірування'],
+      ['Чистка зубів комплексна (ультразвук + Air flow)', 'Профілактика', 1900, '— Ультразвук\n— AirFlow\n— Фторування'],
+      ['Пломба світлова 1 поверхня', 'Терапія', 1100, 'Світлополімерний матеріал'],
+      ['Пломба світлова 2 поверхні', 'Терапія', 1500, 'Світлополімерний матеріал, дві поверхні'],
+      ['Пломбування кореневого каналу', 'Ендодонтія', 1400, ''],
+      ['Лікування карієсу', 'Терапія', 1800, 'Препарування й пломба'],
+      ['Видалення зуба простого', 'Хірургія', 900, ''],
+      ['Видалення зуба складного', 'Хірургія', 2200, ''],
+      ['Консультація лікаря', 'Консультації', null, ''],
+    ];
+    await prisma.kbItem.createMany({
+      data: [
+        ...real.map(([t, c, p, x], i) => mk(t, c, p, x, i)),
+        ...Array.from({ length: 150 }, (_, i) => mk(`Допоміжна позиція ${i} матеріал`, 'Матеріали', 50 + i, '', 100 + i)),
+        ...Array.from({ length: 60 }, (_, i) => mk(`Професійна консультація спеціаліста ${i}`, 'Консультації', 300 + i, '', 400 + i)),
+      ],
+    });
+    await prisma.clinic.update({ where: { id: clinicId }, data: { priceListSyncedAt: now, scheduleMode: 'CABINETS' } });
+    const chatId = 'evdialogue';
+    const lines: string[] = [];
+    const bad: string[] = [];
+    const nums = (t: string) => [...t.replace(/(\d)[\s\u00a0](?=\d{3})/g, '$1').matchAll(/(\d+)\s*грн/g)].map((m) => Number(m[1])).sort((a, b) => a - b);
+    const turn = async (text: string, test: (r: string, d: { handoff: boolean; reason: string | null }) => string | null) => {
+      await prisma.chatMessage.create({ data: { clinicId, channel: 'TELEGRAM', chatId, direction: 'IN', text } });
+      const d = await assistant.draft(clinicId, 'TELEGRAM', chatId);
+      await prisma.chatMessage.create({ data: { clinicId, channel: 'TELEGRAM', chatId, direction: 'OUT', text: d.reply, byAi: true } });
+      lines.push(`«${text}»\n   → ${d.handoff ? `ПЕРЕДАЧА (${d.reason})` : d.intent}: ${d.reply}`);
+      const why = test(d.reply, d);
+      if (why) bad.push(`«${text}»: ${why}`);
+      return d.reply;
+    };
+    const has = (r: string, ...n: number[]) => n.filter((x) => !nums(r).includes(x));
+    const notHanded = (d: { handoff: boolean; reason: string | null }) => (d.handoff ? `передача (${d.reason})` : null);
+    const first = await turn('Добрий день! Скільки коштує чистка зубів?', (r, d) => notHanded(d) ?? (has(r, 900, 1200, 1900).length ? `немає цін ${has(r, 900, 1200, 1900)}` : !/попередн/i.test(r) ? 'немає пояснення' : null));
+    await turn('А що входить у цю вартість?', (r, d) => notHanded(d) ?? (/гі[гє]*[єі]?на[^\n]*Фторування/i.test(r) ? 'склад комплексної чистки перенесено на гігієну' : null));
+    await turn('А скільки коштує поставити пломбу?', (r, d) => notHanded(d) ?? (has(r, 1100).length ? 'немає ціни пломби 1100' : null));
+    await turn('Скільки коштує видалити зуб?', (r, d) => notHanded(d) ?? ((has(r, 900, 2200).length === 0) || r.includes('?') ? null : 'не названо обидва варіанти'));
+    await turn('Сколько стоит чистка зубов?', (r, d) => notHanded(d) ?? (has(r, ...nums(first)).length ? `ціни відрізняються від української відповіді: ${nums(first)} / ${nums(r)}` : !/предварительн/i.test(r) ? 'немає пояснення російською' : /[іїє]/.test(r) ? 'змішано мови' : null));
+    await turn('Хочу записатися на чистку', (r, d) => notHanded(d) ?? (/Передали заявку/i.test(r) ? 'обіцяє заявку, якої немає' : !/(яка саме|какая именно|яку|яка з|оберіть|уточн)/i.test(r) ? 'не уточнено, яка з трьох послуг' : null));
+    await turn('А де ви знаходитесь?', (r) => (/(не можемо|не можем|в цьому чаті|в этом чате)/i.test(r) ? 'вигадана заборона' : !/уточн/i.test(r) ? 'не сказано, що адресу треба уточнити' : null));
+    process.stdout.write('\n' + lines.join('\n') + '\n');
+    await prisma.kbItem.deleteMany({ where: { clinicId } });
+    await prisma.chatMessage.deleteMany({ where: { clinicId, chatId } });
+    await prisma.clinic.update({ where: { id: clinicId }, data: { scheduleMode: 'DOCTORS' } });
+    expect(bad).toEqual([]);
+  });
+
   it('помічник керівника', async () => {
     await prisma.clinic.update({ where: { id: clinicId }, data: { aiAssistantEnabled: true } });
     const D = 86_400_000;

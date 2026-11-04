@@ -41,6 +41,7 @@ interface AiStatus {
   autoBooking: boolean;
   assistant: boolean;
   autoBookingSupported: boolean;
+  autoBookingTest?: { restricted: boolean; dialogs: number };
   used: number;
   tokens: number;
 }
@@ -316,6 +317,7 @@ export default function AutomationsPage() {
                   <span className="muted">{ai.autoBookingSupported ? t('ai.autoBookingHint') : t('ai.autoBookingUnsupported')}</span>
                 </span>
               </label>
+              {ai.autoBookingTest?.restricted && <Alert tone="warn">{ai.autoBookingTest.dialogs > 0 ? t('ai.testOnly', { n: ai.autoBookingTest.dialogs }) : t('ai.testOnlyNone')}</Alert>}
             </div>
           )}
         </Card>

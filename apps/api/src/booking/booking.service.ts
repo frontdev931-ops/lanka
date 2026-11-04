@@ -1,3 +1,5 @@
+import { liveWriteAllowed } from '../integrations/cliniccards.client';
+import { AutoBookingGate, DialogOrigin } from './auto-booking-gate';
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -28,6 +30,8 @@ export interface BookInput {
   // Booking by cabinets through ONE shared account: the doctor_id is sent, but only the CABINET decides whether the place is taken
   // (the shared account is not one physical doctor who cannot be in two cabinets at once)
   sharedAccount?: boolean;
+  // The dialog that asked for an automatic booking (the live-test restriction is checked against it, see AutoBookingGate)
+  origin?: DialogOrigin;
 }
 export interface BookingResult {
   externalVisitId: string | null;
@@ -43,6 +47,7 @@ type Spec = {
   patientId?: string;
   requestId?: string;
   startsAt?: Date;
+  origin?: DialogOrigin;
   // Throws when the write must not happen (the place is taken, the patient is booked twice)
   check?: () => Promise<void>;
   // Looks at the clinic's system: id of the visit/patient if the effect is already there, null if it is not, 'unknown' if we cannot tell
@@ -62,6 +67,7 @@ export class BookingService {
   constructor(
     private prisma: PrismaService,
     private sync: SyncService,
+    private gate: AutoBookingGate,
   ) {}
 
   private key(...parts: (string | number)[]) {
@@ -71,7 +77,9 @@ export class BookingService {
   async status(clinicId: string) {
     const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { bookingWriteEnabled: true } });
     const connector = await this.sync.connectorForClinic(clinicId);
-    return { enabled: c.bookingWriteEnabled && !!connector?.createVisit && process.env.CLINICCARDS_WRITE_ENABLED === 'true' };
+    // all three keys: the clinic's own flag, CLINICCARDS_WRITE_ENABLED, and for the real address CLINICCARDS_WRITE_LIVE (otherwise the client
+    // refuses every write, so the automatic mode must not even start: no card is made, the request goes to the administrator)
+    return { enabled: c.bookingWriteEnabled && !!connector?.createVisit && process.env.CLINICCARDS_WRITE_ENABLED === 'true' && liveWriteAllowed() };
   }
 
   private async connector(clinicId: string): Promise<ClinicConnector> {
@@ -117,6 +125,8 @@ export class BookingService {
   }
 
   private async run(clinicId: string, userId: string | null, s: Spec): Promise<BookingResult> {
+    // the live-test restriction: before anything is claimed or sent (and once more right before the write, below)
+    this.gate.assert(clinicId, userId, s.origin);
     const base = { clinicId, key: s.key, kind: s.kind, patientId: s.patientId ?? null, requestId: s.requestId ?? null, startsAt: s.startsAt ?? null, createdById: userId };
     let attempt = await this.prisma.bookingAttempt.findUnique({ where: { clinicId_key: { clinicId, key: s.key } } });
     if (attempt?.status === 'DONE') return { externalVisitId: attempt.externalVisitId ?? attempt.externalPatientId, duplicate: true, verified: true };
@@ -156,6 +166,8 @@ export class BookingService {
     }
     let externalId: string | undefined;
     try {
+      // right before the write to the clinic's system, retries included: the restriction may have changed since the start of this call
+      this.gate.assert(clinicId, userId, s.origin);
       externalId = await s.act();
     } catch (e) {
       if (e instanceof CliniccardsError && e.ambiguous) {
@@ -174,6 +186,7 @@ export class BookingService {
   }
 
   async book(clinicId: string, userId: string | null, d: BookInput): Promise<BookingResult> {
+    this.gate.assert(clinicId, userId, d.origin);
     const connector = await this.connector(clinicId);
     const doctorId = d.doctorId;
     if (!doctorId) throw new BadRequestException('booking_doctor_needed');
@@ -193,6 +206,7 @@ export class BookingService {
       patientId: patient.id,
       requestId: d.requestId,
       startsAt,
+      origin: d.origin,
       check: () => this.assertFree(connector, { patientExternalId: patient.externalId, startsAt, endsAt, cabinetId: d.cabinetId, doctorId: d.sharedAccount ? undefined : doctorId }),
       reconcile: find,
       act: async () => (await connector.createVisit!({ patientExternalId: patient.externalId, cabinetId: d.cabinetId, doctorId, startsAt, endsAt, note })).externalId,
@@ -307,7 +321,8 @@ export class BookingService {
   }
 
   // A new card without duplicates: an existing card with the same phone is returned instead; the write is guarded like a booking
-  async createPatient(clinicId: string, userId: string | null, d: { lastName: string; firstName: string; phone: string; channel?: string }): Promise<{ patientId: string; existing: boolean }> {
+  async createPatient(clinicId: string, userId: string | null, d: { lastName: string; firstName: string; phone: string; channel?: string; origin?: DialogOrigin }): Promise<{ patientId: string; existing: boolean }> {
+    this.gate.assert(clinicId, userId, d.origin);
     const norm = normalizePhone(d.phone);
     if (!norm) throw new BadRequestException('bad_phone');
     // the surname and the first name are given separately: they are never told apart by the order of words
@@ -328,6 +343,7 @@ export class BookingService {
     await this.run(clinicId, userId, {
       key: this.key(clinicId, 'PATIENT', norm),
       kind: 'PATIENT',
+      origin: d.origin,
       check: async () => {
         // the phone may have appeared in the clinic's system after our last sync
         const ids = await connector.findPatientIdsByPhone?.(norm).catch(() => null);

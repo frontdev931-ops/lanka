@@ -29,6 +29,19 @@ export interface CabinetWindow {
   endMin: number;
   cabinetId: string;
 }
+// Why a booking by cabinets cannot be offered online (fixed codes; the administrator sees the text, the patient never sees a technical word)
+export type BookingBlock = 'service_not_allowed' | 'no_length' | 'service_missing_in_source' | 'no_shared_account' | 'no_cabinet' | 'no_hours' | 'no_free_time' | 'schedule_unreadable';
+export const BLOCK_TEXT: Record<BookingBlock, string> = {
+  service_not_allowed: 'послугу не дозволено для онлайн-запису (налаштування запису: «Дозволені послуги»)',
+  no_length: 'у послуги не вказана тривалість',
+  service_missing_in_source: 'послугу прибрано з прайсу Cliniccards: запис призупинено до рішення адміністратора',
+  no_shared_account: 'не вибрано спільний обліковий запис Cliniccards для запису за кабінетами',
+  no_cabinet: 'немає кабінету, відкритого для онлайн-запису для цієї послуги',
+  no_hours: 'не задано робочі години клініки',
+  no_free_time: 'немає вільного часу в кабінетах для цієї послуги (усе зайнято на найближчі дні)',
+  schedule_unreadable: 'не вдалося прочитати розклад Cliniccards, запис не підтверджено за застарілими даними',
+};
+
 export type CabinetProblem = 'no_shared_account' | 'no_cabinets' | 'no_services' | 'no_hours';
 
 // Booking by CABINETS through one shared account of Cliniccards (an alternative to booking by doctors). The clinic allows a service and a
@@ -93,6 +106,8 @@ export class CabinetBookingService {
         priceDivergence: priceDivergent(s) ? { own: s.priceUah, source: s.externalPrice } : null,
         // vanished from the price list of Cliniccards: new online bookings of it are paused until the administrator decides
         missingInSource: !!s.missingInSourceAt,
+        // The first thing that keeps a booking of this service from being offered online (null: nothing known in the settings; the schedule itself is read at booking time)
+        block: this.staticBlock(s, clinic.sharedDoctorId ? !!shared : false, cabinets, hoursSet && !Object.values(readWorkHours(clinic.workHours)).every((h) => !h)),
       })),
       // the length of a visit is not in the price list of Cliniccards: only the missing ones are asked of the clinic
       missingLength: services.filter((s) => !s.durationMin).length,
@@ -216,6 +231,37 @@ export class CabinetBookingService {
     const rows = await this.prisma.cabinet.findMany({ where: { clinicId, onlineBooking: true, ...(urgent ? { acceptsUrgent: true } : {}) }, select: { externalId: true } });
     const ids = rows.map((r) => r.externalId);
     return service?.cabinetIds.length ? ids.filter((id) => service.cabinetIds.includes(id)) : ids;
+  }
+
+  // The first reason from the settings alone (no schedule read): the service, then the shared account, the cabinets, the hours
+  staticBlock(svc: { onlineBooking: boolean; durationMin: number | null; cabinetIds: string[]; missingInSourceAt: Date | null }, sharedOk: boolean, cabinets: { externalId: string; onlineBooking: boolean }[], hoursOk: boolean): BookingBlock | null {
+    if (svc.missingInSourceAt) return 'service_missing_in_source';
+    if (!svc.onlineBooking) return 'service_not_allowed';
+    if (!svc.durationMin) return 'no_length';
+    if (!sharedOk) return 'no_shared_account';
+    const online = cabinets.filter((c) => c.onlineBooking).map((c) => c.externalId);
+    if (!(svc.cabinetIds.length ? online.filter((id) => svc.cabinetIds.includes(id)) : online).length) return 'no_cabinet';
+    if (!hoursOk) return 'no_hours';
+    return null;
+  }
+
+  // Why the times of a service cannot be offered right now: the settings first, then the schedule read from Cliniccards. null: there are times.
+  async blockReason(clinicId: string, svc: { onlineBooking: boolean; durationMin: number | null; cabinetIds: string[]; missingInSourceAt: Date | null }, urgent = false): Promise<{ code: BookingBlock | null; offers: { date: string; time: string }[] }> {
+    const [clinic, cabinets, doctors] = await Promise.all([
+      this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { sharedDoctorId: true, workHours: true } }),
+      this.prisma.cabinet.findMany({ where: { clinicId }, select: { externalId: true, onlineBooking: true, acceptsUrgent: true } }),
+      this.doctors.activeDoctors(clinicId),
+    ]);
+    const sharedOk = !!clinic.sharedDoctorId && doctors.some((d) => d.externalId === clinic.sharedDoctorId);
+    const hoursOk = !!clinic.workHours && typeof clinic.workHours === 'object' && Object.values(readWorkHours(clinic.workHours)).some((h) => !!h);
+    const early = this.staticBlock(svc, sharedOk, urgent ? cabinets.filter((c) => c.acceptsUrgent) : cabinets, hoursOk);
+    if (early) return { code: early, offers: [] };
+    try {
+      const offers = await this.offers(clinicId, { minutes: svc.durationMin!, service: svc, urgent });
+      return offers.length ? { code: null, offers } : { code: 'no_free_time', offers };
+    } catch {
+      return { code: 'schedule_unreadable', offers: [] };
+    }
   }
 
   // Free windows by cabinet. Hours are the clinic's working hours with their exceptions; unset hours offer nothing.

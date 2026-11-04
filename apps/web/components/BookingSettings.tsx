@@ -25,6 +25,7 @@ interface Svc {
   priceState?: 'UNKNOWN' | 'FREE' | 'SET';
   priceDivergence?: { own: number | null; source: number } | null;
   missingInSource?: boolean;
+  block?: string | null;
 }
 interface Exc {
   date: string;
@@ -182,6 +183,7 @@ function CabinetSettings({ s, busy, call, reload, setError }: { s: Settings; bus
                   {v.fromCliniccards && <> <Badge tone="blue">Cliniccards</Badge></>}
                   {v.changedInSource && <> <Badge tone="amber">{t('cb.changed')}</Badge></>}
                   {v.missingInSource && <> <Badge tone="red">{t('kb.review.missingShort')}</Badge></>}
+                  {v.block && v.block !== 'service_missing_in_source' && <> <Badge tone="amber">{t(`block.${v.block}` as Parameters<typeof t>[0])}</Badge></>}
                   {v.priceState === 'UNKNOWN' && <> <Badge tone="gray">{t('kb.priceUnknown')}</Badge></>}
                   {v.priceState === 'FREE' && <> <Badge tone="green">{t('kb.priceFree')}</Badge></>}
                   {!v.approved && <> <Badge tone="amber">{t('cb.notApproved')}</Badge></>}

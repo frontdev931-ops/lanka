@@ -3,7 +3,7 @@ import { BookingRequest, Doctor, KbItem } from '@prisma/client';
 import { clinicDate } from '../common/clinic-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { AvailabilityService } from './availability.service';
-import { CabinetBookingService } from './cabinet-booking.service';
+import { BLOCK_TEXT, BookingBlock, CabinetBookingService } from './cabinet-booking.service';
 import { DoctorsService } from './doctors.service';
 
 export type Lang = 'uk' | 'ru';
@@ -27,12 +27,14 @@ export interface RequestPatch {
   // Booking by cabinets: how the times were offered, and the real doctor the patient wished (only a wish, never booked through the shared account)
   scheduleMode?: 'DOCTORS' | 'CABINETS' | null;
   wishedDoctor?: string | null;
+  // Why a booking by cabinets went to the administrator (see BookingBlock)
+  blockCode?: string | null;
 }
 export type Decision =
   | { kind: 'NONE' }
   | { kind: 'ASK'; reply: string; buttons: ChoiceButton[]; patch: RequestPatch }
   | { kind: 'OFFER'; reply: string; options: ChoiceButton[]; patch: RequestPatch }
-  | { kind: 'HANDOFF'; reply: string; patch: RequestPatch; note: string };
+  | { kind: 'HANDOFF'; reply: string; patch: RequestPatch; note: string; code?: BookingBlock };
 
 export interface ChoiceContext {
   clinicId: string;
@@ -87,6 +89,7 @@ const T = {
     no: 'Ні',
     handedKeep: (n: string) => `Гаразд, лікаря не змінюємо. Передали заявку адміністратору: він підбере час у лікаря ${n} і напише вам.`,
     handed: 'Передали заявку адміністратору. Він підбере лікаря й час та напише вам. Запис ще не підтверджено.',
+    handedService: 'Цю послугу записує адміністратор. Передали заявку: він підбере час та напише вам. Запис ще не підтверджено. Якщо хочете іншу послугу, напишіть, яку саме.',
     handedDoctor: (n: string) => `Передали заявку адміністратору з побажанням: лікар ${n}. Він підбере час та напише вам. Запис ще не підтверджено.`,
     askWho: 'Гаразд. Напишіть, будь ласка, до якого лікаря ви хочете, або що вам усе одно.',
     other: 'Інший',
@@ -111,6 +114,7 @@ const T = {
     no: 'Нет',
     handedKeep: (n: string) => `Хорошо, врача не меняем. Передали заявку администратору: он подберёт время у врача ${n} и напишет вам.`,
     handed: 'Передали заявку администратору. Он подберёт врача и время и напишет вам. Запись ещё не подтверждена.',
+    handedService: 'Эту услугу записывает администратор. Передали заявку: он подберёт время и напишет вам. Запись ещё не подтверждена. Если хотите другую услугу, напишите, какую именно.',
     handedDoctor: (n: string) => `Передали заявку администратору с пожеланием: врач ${n}. Он подберёт время и напишет вам. Запись ещё не подтверждена.`,
     askWho: 'Хорошо. Напишите, пожалуйста, к какому врачу вы хотите, или что вам всё равно.',
     other: 'Другой',
@@ -158,7 +162,26 @@ export class DoctorChoiceService {
     // booked online (allowed, with a length) goes first, then one with a length
     const rank = (x: KbItem) => (x.onlineBooking && x.durationMin ? 0 : x.durationMin ? 1 : 2);
     const best = (list: KbItem[]) => [...list].sort((a, b) => rank(a) - rank(b))[0] ?? null;
-    return best(rows.filter((x) => norm(x.title) === s)) ?? best(rows.filter((x) => norm(x.title).includes(s) || s.includes(norm(x.title))));
+    const exact = best(rows.filter((x) => norm(x.title) === s));
+    if (exact) return exact;
+    // no exact title: a position is taken only when it is the ONLY one the words fit; with several (a generic word like "чистка") nothing is
+    // chosen here, so one allowed position never silently stands in for its siblings
+    const part = rows.filter((x) => norm(x.title).includes(s) || s.includes(norm(x.title)));
+    return new Set(part.map((x) => `${norm(x.title)}|${x.category ?? ''}`)).size > 1 ? null : best(part);
+  }
+
+  // Which service the words point to. One exact title wins; with no exact title and several different positions that contain the words
+  // ("чистка" can be three hygiene services) the answer is "ambiguous": the patient is asked, nothing is chosen for them.
+  async serviceMatch(clinicId: string, service: string | null): Promise<{ service: KbItem | null; ambiguous: KbItem[] }> {
+    if (!service) return { service: null, ambiguous: [] };
+    const rows = await this.prisma.kbItem.findMany({ where: { clinicId, kind: 'SERVICE', active: true, approvedAt: { not: null }, missingInSourceAt: null }, orderBy: { title: 'asc' } });
+    const s = norm(service);
+    if (!rows.some((x) => norm(x.title) === s)) {
+      const part = rows.filter((x) => norm(x.title).includes(s) || s.includes(norm(x.title)));
+      const distinct = new Map(part.map((x) => [`${norm(x.title)}|${x.category ?? ''}`, x]));
+      if (distinct.size > 1) return { service: null, ambiguous: [...distinct.values()].slice(0, 6) };
+    }
+    return { service: await this.findService(clinicId, service), ambiguous: [] };
   }
 
   private label(date: string, time: string, lang: Lang, d?: Doctor) {
@@ -323,7 +346,7 @@ export class DoctorChoiceService {
     const x0 = T[c.lang];
     // booking by cabinets: "any doctor" goes on with the ordinary booking by cabinets, "a wish" is passed to an administrator
     if (kind === 'any') return this.cabinetOffer(c, { doctorState: 'ANY_DOCTOR' });
-    if (kind === 'wish') return this.cabinetHandoff(c, { doctorState: 'WISH_ADMIN' }, 'клієнт хоче конкретного лікаря: потрібно уточнити, чи він приймає', x0.wishHanded(c.request?.wishedDoctor ?? ''));
+    if (kind === 'wish') return this.cabinetHandoff(c, { doctorState: 'WISH_ADMIN' }, 'wish_admin', x0.wishHanded(c.request?.wishedDoctor ?? ''));
     const docs = await this.known(c.clinicId);
     const req = c.request;
     const x = T[c.lang];
@@ -380,32 +403,32 @@ export class DoctorChoiceService {
     return null;
   }
 
-  // The reply of a hand-over in this mode: no time and no doctor are promised
-  private cabinetHandoff(c: { lang: Lang }, patch: RequestPatch, note: string, text?: string): Decision {
-    return { kind: 'HANDOFF', reply: text ?? T[c.lang].handed, patch: { scheduleMode: 'CABINETS', ...patch }, note };
+  // The reply of a hand-over in this mode: no time and no doctor are promised. `why` is a BookingBlock code (the administrator sees its text next
+  // to the request) or a short fixed note; the patient never gets a technical word.
+  private cabinetHandoff(c: { lang: Lang }, patch: RequestPatch, why: BookingBlock | 'wish_admin', text?: string): Decision {
+    const note = why === 'wish_admin' ? 'клієнт хоче конкретного лікаря: потрібно уточнити, чи він приймає' : BLOCK_TEXT[why];
+    return { kind: 'HANDOFF', reply: text ?? T[c.lang].handed, patch: { scheduleMode: 'CABINETS', ...(why === 'wish_admin' ? {} : { blockCode: why }), ...patch }, note, ...(why === 'wish_admin' ? {} : { code: why }) };
   }
 
   // The nearest times of the cabinets for the service; a schedule that cannot be read is never replaced by an old one
   private async cabinetOffer(c: ChoiceContext, patch: RequestPatch): Promise<Decision> {
     const x = T[c.lang];
     const svc = c.service;
-    try {
-      const offers = await this.cabinets.offers(c.clinicId, { minutes: svc.durationMin ?? 30, service: svc });
-      if (!offers.length) return this.cabinetHandoff(c, patch, 'немає вільного часу в кабінетах для цієї послуги');
-      return { kind: 'OFFER', reply: x.offerCabinets, options: offers.map((o) => ({ label: this.label(o.date, o.time, c.lang), date: o.date, time: o.time })), patch: { scheduleMode: 'CABINETS', ...patch } };
-    } catch {
-      return this.cabinetHandoff(c, patch, 'не вдалося оновити розклад Cliniccards', x.handedNoSchedule);
-    }
+    // the reason is found step by step (settings, then the schedule read from Cliniccards now): the administrator sees exactly which one
+    const r = await this.cabinets.blockReason(c.clinicId, svc);
+    if (r.code) return this.cabinetHandoff(c, patch, r.code, r.code === 'schedule_unreadable' ? x.handedNoSchedule : r.code === 'service_not_allowed' || r.code === 'no_length' ? x.handedService : undefined);
+    return { kind: 'OFFER', reply: x.offerCabinets, options: r.offers.map((o) => ({ label: this.label(o.date, o.time, c.lang), date: o.date, time: o.time })), patch: { scheduleMode: 'CABINETS', ...patch } };
   }
 
   private async decideCabinets(c: ChoiceContext, sharedId: string | null): Promise<Decision> {
     const x = T[c.lang];
     const req = c.request;
-    // the service must be allowed for booking by cabinets and have a known length; the shared account must be one that Cliniccards lists
-    if (!c.service.onlineBooking || !c.service.durationMin) return this.cabinetHandoff(c, {}, 'послугу не дозволено для запису за кабінетами');
+    // The service itself first (never replaced by another one: a different service is offered only if the patient agrees), then the shared account
+    if (!c.service.onlineBooking) return this.cabinetHandoff(c, {}, 'service_not_allowed', x.handedService);
+    if (!c.service.durationMin) return this.cabinetHandoff(c, {}, 'no_length', x.handedService);
     const shared = sharedId ? (await this.doctors.activeDoctors(c.clinicId)).find((d) => d.externalId === sharedId) : null;
-    if (!shared) return this.cabinetHandoff(c, {}, 'не вибрано спільний обліковий запис Cliniccards для запису за кабінетами');
-    if (req?.doctorState === 'WISH_ADMIN') return this.cabinetHandoff(c, {}, 'побажання лікаря передано адміністратору', x.wishHanded(req.wishedDoctor ?? ''));
+    if (!shared) return this.cabinetHandoff(c, {}, 'no_shared_account');
+    if (req?.doctorState === 'WISH_ADMIN') return this.cabinetHandoff(c, {}, 'wish_admin', x.wishHanded(req.wishedDoctor ?? ''));
     if (req?.doctorState !== 'ANY_DOCTOR') {
       // a real doctor was named: there is no separate schedule of his, so he is only a wish, and the person decides what to do with it
       const wish = await this.wishedDoctor(c.clinicId, c.texts);

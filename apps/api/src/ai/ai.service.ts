@@ -1,3 +1,4 @@
+import { autoBookingTestStatus } from '../booking/auto-booking-gate';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { hasFeature, periodStart } from '../service/plans';
@@ -30,6 +31,8 @@ export class AiService {
       assistant: c.aiAssistantEnabled,
       sendingEnabled: c.sendingEnabled,
       autoBookingSupported: bookingWriteSupported(),
+      // The temporary server restriction of automatic booking to chosen dialogs (AUTOBOOKING_TEST_ONLY / AUTOBOOKING_TEST_DIALOGS)
+      autoBookingTest: autoBookingTestStatus(),
       used,
       purchased: c.aiPurchased,
       tokens: (tokens._sum.inputTokens ?? 0) + (tokens._sum.outputTokens ?? 0),

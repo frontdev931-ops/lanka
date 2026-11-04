@@ -66,7 +66,7 @@ const noon = () => localToUtc(`${clinicDate(new Date())} 12:00:00`);
 // make queued messages due and send them in the daytime of the clinic
 async function deliver(clinicId: string) {
   await prisma.outboundMessage.updateMany({ where: { clinicId, ruleKey: { startsWith: 'auto' }, status: 'APPROVED' }, data: { scheduledFor: new Date(Date.now() - 86_400_000) } });
-  return outbox.process(noon());
+  return outbox.process(noon(), { clinicId });
 }
 
 describe('конструктор автоматизацій: визначення', () => {

@@ -4,7 +4,8 @@ import { bookingWriteSupported } from '../ai/ai.service';
 import { ChatAssistantService, SlotOption } from '../ai/chat-assistant.service';
 import { languageOf } from '../ai/guardrails';
 import { AvailabilityService } from '../booking/availability.service';
-import { CabinetBookingService } from '../booking/cabinet-booking.service';
+import { AutoBookingGate } from '../booking/auto-booking-gate';
+import { BLOCK_TEXT, BookingBlock, CabinetBookingService } from '../booking/cabinet-booking.service';
 import { BookingService } from '../booking/booking.service';
 import { DoctorChoiceService, isNo, isYes, serves } from '../booking/doctor-choice.service';
 import { clinicDate, clinicHm, localToUtc } from '../common/clinic-time';
@@ -159,6 +160,7 @@ export class BookingFlowService {
     private choice: DoctorChoiceService,
     private availability: AvailabilityService,
     private cabinets: CabinetBookingService,
+    private gate: AutoBookingGate,
   ) {}
 
   private async lang(c: FlowCtx): Promise<Lang> {
@@ -380,7 +382,7 @@ export class BookingFlowService {
     let note: string | undefined;
     // The automatic mode asks the person to confirm first, and only when everything needed for the booking is known: the length of the
     // visit (never guessed), a free place and a doctor (Cliniccards requires one). Otherwise a person completes the request.
-    if (!incomplete && pre.slotAt && (await this.autoMode(c.clinicId))) {
+    if (!incomplete && pre.slotAt && (await this.autoMode(c.clinicId, c))) {
       // A card with this phone exists and the chat is not tied to it: a phone alone proves nothing, so a person checks (no question to the client first)
       const cards = !pre.patientId && pre.phone ? await this.booking.matches(c.clinicId, pre.phone) : [];
       const duration = cards.length ? null : await this.durationFor(c.clinicId, pre.service);
@@ -468,7 +470,7 @@ export class BookingFlowService {
     }
     const r = await this.finalize(c, open.id);
     if (!r) return true;
-    if (r.slotAt && (await this.autoMode(c.clinicId))) await this.runAuto(c, open.id);
+    if (r.slotAt && (await this.autoMode(c.clinicId, c))) await this.runAuto(c, open.id);
     else await this.tellHandedOver(c, r.service, r.slotAt);
     return true;
   }
@@ -481,15 +483,17 @@ export class BookingFlowService {
   // ---- 4. the automatic mode ----
 
   // The mode is on only where the clinic asked for it AND writing is allowed at all (service-wide switch and the clinic's own switch)
-  private async autoMode(clinicId: string): Promise<boolean> {
+  private async autoMode(clinicId: string, chat: { channel: string; chatId: string }): Promise<boolean> {
     const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiAutoBooking: true } });
     if (!c.aiAutoBooking || !bookingWriteSupported()) return false;
+    // the live-test restriction: a dialog that is not allowed stays in the mode of a request for the administrator
+    if (!this.gate.allowed(clinicId, chat)) return false;
     return (await this.booking.status(clinicId)).enabled;
   }
 
-  private async handToAdmin(c: FlowCtx, id: string, note: string) {
+  private async handToAdmin(c: FlowCtx, id: string, note: string, code?: BookingBlock) {
     const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id }, select: { service: true, slotAt: true, summary: true } });
-    await this.prisma.bookingRequest.update({ where: { id }, data: { autoState: 'FAILED', autoNote: note.slice(0, 300), summary: `${r.summary}; автозапис не виконано: ${note}`.slice(0, 500) } });
+    await this.prisma.bookingRequest.update({ where: { id }, data: { autoState: 'FAILED', autoNote: note.slice(0, 300), ...(code ? { blockCode: code } : {}), summary: `${r.summary}; автозапис не виконано: ${note}`.slice(0, 500) } });
     await this.requests.notify(c.clinicId, id, false);
     // never "you are booked": the person is told that the administrator confirms
     await this.tellHandedOver(c, r.service, r.slotAt);
@@ -501,26 +505,28 @@ export class BookingFlowService {
     const r = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id } });
     const slotAt = r.slotAt!;
     try {
+      // First everything that is only READ: the service is still allowed and has a length, the place is free by data read right now. Only then
+      // the first write (the patient's card), so a refusal never leaves a card behind.
+      const durationMin = await this.durationFor(c.clinicId, r.service);
+      if (durationMin === null) return await this.handToAdmin(c, id, 'тривалість послуги невідома');
+      const place = await this.placement(c, r, durationMin);
+      if (!place.ok) return place.busy ? await this.busy(c, id, 'вікно вже не вільне') : await this.handToAdmin(c, id, place.note ?? 'лікаря не визначено', place.code);
       let patientId = r.patientId;
       if (!patientId) {
         const found = r.phone ? await this.booking.matches(c.clinicId, r.phone) : [];
         // A card with this phone exists: a phone alone does not prove who writes, a person checks it
         if (found.length) return await this.handToAdmin(c, id, 'є картка з таким телефоном, потрібно підтвердити особу');
         if (!r.lastName || !r.firstName || !r.phone) return await this.handToAdmin(c, id, 'немає прізвища, імені або телефону');
-        const created = await this.booking.createPatient(c.clinicId, null, { lastName: r.lastName, firstName: r.firstName, phone: r.phone, channel: c.channel });
+        const created = await this.booking.createPatient(c.clinicId, null, { lastName: r.lastName, firstName: r.firstName, phone: r.phone, channel: c.channel, origin: { channel: c.channel, chatId: c.chatId } });
         if (created.existing) return await this.handToAdmin(c, id, 'картка пацієнта вже існує, потрібно підтвердити особу');
         patientId = created.patientId;
         // the card is ours (just created for this chat): the chat can be tied to it
         await this.booking.linkChat(c.clinicId, patientId, c.channel, c.chatId);
         await this.prisma.bookingRequest.update({ where: { id }, data: { patientId } });
       }
-      const durationMin = await this.durationFor(c.clinicId, r.service);
-      if (durationMin === null) return await this.handToAdmin(c, id, 'тривалість послуги невідома');
-      const place = await this.placement(c, r, durationMin);
-      if (!place.ok) return place.busy ? await this.busy(c, id, 'вікно вже не вільне') : await this.handToAdmin(c, id, place.note ?? 'лікаря не визначено');
       // the note of the visit: useful context, and never a claim that the shared account is a real doctor
       const note = place.shared ? `Запис створено ботом LANKA. Лікаря призначає клініка${r.wishedDoctor ? `. Побажання пацієнта: ${r.wishedDoctor}` : ''}`.slice(0, 400) : 'Запис створено ботом LANKA';
-      const doBook = () => this.booking.book(c.clinicId, null, { patientId: patientId!, startsAt: slotAt, durationMin, cabinetId: place.cabinetId, doctorId: place.doctorId, note, requestId: id, sharedAccount: place.shared });
+      const doBook = () => this.booking.book(c.clinicId, null, { patientId: patientId!, startsAt: slotAt, durationMin, cabinetId: place.cabinetId, doctorId: place.doctorId, note, requestId: id, sharedAccount: place.shared, origin: { channel: c.channel, chatId: c.chatId } });
       let res;
       try {
         res = await doBook();
@@ -532,6 +538,7 @@ export class BookingFlowService {
       await this.finishAuto(c, id, r, slotAt, place.doctorName, res.externalVisitId, place.shared ? { cabinetId: place.cabinetId, sharedDoctorId: place.doctorId } : undefined);
     } catch (e) {
       const code = e instanceof Error ? e.message : 'failed';
+      if (code === 'auto_booking_not_allowed_for_dialog') return await this.handToAdmin(c, id, 'автозапис дозволено лише для тестового діалогу');
       if (code === 'booking_slot_taken' || code === 'booking_slot_blocked') return await this.busy(c, id, code);
       this.log.warn(`Automatic booking not done for request ${id}: ${code}`);
       await this.handToAdmin(c, id, code === 'booking_unknown' ? 'не вдалося перевірити, чи створено запис' : code === 'booking_patient_busy' ? 'у пацієнта вже є запис на цей час' : 'запис у Cliniccards не створено');
@@ -587,24 +594,26 @@ export class BookingFlowService {
   // Where and with whom the visit can be made. A request with a doctor of the clinic is checked against THAT doctor: he must provide the service
   // (or have treated the person with it before), have a real schedule (shifts in Cliniccards or the schedule kept in LANKA) and be free for
   // the whole visit, with a free cabinet. Without a doctor on the request the schedule report is used as before.
-  private async placement(c: FlowCtx, r: BookingRequest, minutes: number): Promise<{ ok: true; cabinetId: string; doctorId: string; doctorName: string | null; shared?: boolean } | { ok: false; busy: boolean; note?: string }> {
+  private async placement(c: FlowCtx, r: BookingRequest, minutes: number): Promise<{ ok: true; cabinetId: string; doctorId: string; doctorName: string | null; shared?: boolean } | { ok: false; busy: boolean; note?: string; code?: BookingBlock }> {
     // Booking by cabinets: the service must be allowed, the shared account must be one Cliniccards lists, and a cabinet must be free for the
     // whole visit by the schedule read from Cliniccards right now (an unreadable schedule confirms nothing)
     const cm = await this.clinicMode(c.clinicId);
     // a position that vanished from the price list of Cliniccards: no new booking until an administrator decides (history and requests stay)
     const known = await this.choice.findService(c.clinicId, r.service);
-    if (known?.missingInSourceAt) return { ok: false, busy: false, note: 'послугу прибрано з прайсу Cliniccards: запис призупинено до рішення адміністратора' };
+    if (known?.missingInSourceAt) return { ok: false, busy: false, note: BLOCK_TEXT.service_missing_in_source, code: 'service_missing_in_source' };
     if (cm.scheduleMode === 'CABINETS') {
       const svc = known;
-      if (!svc?.onlineBooking || !svc.durationMin) return { ok: false, busy: false, note: 'послугу не дозволено для запису за кабінетами' };
+      if (!svc) return { ok: false, busy: false, note: 'послугу не визначено однозначно: під назву підходить кілька позицій або жодної' };
+      if (!svc.onlineBooking) return { ok: false, busy: false, note: BLOCK_TEXT.service_not_allowed, code: 'service_not_allowed' };
+      if (!svc.durationMin) return { ok: false, busy: false, note: BLOCK_TEXT.no_length, code: 'no_length' };
       const shared = cm.sharedDoctorId ? await this.prisma.doctor.findUnique({ where: { clinicId_externalId: { clinicId: c.clinicId, externalId: cm.sharedDoctorId } } }) : null;
-      if (!shared || !shared.active) return { ok: false, busy: false, note: 'не вибрано спільний обліковий запис Cliniccards для запису за кабінетами' };
+      if (!shared || !shared.active) return { ok: false, busy: false, note: BLOCK_TEXT.no_shared_account, code: 'no_shared_account' };
       try {
         const p = await this.cabinets.placeFor(c.clinicId, r.slotAt!, svc.durationMin, svc);
         if (!p) return { ok: false, busy: true };
         return { ok: true, cabinetId: p.cabinetId, doctorId: shared.externalId, doctorName: null, shared: true };
       } catch {
-        return { ok: false, busy: false, note: 'не вдалося оновити розклад Cliniccards, запис не підтверджено за застарілими даними' };
+        return { ok: false, busy: false, note: BLOCK_TEXT.schedule_unreadable, code: 'schedule_unreadable' };
       }
     }
     if (r.doctorId) {

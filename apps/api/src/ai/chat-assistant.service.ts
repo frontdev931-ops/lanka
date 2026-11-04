@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { BookingRequest } from '@prisma/client';
 import { ReportsService } from '../reports/reports.service';
 import { clinicDate, clinicHm } from '../common/clinic-time';
@@ -9,7 +9,7 @@ import { AiService } from './ai.service';
 import { contactReply, formatHours } from './contacts';
 import { ChoiceButton, Decision, DoctorChoiceService, RequestPatch } from '../booking/doctor-choice.service';
 import { DENTAL_GLOSSARY, URGENT_TEXT, expandForSearch } from './dental';
-import { HandoffReason, handoffText, incomingHandoff, isUrgentSymptom, languageOf, parseModelJson, replyViolates, timesOutsideWindows, withPriceNotice } from './guardrails';
+import { HandoffReason, handoffText, incomingHandoff, isUrgentSymptom, languageOf, parseModelJson, replyProblem, timesOutsideWindows, withPriceNotice } from './guardrails';
 
 const HISTORY = 8;
 
@@ -42,6 +42,9 @@ ${kb.text ? `ДОВІДКА КЛІНІКИ (дані цієї клініки; т
 - Якщо в рядку послуги «ціна: не називати» (невідома, позиції вже немає в прайсі, дані суперечливі), не називай жодної суми, не підставляй стару ціну чи нуль, а скажи, що вартість цієї послуги потрібно уточнити в адміністратора клініки. Не пиши, що передав запит чи що адміністратор зв’яжеться: це не відбулося.
 - Не складай вартість лікування з окремих позицій і не рахуй підсумків: склад послуги підтверджує лише адміністратор.
 - Повідомлення про попередню ціну не завершує розмову: далі допомагай із записом.
+- Склад і опис послуги бери ЛИШЕ з рядка саме цієї послуги («склад і опис саме цієї послуги»). Не переноси склад однієї послуги на іншу: якщо в рядку послуги складу немає, скажи, що склад уточнить адміністратор.
+- Ніколи не пиши, що щось «не можна назвати в цьому чаті» чи що тобі це заборонено: такої заборони немає. Якщо даних у довідці немає, скажи просто, що це потрібно уточнити в адміністратора клініки.
+- Запис: якщо під слова пацієнта підходить кілька різних послуг, не вибирай сам: уточни, яка саме потрібна (intent "info", поле service порожнє). Поле service заповнюй, лише коли послуга однозначна, і пиши її назву точно як у довідці.
 - Послуги, якої немає в довідці, ти не знаєш: скажи, що це уточнить адміністратор. Те, чого немає в довідці (адреса, телефон, лікарі), ти не знаєш.` : 'Адреси, телефону, цін і складу лікарів ти не знаєш.'}
 
 ${DENTAL_GLOSSARY}
@@ -112,6 +115,8 @@ const handoff = (reason: HandoffReason, lang: 'ru' | 'uk'): Draft => ({ intent: 
 
 @Injectable()
 export class ChatAssistantService {
+  private readonly log = new Logger(ChatAssistantService.name);
+
   constructor(
     private prisma: PrismaService,
     private ai: AiService,
@@ -141,11 +146,16 @@ export class ChatAssistantService {
     if (today > cap) return handoff('long', lang);
     // A dangerous topic is looked for only in the last message: earlier ones already got their reply or a hand-over to a person
     const patientWords = msgs.filter((m) => m.direction === 'IN').slice(-3).map((m) => m.text).join(' ');
-    const kbFacts = await this.kb.factsFor(clinicId, new Date(), `${patientWords} ${expandForSearch(patientWords)}`);
+    const kbFacts = await this.kb.factsFor(clinicId, new Date(), `${patientWords} ${expandForSearch(patientWords)}`, `${last.text} ${expandForSearch(last.text)}`);
+    // The diagnostic trail of one answer: codes and ids only (no names, phones or texts), so a failure can be found in the server log
+    this.log.log(`AI chat facts: services ${kbFacts.shownIds.length}/${kbFacts.serviceCount} in the prompt [${kbFacts.shownIds.slice(0, 8).join(',')}], priced ${kbFacts.priced.length} (clinic ${clinicId})`);
     // A sudden problem (acute pain, a swelling, bleeding, a broken tooth): no model, no advice; the nearest time and an urgent mark for the staff
     if (isUrgentSymptom(last.text, kbFacts.pricesKnown)) return this.urgent(clinicId, lang, { patientId: linkedPatientId, request: openRequest, texts: patientTexts });
     const topic = incomingHandoff(last.text, kbFacts.pricesKnown);
-    if (topic) return handoff(topic, lang);
+    if (topic) {
+      this.log.log(`AI chat route: handoff by the classifier: ${topic} (clinic ${clinicId})`);
+      return handoff(topic, lang);
+    }
 
     // For the model: alternating turns, starting with the patient. The patient's name and phone are never passed out.
     const turns: { role: 'user' | 'assistant'; content: string }[] = [];
@@ -163,7 +173,7 @@ export class ChatAssistantService {
 
     // Address, phone, working hours: answered by the code from what the clinic entered (no model, no hand-over)
     const hoursIn = (l: 'ru' | 'uk') => (configured ? formatHours(readWorkHours(clinic.workHours), l) : null);
-    const direct = contactReply(last.text, lang, { address: clinic.publicAddress, phone: clinic.publicPhone, directions: clinic.publicDirections, hours: hoursIn(lang) });
+    const direct = contactReply(last.text, lang, { address: clinic.publicAddress, phone: clinic.publicPhone, directions: clinic.publicDirections, hours: hoursIn(lang), inKnowledgeBase: !!kbFacts.text?.includes('АДРЕСИ ТА КОНТАКТИ') });
     if (direct) return { intent: 'info', reply: direct, handoff: false, reason: null, summary: null, service: null, options: [] };
     const contactsLine = [clinic.publicAddress && `адреса: ${clinic.publicAddress}`, clinic.publicDirections && `як дістатися: ${clinic.publicDirections}`, clinic.publicPhone && `телефон адміністратора: ${clinic.publicPhone}`].filter(Boolean).join('; ') || null;
     // times of the working hours may be named in an answer even when they are not free times
@@ -181,17 +191,48 @@ export class ChatAssistantService {
       const r = await this.ai.complete(clinicId, 'chat_draft', SYSTEM(clinic.name, hours, slotText, todayText(), facts, kbFacts, contactsLine) + reminder, turns, 1500, 'chat', billable);
       const parsed = parseModelJson(r.text);
       if (!parsed) return 'model';
-      if (parsed.intent === 'handoff') return handoff('model', lang);
+      if (parsed.intent === 'handoff') {
+        this.log.log(`AI chat route: the model asked for a hand-over (clinic ${clinicId})`);
+        return handoff('model', lang);
+      }
       // Which doctor: the patient's wish, the continuation of treatment, the doctor for a first booking (see DoctorChoiceService). The reply
       // and the buttons are then written by the code, and the doctor is settled before any time is shown.
       if (parsed.intent === 'booking') {
-        const svc = await this.choice.findService(clinicId, parsed.service ?? openRequest?.service ?? null);
+        // The service of the booking: an exact title, else what the patient's words point to; several different positions mean a question to the
+        // patient (never a silent pick), and the model's own text is replaced by it
+        const wanted = parsed.service ?? openRequest?.service ?? null;
+        const sm = await this.choice.serviceMatch(clinicId, wanted);
+        let svc = sm.service;
+        let several = sm.ambiguous;
+        if (!svc && !several.length) {
+          const hits = await this.kb.matchServices(clinicId, `${patientWords} ${expandForSearch(patientWords)}`, `${wanted ?? ''} ${last.text} ${expandForSearch(last.text)}`);
+          if (hits.length) {
+            // a sibling counts as a candidate even when the glossary boosts another service ("чистка" boosts the hygiene rows): nothing is chosen silently
+            const close = hits.filter((h, i) => i === 0 || h.score >= hits[0].score * 0.35);
+            if (close.length === 1) svc = close[0].r;
+            else several = close.map((h) => h.r).slice(0, 5);
+          }
+        }
+        if (several.length) {
+          this.log.log(`AI chat route: booking, ${several.length} services fit [${several.map((x) => x.id).join(',')}], the patient is asked (clinic ${clinicId})`);
+          const list = several.map((x) => `- ${x.title}${x.category ? ` (${x.category})` : ''}`).join('\n');
+          const ask = lang === 'ru' ? `Уточните, пожалуйста, какая именно услуга вам нужна:\n${list}\n\nНапишите название, и мы подберём время.` : `Уточніть, будь ласка, яка саме послуга вам потрібна:\n${list}\n\nНапишіть назву, і ми підберемо час.`;
+          return { intent: 'info', reply: ask, handoff: false, reason: null, summary: null, service: null, options: [] };
+        }
         if (svc) {
           const dec = await this.choice.decide({ clinicId, patientId: linkedPatientId, service: svc, texts: patientTexts, lang, request: openRequest });
+          // the reason of every hand-over of a booking is in the log (a fixed text of the system, the id of the service)
+          this.log.log(`AI chat route: booking, service ${svc.id}, decision ${dec.kind}${dec.kind === 'HANDOFF' ? `, reason: ${dec.note}` : ''} (clinic ${clinicId})`);
           if (dec.kind !== 'NONE') return draftFromDecision(dec, parsed.summary, svc.title);
+        } else {
+          this.log.log(`AI chat route: booking, no service found for the words, no decision (clinic ${clinicId})`);
         }
       }
-      if (replyViolates(parsed.reply, kbFacts.allowedAmounts, { priced: kbFacts.priced, service: parsed.service }) || timesOutsideWindows(parsed.reply, [...windows, ...hourPoints])) return 'reply_check';
+      const problem = replyProblem(parsed.reply, kbFacts.allowedAmounts, { priced: kbFacts.priced, service: parsed.service });
+      if (problem || timesOutsideWindows(parsed.reply, [...windows, ...hourPoints])) {
+        this.log.log(`AI chat reply rejected: ${problem ?? 'time_outside_windows'} (clinic ${clinicId})`);
+        return 'reply_check';
+      }
       // Time buttons: every option must lie inside a calculated window (with room for a 30-minute visit), otherwise the reply is not sent
       const options: SlotOption[] = [];
       // the model may repeat a time: each time is offered once

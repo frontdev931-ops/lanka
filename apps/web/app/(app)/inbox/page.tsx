@@ -27,6 +27,7 @@ interface Thread {
   optedOut: boolean;
   replyWindowOpen: boolean;
   botPausedUntil: string | null;
+  dialogKey?: string;
   messages: { id: string; direction: 'IN' | 'OUT'; text: string; createdAt: string; error: string | null; system: boolean; byAi: boolean }[];
 }
 interface Draft {
@@ -57,6 +58,7 @@ interface Req {
   noticeStatus: 'PENDING' | 'SENT' | 'FAILED' | 'SKIPPED' | null;
   noticeError: string | null;
   noticeAt: string | null;
+  blockCode?: string | null;
 }
 interface PatientRow {
   id: string;
@@ -69,6 +71,7 @@ export default function InboxPage() {
   const [list, setList] = useState<Conv[] | null>(null);
   const [open, setOpen] = useState<{ channel: string; chatId: string } | null>(null);
   const [thread, setThread] = useState<Thread | null>(null);
+  const [copied, setCopied] = useState(false);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -247,6 +250,7 @@ export default function InboxPage() {
                   {(r.patient?.phone ?? r.phone) && <span className="muted">{r.patient?.phone ?? r.phone}</span>}
                 </span>
                 <span>{r.summary}</span>
+                {r.blockCode && <span className="muted">{t('inbox.blockReason', { reason: t(`block.${r.blockCode}` as Parameters<typeof t>[0]) })}</span>}
                 {r.confirmedAt && (
                   <span className="muted">
                     {r.confirmedBy === 'AUTO' ? t('confirm.byAuto') : t('confirm.byAdmin')}
@@ -351,6 +355,13 @@ export default function InboxPage() {
                     </button>
                   ))}
                 </div>
+              )}
+              {thread.dialogKey && (
+                <details className="dialog-id">
+                  <summary className="muted">{t('inbox.dialogId')}</summary>
+                  <code className="dialog-key">{thread.dialogKey}</code>
+                  <button className="btn btn-sm" type="button" onClick={() => { navigator.clipboard?.writeText(thread.dialogKey!).then(() => setCopied(true)).catch(() => undefined); }}>{copied ? t('inbox.dialogCopied') : t('inbox.dialogCopy')}</button>
+                </details>
               )}
               {thread.optedOut && <Alert tone="warn">{t('inbox.optedOut')}</Alert>}
               {!thread.replyWindowOpen && <Alert tone="warn">{t('inbox.windowClosed')}</Alert>}

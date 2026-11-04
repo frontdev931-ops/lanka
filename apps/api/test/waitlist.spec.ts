@@ -78,7 +78,7 @@ const press = (clinicId: string, chat: string, data: string) => telegram.handleU
 // the queue only sends in the daytime of the clinic: take today at noon and make the message due
 async function deliver(clinicId: string) {
   await prisma.outboundMessage.updateMany({ where: { clinicId, ruleKey: 'waitlist-offer', status: 'APPROVED' }, data: { scheduledFor: new Date(Date.now() - 86_400_000) } });
-  return outbox.process(localToUtc(`${clinicDate(new Date())} 12:00:00`));
+  return outbox.process(localToUtc(`${clinicDate(new Date())} 12:00:00`), { clinicId });
 }
 void cb;
 

@@ -102,7 +102,8 @@ describe('автовідповідь ШІ після сценарію запис
 
     sent.length = 0;
     await write(c, 'Дякую! А скажіть, де ви знаходитесь');
-    expect(aiReplies(c.chat)).toBe(1);
+    // the clinic entered no address: the answer is written by the code (it says the address is to be clarified; no invented ban, no promise)
+    expect(sent.filter((m) => m.chatId === c.chat && m.text.includes('потрібно уточнити в адміністратора клініки')).length).toBe(1);
   });
 
   it('службові повідомлення сценарію не з’їдають добовий ліміт відповідей ШІ і не заглушають чат', async () => {
@@ -117,7 +118,7 @@ describe('автовідповідь ШІ після сценарію запис
     expect(await prisma.chatMessage.count({ where: { clinicId: c.clinicId, direction: 'OUT', byAi: true } })).toBe(0);
     sent.length = 0;
     await write(c, 'Добрий день, підкажіть адресу');
-    expect(aiReplies(c.chat)).toBe(1);
+    expect(sent.filter((m) => m.chatId === c.chat && m.text.includes('потрібно уточнити в адміністратора клініки')).length).toBe(1);
   });
 
   it('питання під час збору даних іде до ШІ, а не мовчить; нерозпізнана відповідь питається знову, а не губиться', async () => {
@@ -307,7 +308,7 @@ describe('автовідповідь ШІ після сценарію запис
     fake.seq = [JSON.stringify({ intent: 'booking', reply: 'В 23:00', summary: '', options: [] }), JSON.stringify({ intent: 'booking', reply: 'В 22:00', summary: '', options: [] })];
     sent.length = 0;
     await write(c, 'а на послезавтра какие есть окошки?');
-    expect(sent.at(-1)!.text).toContain('Передаю ваш вопрос администратору клиники');
+    expect(sent.at(-1)!.text).toContain('Передали ваш вопрос администратору клиники');
     fake.seq = [];
   });
 
@@ -352,7 +353,9 @@ describe('автовідповідь ШІ після сценарію запис
       const wk = { '1': { from: '09:00', to: '20:00' }, '2': { from: '09:00', to: '20:00' }, '3': { from: '09:00', to: '20:00' }, '4': { from: '09:00', to: '20:00' }, '5': { from: '09:00', to: '20:00' }, '6': { from: '10:00', to: '15:00' }, '7': null };
       expect(formatHours(wk, 'uk')).toBe('пн–пт 09:00–20:00, сб 10:00–15:00, нд вихідний');
       expect(formatHours(wk, 'ru')).toBe('пн–пт 09:00–20:00, сб 10:00–15:00, вс выходной');
-      expect(contactReply('де ви?', 'uk', { address: null, phone: null, directions: null, hours: null })).toBeNull();
+      expect(contactReply('де ви знаходитесь?', 'uk', { address: null, phone: null, directions: null, hours: null })).toContain('потрібно уточнити в адміністратора клініки');
+      // the address kept in the knowledge base is answered by the model from there: the code stays silent
+      expect(contactReply('де ви знаходитесь?', 'uk', { address: null, phone: null, directions: null, hours: null, inKnowledgeBase: true })).toBeNull();
     });
 
     it('«де ви знаходитесь» і «який телефон»: відповідь із контактів клініки без моделі й без передачі людині; порожніх полів бот не називає', async () => {
@@ -360,8 +363,13 @@ describe('автовідповідь ШІ після сценарію запис
       // nothing entered yet: the question still goes on its normal way (no invented address)
       await http().get('/clinic/contacts').set(auth(c.token)).expect(200);
       const calls = fake.calls;
+      sent.length = 0;
       await write(c, 'Дякую, а де ви знаходитесь?');
-      expect(fake.calls).toBe(calls + 1);
+      expect(fake.calls).toBe(calls); // no model, no hand-over: the code says plainly that the address is to be clarified
+      expect(sent.at(-1)!.text).toContain('адреса клініки');
+      expect(sent.at(-1)!.text).toContain('потрібно уточнити в адміністратора клініки');
+      expect(sent.at(-1)!.text).not.toMatch(/не можемо|в цьому чаті/);
+      expect(await prisma.bookingRequest.count({ where: { clinicId: c.clinicId, kind: 'HANDOFF' } })).toBe(0); // nothing is promised, so nothing is created
 
       await http().put('/clinic/contacts').set(auth(c.token)).send({ address: 'м. Київ, вул. Тестова, 12, 2 поверх', phone: '+380441234567', directions: 'Вхід із двору, ліворуч від аптеки.' }).expect(200);
       const after = fake.calls;

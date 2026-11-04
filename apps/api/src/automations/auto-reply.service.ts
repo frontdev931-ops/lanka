@@ -67,14 +67,8 @@ export class AutoReplyService {
       const d = await this.assistant.draft(clinicId, channel, chatId);
       // Why a question went to a person (a code only): medical, price, complaint, long, reply_check, model
       if (d.handoff) this.log.log(`AI autoreply handed over to a person: ${d.reason ?? 'unknown'} (clinic ${clinicId}, ${channel})`);
-      try {
-        await this.messenger.send(clinicId, channel, chatId, d.reply, d.options);
-      } catch (e) {
-        if (e instanceof SendError && e.blocked && channel === 'TELEGRAM') await this.prisma.patientChannel.updateMany({ where: { clinicId, channel, externalId: chatId }, data: { optedOutAt: new Date() } });
-        return this.skip(clinicId, channel, `send_failed_${e instanceof SendError ? e.reason : 'error'}`);
-      }
-      await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, direction: 'OUT', text: d.reply, byAi: true, ...(d.options.length ? { buttons: d.options.map((o) => ({ label: o.label, payload: slotPayload(o) })) } : {}) } });
-      // A request to the administrator: a booking, a reschedule, a cancellation or a question handed to a person
+      // A request to the administrator: a booking, a reschedule, a cancellation or a question handed to a person. It is created BEFORE the patient
+      // is told that it was passed on, so the text never promises a hand-over that did not happen (one open request per chat and kind: a repeated question updates it).
       const kind: RequestKind | null = d.handoff ? 'HANDOFF' : ({ booking: 'BOOKING', reschedule: 'RESCHEDULE', cancel: 'CANCEL' } as Record<string, RequestKind>)[d.intent] ?? null;
       if (kind) {
         const lastIn = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, select: { text: true, contactName: true } });
@@ -83,11 +77,18 @@ export class AutoReplyService {
           // an urgent request is announced to the staff even when an open request of this chat already exists
           !!d.summary?.startsWith('ТЕРМІНОВО'));
       }
+      try {
+        await this.messenger.send(clinicId, channel, chatId, d.reply, d.options);
+      } catch (e) {
+        if (e instanceof SendError && e.blocked && channel === 'TELEGRAM') await this.prisma.patientChannel.updateMany({ where: { clinicId, channel, externalId: chatId }, data: { optedOutAt: new Date() } });
+        return this.skip(clinicId, channel, `send_failed_${e instanceof SendError ? e.reason : 'error'}`);
+      }
+      await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, direction: 'OUT', text: d.reply, byAi: true, ...(d.options.length ? { buttons: d.options.map((o) => ({ label: o.label, payload: slotPayload(o) })) } : {}) } });
       return true;
     } catch (e) {
       // The reply allowance is used up: the conversation goes to a person, who sees a request (no debt, nothing is lost)
       if ((e as Error).message === 'ai_limit') await this.handOffNoAllowance(clinicId, channel, chatId).catch(() => undefined);
-      else this.log.warn(`Автоответ не отправлен: ${(e as Error).message} (clinic ${clinicId}, ${channel})`);
+      else this.log.warn(`AI autoreply not sent: ${(e as Error).message} (clinic ${clinicId}, ${channel})`);
       return false;
     }
   }

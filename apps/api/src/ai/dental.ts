@@ -28,7 +28,7 @@ const SEARCH: [RegExp, string][] = [
 ];
 // Russian and Ukrainian spellings are folded to one form so that «гигиена» finds «гігієна» and «кариес» finds «карієс»
 export const fold = (t: string): string =>
-  t.toLowerCase().replace(/ё/g, 'е').replace(/ы/g, 'и').replace(/э/g, 'е').replace(/[іїи]/g, 'и').replace(/є/g, 'е').replace(/ґ/g, 'г').replace(/[ъь'’`ʼ]/g, '');
+  t.toLowerCase().replace(/г[іи]г[іи]?[єе]?н/g, 'гигиен').replace(/ё/g, 'е').replace(/ы/g, 'и').replace(/э/g, 'е').replace(/[іїи]/g, 'и').replace(/є/g, 'е').replace(/ґ/g, 'г').replace(/[ъь'’`ʼ]/g, '');
 // The significant words of a text as stems (the first 5 letters of words of 4 or more letters, folded); n = 4 for a looser search
 export const stemsOf = (t: string, n = 5): string[] => [...new Set((fold(t).match(/[\p{L}\d]{4,}/gu) ?? []).map((w) => w.slice(0, n)))];
 export const expandForSearch = (text: string): string => SEARCH.filter(([re]) => re.test(text)).map(([, extra]) => extra).join(' ');

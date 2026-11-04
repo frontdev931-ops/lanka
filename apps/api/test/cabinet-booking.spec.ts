@@ -1,9 +1,11 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { Prisma } from '@prisma/client';
 import { LlmClient } from '../src/ai/llm.client';
 import { AppModule } from '../src/app.module';
 import { BookingService } from '../src/booking/booking.service';
+import { liveWriteAllowed } from '../src/integrations/cliniccards.client';
 import { CabinetBookingService } from '../src/booking/cabinet-booking.service';
 import { slotPayload } from '../src/automations/channels';
 import { IntakeService } from '../src/automations/intake.service';
@@ -373,7 +375,7 @@ describe('розмова в режимі за кабінетами', () => {
     await write(c, 'Хочу записатися на лікування карієсу');
     expect(slots(last())).toEqual([]);
     expect(last().text).toContain('Передали заявку');
-    expect((await reqOf(c)).summary).toContain('не дозволено для запису за кабінетами');
+    expect((await reqOf(c)).summary).toContain('не дозволено для онлайн-запису');
     ai.service = 'Консультація';
     const d = await clinic();
     await put(d, '/booking-settings/shared-account', { doctorId: null }).expect(200);
@@ -395,7 +397,7 @@ describe('розмова в режимі за кабінетами', () => {
     expect(mock.writes.filter((x) => x.path === '/visits')).toHaveLength(0);
     expect(sent.map((m) => m.text).join('\n')).not.toContain('Ваш запис підтверджено');
     expect(last().text).toContain('Передали заявку');
-    expect((await reqOf(c)).summary).toContain('не вдалося оновити розклад');
+    expect((await reqOf(c)).summary).toContain('не вдалося прочитати розклад');
     // and no times are offered while the schedule cannot be read
     const d = { ...c, chat: `ig${rnd()}` };
     await write(d, 'Хочу записатися на консультацію');
@@ -458,3 +460,226 @@ describe('розмова в режимі за кабінетами', () => {
     expect(mock.writes.filter((x) => x.path === '/visits')).toHaveLength(0);
   });
 });
+
+describe('схожі послуги: дозвіл на онлайн-запис однієї позиції не підміняє інші', () => {
+  async function siblings() {
+    const c = await clinic();
+    const mk = (title: string, durationMin: number, priceUah: number) => prisma.kbItem.create({ data: { clinicId: c.clinicId, kind: 'SERVICE', title, category: 'Профілактика', durationMin, priceUah, active: true, approvedAt: new Date(), reviewedAt: new Date() } });
+    const allowed = await mk('Чистка ультразвукова', 45, 900);
+    const other = await mk('Чистка комплексна', 60, 1900);
+    await put(c, '/booking-settings/services', { services: [{ id: allowed.id, onlineBooking: true, cabinetIds: [] }] }).expect(200);
+    return { ...c, allowed, other };
+  }
+
+  it('неоднозначний запит: уточнення; обрана недозволена послуга зберігається саме така й іде адміністратору; інша пропонується лише після згоди', async () => {
+    const c = await siblings();
+    ai.service = '';
+    await write(c, 'Хочу записатися на чистку');
+    expect(last().text).toContain('Чистка ультразвукова');
+    expect(last().text).toContain('Чистка комплексна');
+    expect(slots(last())).toEqual([]);
+    expect(await prisma.bookingRequest.count({ where: { clinicId: c.clinicId } })).toBe(0);
+
+    // the patient chose the one that is not allowed online: exactly it stays on the request, the answer is plain, no time of the other one is offered
+    ai.service = 'Чистка комплексна';
+    await write(c, 'Комплексну');
+    expect(slots(last())).toEqual([]);
+    expect(last().text).toContain('Цю послугу записує адміністратор');
+    expect(last().text).not.toMatch(/кабінет|тривалість|Cliniccards|налаштуван/i);
+    expect(await reqOf(c)).toMatchObject({ service: 'Чистка комплексна', blockCode: 'service_not_allowed' });
+
+    // the patient agrees to the other service: only now its times are offered
+    ai.service = 'Чистка ультразвукова';
+    await write(c, 'Тоді ультразвукову');
+    expect(slots(last()).length).toBeGreaterThan(0);
+
+    // the settings page names the reason per service
+    const s = (await http().get('/booking-settings').set(auth(c.token)).expect(200)).body;
+    expect(s.services.find((x: { id: string }) => x.id === c.other.id).block).toBe('service_not_allowed');
+    expect(s.services.find((x: { id: string }) => x.id === c.allowed.id).block).toBeNull();
+    // the permission does not limit the answers about prices: the knowledge given to the model lists both with their prices
+    const facts = await app.get((await import('../src/kb/kb.service')).KbService).factsFor(c.clinicId, new Date(), 'чистка', 'чистка');
+    expect(facts.allowedAmounts).toEqual(expect.arrayContaining([900, 1900]));
+  });
+
+  it('жодна підходяща послуга не підставляється мовчки: назва, під яку підходить кілька позицій, не обирає жодної', async () => {
+    const c = await siblings();
+    const choice = app.get((await import('../src/booking/doctor-choice.service')).DoctorChoiceService);
+    expect(await choice.findService(c.clinicId, 'Чистка')).toBeNull();
+    expect((await choice.findService(c.clinicId, 'Чистка ультразвукова'))?.id).toBe(c.allowed.id);
+    expect((await choice.findService(c.clinicId, 'Чистка комплексна'))?.id).toBe(c.other.id);
+  });
+});
+
+describe('кожна причина відсутності вікон має свій код, видимий адміністратору', () => {
+  it('послуга, тривалість, обліковий запис, кабінет, години, зайнятий розклад, розклад не прочитано', async () => {
+    const c = await clinic();
+    const cab = app.get(CabinetBookingService);
+    const reason = async () => {
+      cab.invalidate(c.clinicId);
+      const svc = await prisma.kbItem.findUniqueOrThrow({ where: { id: c.consult.id } });
+      return (await cab.blockReason(c.clinicId, svc)).code;
+    };
+    expect(await reason()).toBeNull();
+    // the settings page shows the same first reason for the service without reading the schedule
+    const blockOnPage = async () => (await http().get('/booking-settings').set(auth(c.token)).expect(200)).body.services.find((x: { id: string }) => x.id === c.consult.id).block;
+    expect(await blockOnPage()).toBeNull();
+
+    await prisma.kbItem.update({ where: { id: c.consult.id }, data: { onlineBooking: false } });
+    expect(await reason()).toBe('service_not_allowed');
+    expect(await blockOnPage()).toBe('service_not_allowed');
+    await prisma.kbItem.update({ where: { id: c.consult.id }, data: { onlineBooking: true, durationMin: null } });
+    expect(await reason()).toBe('no_length');
+    await prisma.kbItem.update({ where: { id: c.consult.id }, data: { durationMin: 30, cabinetIds: ['999'] } });
+    expect(await reason()).toBe('no_cabinet'); // the service is limited to a cabinet that is not open for online booking
+    await prisma.kbItem.update({ where: { id: c.consult.id }, data: { cabinetIds: [] } });
+
+    await put(c, '/booking-settings/shared-account', { doctorId: null }).expect(200);
+    expect(await reason()).toBe('no_shared_account');
+    await put(c, '/booking-settings/shared-account', { doctorId: '503' }).expect(200);
+
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { workHours: Prisma.DbNull } });
+    expect(await reason()).toBe('no_hours');
+    await put(c, '/clinic/work-hours', WEEK).expect(200);
+    expect(await reason()).toBeNull();
+
+    // everything is taken for the coming days: a different reason, found by reading the schedule
+    for (let n = 0; n <= 9; n++) for (const k of ['801', '802']) block(k, day(n), '00:00', '23:59');
+    expect(await reason()).toBe('no_free_time');
+    mock.data.spaces = [];
+
+    // the schedule cannot be read: never a guess from old data
+    const spy = jest.spyOn(cab, 'fresh').mockRejectedValue(new Error('schedule_unavailable'));
+    expect(await reason()).toBe('schedule_unreadable');
+    spy.mockRestore();
+  });
+
+  it('заявка адміністратору називає причину словами й кодом у списку заявок', async () => {
+    const c = await clinic();
+    await put(c, '/booking-settings/shared-account', { doctorId: null }).expect(200);
+    await write(c, 'Хочу записатися на консультацію');
+    const list = (await http().get('/requests?status=ALL').set(auth(c.token)).expect(200)).body.rows as { blockCode: string | null; summary: string }[];
+    expect(list[0].blockCode).toBe('no_shared_account');
+    expect(list[0].summary).toContain('не вибрано спільний обліковий запис');
+    expect(last().text).not.toMatch(/обліковий запис|Cliniccards|кабінет/i); // the patient gets no technical detail
+  });
+});
+
+describe('тимчасове обмеження автозапису одним діалогом (живий тест)', () => {
+  const visitWrites = () => mock.writes.filter((x) => x.path === '/visits' || x.path === '/patients');
+  const dialog = (c: { clinicId: string; chat: string }) => `${c.clinicId}|INSTAGRAM|${c.chat}`;
+  afterEach(() => {
+    delete process.env.AUTOBOOKING_TEST_ONLY;
+    delete process.env.AUTOBOOKING_TEST_DIALOGS;
+  });
+  const confirmFlow = async (c: Awaited<ReturnType<typeof clinic>>, skip = 0) => {
+    await link(c, skip);
+    await write(c, 'Хочу записатися на консультацію');
+    await write(c, '', slots(last())[0]);
+  };
+
+  it('без обмеження нічого не змінюється; з обмеженням і порожнім списком автозапис не дозволено нікому', async () => {
+    const c = await clinic({ auto: true });
+    process.env.AUTOBOOKING_TEST_ONLY = 'true';
+    process.env.AUTOBOOKING_TEST_DIALOGS = '';
+    await confirmFlow(c);
+    expect(last().text).not.toContain('Підтверджуєте запис'); // not even the question of an automatic booking
+    await write(c, 'так');
+    expect(visitWrites()).toHaveLength(0);
+    expect(await reqOf(c)).toMatchObject({ status: 'NEW', confirmedAt: null });
+    // the switch itself is visible to the administrator in the settings of the AI
+    const ai = (await http().get('/ai').set(auth(c.token)).expect(200)).body;
+    expect(ai.autoBookingTest).toEqual({ restricted: true, dialogs: 0 });
+    // anything but exactly "true" is off
+    process.env.AUTOBOOKING_TEST_ONLY = 'yes';
+    expect(((await http().get('/ai').set(auth(c.token))).body).autoBookingTest.restricted).toBe(false);
+  });
+
+  it('автозапис лише для вибраного діалогу: другий діалог тієї самої клініки і інша клініка працюють як заявка адміністратору', async () => {
+    const a = await clinic({ auto: true });
+    const other = { ...a, chat: `ig${rnd()}` }; // another dialogue of the SAME clinic
+    const b = await clinic({ auto: true }); // another clinic
+    process.env.AUTOBOOKING_TEST_ONLY = 'true';
+    process.env.AUTOBOOKING_TEST_DIALOGS = `${dialog(a)}, ${b.clinicId}|INSTAGRAM|another-chat`;
+    // the other dialogue of clinic A
+    await confirmFlow(other, 1);
+    await write(other, 'так');
+    expect(visitWrites()).toHaveLength(0);
+    expect(last().text).not.toContain('Ваш запис підтверджено');
+    // clinic B: its own dialogue is not in the list (the id of a chat of A does not open B)
+    await confirmFlow(b);
+    await write(b, 'так');
+    expect(visitWrites()).toHaveLength(0);
+    // the chosen dialogue books by itself
+    await confirmFlow(a);
+    expect(last().text).toContain('Підтверджуєте запис');
+    await write(a, 'так');
+    const w = mock.writes.filter((x) => x.path === '/visits');
+    expect(w).toHaveLength(1);
+    expect(last().text).toContain('Ваш запис підтверджено');
+    // and a repeated "так" does not make a second visit
+    await write(a, 'так');
+    expect(mock.writes.filter((x) => x.path === '/visits')).toHaveLength(1);
+  });
+
+  it('перевірка стоїть безпосередньо перед записом у Cliniccards, і повторна спроба теж її проходить', async () => {
+    const c = await clinic({ auto: true });
+    const p = await link(c);
+    const booking = app.get(BookingService);
+    const at = localToUtc(`${day(3)} 11:00:00`);
+    const input = { patientId: p.id, startsAt: at, durationMin: 30, cabinetId: '801', doctorId: '503', note: 'LANKA-test', sharedAccount: true, origin: { channel: 'INSTAGRAM', chatId: c.chat } };
+    process.env.AUTOBOOKING_TEST_ONLY = 'true';
+    process.env.AUTOBOOKING_TEST_DIALOGS = '';
+    // an automatic write (no user) of a dialogue that is not allowed is refused before anything reaches Cliniccards, a visit and a card alike
+    await expect(booking.book(c.clinicId, null, input)).rejects.toThrow('auto_booking_not_allowed_for_dialog');
+    await expect(booking.createPatient(c.clinicId, null, { lastName: 'Тест', firstName: 'Тест', phone: '0501112299', channel: 'INSTAGRAM', origin: input.origin })).rejects.toThrow('auto_booking_not_allowed_for_dialog');
+    await expect(booking.book(c.clinicId, null, { ...input, origin: undefined })).rejects.toThrow('auto_booking_not_allowed_for_dialog'); // no origin: nothing is allowed
+    expect(visitWrites()).toHaveLength(0);
+    // the same call of an allowed dialogue passes; after the dialogue is removed from the list a retry of the same booking is stopped again
+    process.env.AUTOBOOKING_TEST_DIALOGS = dialog(c);
+    mock.control.dropReplyAfterWrite = true;
+    await booking.book(c.clinicId, null, input).catch(() => undefined); // the answer is lost: the attempt is UNKNOWN
+    mock.control.dropReplyAfterWrite = false;
+    const written = mock.writes.filter((x) => x.path === '/visits').length;
+    expect(written).toBe(1);
+    process.env.AUTOBOOKING_TEST_DIALOGS = '';
+    await expect(booking.book(c.clinicId, null, input)).rejects.toThrow('auto_booking_not_allowed_for_dialog'); // the retry is checked too
+    expect(mock.writes.filter((x) => x.path === '/visits')).toHaveLength(written);
+    // a write made by a staff member is not restricted by the test setting
+    const staff = (await prisma.user.findFirstOrThrow({ where: { memberships: { some: { clinicId: c.clinicId } } } })).id;
+    await expect(booking.book(c.clinicId, staff, { ...input, origin: undefined, startsAt: localToUtc(`${day(4)} 11:00:00`) })).resolves.toBeTruthy();
+  });
+
+  it('умови настоящого створення візиту: явне «так», актуальна доступність послуги й свіжий розклад перед записом', async () => {
+    const c = await clinic({ auto: true });
+    await confirmFlow(c);
+    expect(last().text).toContain('Підтверджуєте запис');
+    expect(visitWrites()).toHaveLength(0); // nothing is written before the explicit yes
+    // between the question and the yes the administrator switches the service off: the availability is checked again, nothing is written, no card is made
+    await prisma.kbItem.update({ where: { id: c.consult.id }, data: { onlineBooking: false } });
+    await write(c, 'так');
+    expect(visitWrites()).toHaveLength(0);
+    expect(await reqOf(c)).toMatchObject({ confirmedAt: null, blockCode: 'service_not_allowed' });
+    expect(last().text).not.toContain('Ваш запис підтверджено');
+    expect(last().text).toContain('адміністратор');
+  });
+
+  it('для настоящего адреса Cliniccards нужен ещё CLINICCARDS_WRITE_LIVE: без него автоматический режим не стартует', async () => {
+    const c = await clinic({ auto: true });
+    const booking = app.get(BookingService);
+    expect((await booking.status(c.clinicId)).enabled).toBe(true); // an overridden (mock) address: the first key is enough
+    const base = process.env.CLINICCARDS_BASE_URL;
+    delete process.env.CLINICCARDS_BASE_URL; // from here on the address is the real one
+    try {
+      expect(liveWriteAllowed()).toBe(false);
+      expect((await booking.status(c.clinicId)).enabled).toBe(false);
+      process.env.CLINICCARDS_WRITE_LIVE = 'true';
+      expect(liveWriteAllowed()).toBe(true);
+      expect((await booking.status(c.clinicId)).enabled).toBe(true);
+    } finally {
+      process.env.CLINICCARDS_BASE_URL = base;
+      delete process.env.CLINICCARDS_WRITE_LIVE;
+    }
+  });
+});
+
