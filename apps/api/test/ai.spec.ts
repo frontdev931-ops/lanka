@@ -144,7 +144,7 @@ describe('ИИ-помощник в переписке: границы', () => {
     await say('сколько стоит чистка?');
     await say('Передаю ваш вопрос администратору', 'OUT');
     await say('мне пора на чистку?');
-    fake.next = '{"intent":"info","reply":"Підкажіть, будь ласка, коли була остання чистка?"}';
+    fake.next = '{"intent":"info","reply":"Подскажите, пожалуйста, когда была последняя чистка?"}';
     expect(await assistant.draft(c.clinicId, 'TELEGRAM', 'h1')).toMatchObject({ handoff: false, intent: 'info' });
   });
 
@@ -194,7 +194,7 @@ describe('ИИ-помощник в переписке: границы', () => {
   it('ответ с суммой, дозировкой, лекарством или советом не пропускается', () => {
     for (const r of ['Чистка коштує 1200 грн', 'Прийміть 2 таблетки по 500 мг', 'Приймайте ібупрофен', 'Це схоже на діагноз пульпіт', 'Полощіть содовим розчином']) expect(replyViolates(r)).toBe(true);
     expect(replyViolates('Підкажіть, будь ласка, який день вам зручний?')).toBe(false);
-    expect(parseModelJson('текст {"intent":"booking","reply":"Привіт"} ще')).toEqual({ intent: 'booking', reply: 'Привіт', summary: null, service: null, options: [] });
+    expect(parseModelJson('текст {"intent":"booking","reply":"Привіт"} ще')).toEqual({ intent: 'booking', reply: 'Привіт', summary: null, service: null, options: [], prices: undefined, after: null });
     expect(parseModelJson('не json')).toBeNull();
     expect(parseModelJson('{"intent":"booking"}')).toBeNull();
   });
@@ -275,9 +275,9 @@ describe('ШІ сам отвечает пациентам в Telegram', () => {
 
   it('«мне пора на чистку?»: ШІ получает факты из базы (без имени и телефона), отвечает сам', async () => {
     const q = await setup({ hygieneMonthsAgo: 8 });
-    fake.next = '{"intent":"info","reply":"За нашими даними, остання гігієна була близько 8 місяців тому. Запишемо вас?"}';
+    fake.next = '{"intent":"info","reply":"По нашим данным, последняя гигиена была около 8 месяцев назад. Запишем вас?"}';
     await app.get(TelegramService).handleUpdate(q.clinicId, TOKEN, msg(q.chat, 'мне пора на чистку?'));
-    expect(tg.sent).toEqual([{ chatId: String(q.chat), text: 'За нашими даними, остання гігієна була близько 8 місяців тому. Запишемо вас?' }]);
+    expect(tg.sent).toEqual([{ chatId: String(q.chat), text: 'По нашим данным, последняя гигиена была около 8 месяцев назад. Запишем вас?' }]);
     expect(fake.system).toMatch(/гігієна[^\n]*~8 міс/);
     expect(fake.system).toContain('раз на 6 міс');
     expect(fake.system).not.toContain('Секретна');

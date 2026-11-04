@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SettingsImportService } from '../integrations/settings-import.service';
 import { SyncService } from '../integrations/sync.service';
 import { stemsOf } from '../ai/dental';
+import type { PriceItem } from '../ai/guardrails';
 
 export const KB_KINDS = ['SERVICE', 'DOCTOR', 'LOCATION', 'FAQ'] as const;
 export type KbKind = (typeof KB_KINDS)[number];
@@ -32,8 +33,8 @@ export interface KbFacts {
   text: string | null;
   // The amounts (UAH) the reply may mention: only known, current prices of the clinic's own list
   allowedAmounts: number[];
-  // The services shown to the model with a known price: a named sum must belong to the service it is named for
-  priced: { title: string; category: string | null; amount: number }[];
+  // The services put into the prompt with the state of their price. The model names services by id; the code writes the title and the sum
+  items: PriceItem[];
   // For the diagnostic log (ids only): the services put into the prompt and how many the clinic has
   shownIds: string[];
   serviceCount: number;
@@ -248,6 +249,13 @@ export class KbService {
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'kb.match_dismissed', details: { id } } });
   }
 
+  // The references the model uses for the services of a clinic (the same as in factsFor): id -> "S12"
+  async serviceRefs(clinicId: string): Promise<Map<string, string>> {
+    const all = await this.prisma.kbItem.findMany({ where: { clinicId, active: true }, orderBy: [{ kind: 'asc' }, { title: 'asc' }] });
+    const services = all.filter((r) => r.kind === 'SERVICE' && (!!r.approvedAt || (!!r.externalId && r.source === 'CLINICCARDS')));
+    return new Map(services.map((r, i) => [r.id, `S${i + 1}`]));
+  }
+
   // Services ranked by the words of the patient (see factsFor): stems of the title and the group, the words of the last message weigh three
   // times more, a stem that many services share weighs little. Shorter stems are tried when nothing matched.
   rankServices<T extends { title: string; category: string | null }>(services: T[], query: string, focus: string, max: number): { r: T; score: number }[] {
@@ -295,7 +303,7 @@ export class KbService {
     // Trusted: services imported from the connected Cliniccards (they follow it by themselves), and everything else only once approved.
     // A hand-made draft is not published.
     const rows = all.filter((r) => !!r.approvedAt || (r.kind === 'SERVICE' && !!r.externalId && r.source === 'CLINICCARDS'));
-    if (!rows.length) return { text: null, allowedAmounts: [], priced: [], shownIds: [], serviceCount: 0, pricesKnown: false };
+    if (!rows.length) return { text: null, allowedAmounts: [], items: [], shownIds: [], serviceCount: 0, pricesKnown: false };
     const services = rows.filter((r) => r.kind === 'SERVICE');
     // KNOWN: a number that may be named; FREE: explicitly free; CONFLICT / GONE / UNKNOWN: the administrator clarifies
     const priceOf = (r: (typeof services)[number]): { state: 'KNOWN' | 'FREE' | 'CONFLICT' | 'GONE' | 'UNKNOWN'; amount: number | null } => {
@@ -308,6 +316,11 @@ export class KbService {
       return { state: r.priceUah === 0 ? 'FREE' : 'KNOWN', amount: r.priceUah };
     };
     const states = new Map(services.map((r) => [r.id, priceOf(r)]));
+    // how close every service is to the words of the patient (also for a short list, where all of them are shown): the code leaves out of a price
+    // answer the services that are only a coincidence of one word
+    // the short references of the services (S1, S2, ... in the order of the list): the model names a service by its reference
+    const refs = new Map(services.map((r, i) => [r.id, `S${i + 1}`]));
+    const scores = new Map(this.rankServices(services, query, focus, services.length).map((x) => [x.r.id, x.score]));
     let shown = services;
     let directions: string[] = [];
     let partial = false;
@@ -322,24 +335,25 @@ export class KbService {
       directions = [...new Set(services.map((r) => r.category).filter((c): c is string => !!c))].slice(0, 40);
     }
     const allowed = new Set<number>();
-    const priced: KbFacts['priced'] = [];
+    const items: PriceItem[] = [];
     const sections: Record<KbKind, string[]> = { SERVICE: [], DOCTOR: [], LOCATION: [], FAQ: [] };
     for (const r of shown) {
       const p = states.get(r.id)!;
       if (p.amount !== null && p.state !== 'FREE') allowed.add(p.amount);
       if (p.state === 'FREE') allowed.add(0);
-      if (p.amount !== null) priced.push({ title: r.title, category: r.category, amount: p.amount });
+      items.push({ id: r.id, ref: refs.get(r.id)!, title: r.title, category: r.category, state: p.state, amount: p.amount, score: scores.get(r.id) ?? 0 });
+      // The model never sees a sum and never writes one: it names the service by id and the code writes the line with the exact sum
       const price =
         p.state === 'FREE'
-          ? '; безкоштовно (ціна 0 грн)'
+          ? '; ціна: безкоштовно (рядок із цим напише система)'
           : p.amount !== null
-            ? `; ціна ${p.amount} грн (фіксована)`
+            ? '; ціна відома (рядок із сумою напише система за id)'
             : p.state === 'GONE'
               ? '; ціна: не називати, цієї позиції вже немає в актуальному прайсі, вартість треба уточнити в адміністратора'
               : p.state === 'CONFLICT'
                 ? '; ціна: не називати, дані про ціну суперечливі, вартість треба уточнити в адміністратора'
                 : '; ціна: не називати, вона невідома, вартість треба уточнити в адміністратора';
-      sections.SERVICE.push(`- ${r.title}${r.category ? ` (група: ${r.category})` : ''}${r.durationMin ? `; тривалість ${r.durationMin} хв` : ''}${price}${r.text ? `; склад і опис саме цієї послуги: ${r.text.replace(/\s*\n\s*/g, ' ').slice(0, 400)}` : ''}`);
+      sections.SERVICE.push(`- [${refs.get(r.id)}] ${r.title}${r.category ? ` (група: ${r.category})` : ''}${r.durationMin ? `; тривалість ${r.durationMin} хв` : ''}${price}${r.text ? `; склад і опис саме цієї послуги: ${r.text.replace(/\s*\n\s*/g, ' ').slice(0, 400)}` : ''}`);
     }
     for (const r of rows) {
       const kind = r.kind as KbKind;
@@ -361,6 +375,6 @@ export class KbService {
     add('АДРЕСИ ТА КОНТАКТИ:', sections.LOCATION);
     add('ЧАСТІ ПИТАННЯ:', sections.FAQ);
     // pricesKnown: the clinic has a service list, so a question about a price goes to the model (it names a known price or says it is to be clarified)
-    return { text: parts.join('\n\n').slice(0, PROMPT_BUDGET), allowedAmounts: [...allowed], priced, shownIds: shown.map((r) => r.id), serviceCount: services.length, pricesKnown: services.length > 0 };
+    return { text: parts.join('\n\n').slice(0, PROMPT_BUDGET), allowedAmounts: [...allowed], items, shownIds: shown.map((r) => r.id), serviceCount: services.length, pricesKnown: services.length > 0 };
   }
 }

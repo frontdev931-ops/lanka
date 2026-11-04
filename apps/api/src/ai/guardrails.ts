@@ -71,61 +71,76 @@ const BAD_REPLY = [
   /(діагноз|диагноз|антибіот|антибиот|ібупрофен|ибупрофен|парацетамол|нурофен|анальгін|анальгин|полощіть|полоскайте|приймайте|принимайте|прийміть|прикладіть|приложите)/i,
 ];
 
-// "from 1 500 UAH" is never said: the clinic's list has fixed prices, and a price is marked as preliminary by a separate sentence
-const FROM_PRICE = /(?<![\p{L}])(від|от|from|начиная\s+с|починаючи\s+з)\s*\d[\d\s]*(?:[.,]\d+)?\s*(грн|₴|uah|грив)/iu;
+// A currency word or sign anywhere in the free text of the model: every sum of a reply is written by the code from the price list (see
+// composePriceReply), so the text of the model carries none (this closes any way round, a sum in words of "гривень" included)
+const CURRENCY = /(грн|₴|uah|usd|\$|€|грив|гривен|долар|dollar|євро|евро|руб)/i;
 
-// A sum named in a reply must belong to the service it is named for, not only exist somewhere in the price list. The service is found by
-// the words of the reply around the sum (the title's significant words; best match only), then by the whole reply, then by the service
-// the model reported. A sum that cannot be tied to a service, or is another service's price, is a violation.
-export interface PricedService {
-  title: string;
-  category?: string | null;
-  amount: number;
-}
-function servicesNamedIn(text: string, priced: PricedService[]): PricedService[] {
-  const words = new Set(stemsOf(text));
-  const scored = priced
-    .map((p) => {
-      const t = stemsOf(p.title);
-      return { p, n: t.filter((x) => words.has(x)).length };
-    })
-    .filter((x) => x.n >= 1);
-  const best = Math.max(0, ...scored.map((x) => x.n));
-  return scored.filter((x) => x.n === best).map((x) => x.p);
-}
-function sumsMatchServices(reply: string, priced: PricedService[], hint?: string | null): boolean {
-  const hinted = hint ? servicesNamedIn(hint, priced) : [];
-  let from = 0;
-  for (const m of reply.matchAll(MONEY)) {
-    const n = Number(m[1].replace(/\s/g, '').replace(',', '.'));
-    const end = (m.index ?? 0) + m[0].length;
-    // the sentence that holds the sum: before it (where the name usually is), then the whole sentence, then the whole reply
-    const sentStart = Math.max(reply.lastIndexOf('. ', m.index ?? 0) + 2, reply.lastIndexOf('\n', m.index ?? 0) + 1, 0);
-    const windows = [reply.slice(Math.max(from, sentStart), m.index ?? 0), reply.slice(sentStart, end + 60), reply];
-    from = end;
-    let named: PricedService[] = [];
-    for (const w of windows) {
-      named = servicesNamedIn(w, priced);
-      if (named.length) break;
-    }
-    if (![...named, ...hinted].some((p) => p.amount === n) ) return false;
-    if (!named.length && !hinted.length) return false;
-  }
-  return true;
-}
-
-// allowedAmounts: the prices (UAH) of the clinic's own list that are known and current; any other amount in the reply is a violation.
-// With `check` also the binding of the sum to the service named for it (see above).
-export function replyProblem(reply: string, allowedAmounts: number[] = [], check?: { priced: PricedService[]; service?: string | null }): string | null {
-  if (FROM_PRICE.test(reply)) return 'from_price';
-  for (const m of reply.matchAll(MONEY)) {
-    const n = Number(m[1].replace(/\s/g, '').replace(',', '.'));
-    if (!/грн|₴|uah|грив/i.test(m[2]) || !allowedAmounts.includes(n)) return 'amount_not_in_list';
-  }
-  if (check && !sumsMatchServices(reply, check.priced, check.service)) return 'price_service_mismatch';
+// null when the free text of the model is acceptable
+export function replyProblem(reply: string): string | null {
+  if (CURRENCY.test(reply)) return 'amount_in_free_text';
   return BAD_REPLY.some((re) => re.test(reply)) ? 'medical_or_dosage' : null;
 }
-export const replyViolates = (reply: string, allowedAmounts: number[] = [], check?: { priced: PricedService[]; service?: string | null }): boolean => replyProblem(reply, allowedAmounts, check) !== null;
+export const replyViolates = (reply: string): boolean => replyProblem(reply) !== null;
+
+// The state of the price of a service as the code knows it (see KbService.factsFor)
+export type PriceState = 'KNOWN' | 'FREE' | 'CONFLICT' | 'GONE' | 'UNKNOWN';
+export interface PriceItem {
+  id: string;
+  // The short reference the model uses in the prompt and in its answer ("S12"): easier to copy without a slip than a 25-character id, and valid only
+  // for the services of this clinic
+  ref: string;
+  title: string;
+  category: string | null;
+  state: PriceState;
+  amount: number | null;
+  // How close the service is to the words of the patient (see KbService.rankServices); a service far below the best match is not named
+  score?: number;
+}
+// A service that scores below this share of the best match is a coincidence of one word ("Огляд терапевта" for "лікування"), not an answer
+const WEAK_SHARE = 0.3;
+
+const MONEY_FORMAT = new Intl.NumberFormat('uk-UA', { useGrouping: false });
+const UNCLEAR: Record<'uk' | 'ru', string> = {
+  uk: 'вартість потрібно уточнити в адміністратора',
+  ru: 'стоимость нужно уточнить у администратора',
+};
+const FREE_WORD: Record<'uk' | 'ru', string> = { uk: 'безкоштовно', ru: 'бесплатно' };
+
+// The model chooses services by id; the code checks that every id is one of the services found for THIS clinic for this answer, then writes the
+// lines itself: the exact title and the exact sum from the database (an unknown, conflicting or vanished price is never a number and never a zero).
+// The model words the introduction and the closing; the code adds the notice about a preliminary cost in the language of the dialogue.
+export function composePriceReply(parts: { intro: string; after: string | null; ids: unknown }, items: PriceItem[], lang: 'uk' | 'ru'): { reply: string; dropped: number } | { problem: string } {
+  const free = replyProblem(`${parts.intro}\n${parts.after ?? ''}`);
+  if (free) return { problem: free };
+  const ids = parts.ids === undefined || parts.ids === null ? [] : parts.ids;
+  if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string')) return { problem: 'bad_service_ids' };
+  const chosen: PriceItem[] = [];
+  for (const id of new Set((ids as string[]).map((x) => x.trim().replace(/^\[|\]$/g, '').toUpperCase()))) {
+    const ref = id.trim().replace(/^\[|\]$/g, '').toUpperCase();
+    const item = items.find((x) => x.ref === ref);
+    if (!item) return { problem: 'unknown_service_id' }; // a reference that is not in the list of this clinic for this answer (unknown or invented)
+    chosen.push(item);
+  }
+  // services that are only a coincidence of one word with the question are left out (the best match and everything close to it stay)
+  const top = Math.max(0, ...items.map((x) => x.score ?? 0));
+  const strong = top > 0 ? chosen.filter((x) => (x.score ?? 0) >= top * WEAK_SHARE) : [...chosen];
+  const dropped = chosen.length - strong.length;
+  chosen.length = 0;
+  chosen.push(...strong);
+  // the same title in two groups is told apart by the group
+  const dup = new Set(chosen.map((x) => x.title).filter((t, i, a) => a.indexOf(t) !== i));
+  const lines = chosen.map((x) => {
+    const name = dup.has(x.title) && x.category ? `${x.title} (${x.category})` : x.title;
+    if (x.state === 'FREE') return `- ${name}: ${FREE_WORD[lang]}`;
+    if (x.state === 'KNOWN' && x.amount !== null) return `- ${name}: ${MONEY_FORMAT.format(x.amount)} грн`;
+    return `- ${name}: ${UNCLEAR[lang]}`;
+  });
+  const priced = chosen.some((x) => x.state === 'KNOWN' || x.state === 'FREE');
+  const intro = stripNotice(parts.intro);
+  const after = parts.after ? stripNotice(parts.after) : '';
+  const block = lines.length ? `${lines.join('\n')}${priced ? `\n\n${PRICE_NOTICE[lang]}` : ''}` : '';
+  return { reply: [intro, block, after].filter((x) => x.trim()).join('\n\n'), dropped };
+}
 
 // The model is asked to return JSON; anything that does not parse is treated as a hand-over to a person
 export interface ModelOption {
@@ -140,18 +155,21 @@ export interface ModelReply {
   // The service the person wants, as they said it or as the clinic's reference names it
   service: string | null;
   options: ModelOption[];
+  // The services whose prices the answer gives: ids from the list of the clinic (the code writes the lines), and what follows the lines
+  prices: unknown;
+  after: string | null;
 }
 
 export function parseModelJson(raw: string): ModelReply | null {
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) return null;
   try {
-    const j = JSON.parse(m[0]) as { intent?: unknown; reply?: unknown; summary?: unknown; service?: unknown; options?: unknown };
+    const j = JSON.parse(m[0]) as { intent?: unknown; reply?: unknown; summary?: unknown; service?: unknown; options?: unknown; prices?: unknown; after?: unknown };
     if (typeof j.intent !== 'string' || typeof j.reply !== 'string' || !j.reply.trim()) return null;
     const options = Array.isArray(j.options)
       ? j.options.filter((o): o is ModelOption => !!o && typeof (o as ModelOption).date === 'string' && typeof (o as ModelOption).time === 'string').map((o) => ({ date: o.date, time: o.time, ...(typeof o.doctor === 'string' && o.doctor.trim() ? { doctor: o.doctor.trim() } : {}) }))
       : [];
-    return { intent: j.intent, reply: j.reply.trim().slice(0, 900), summary: typeof j.summary === 'string' && j.summary.trim() ? j.summary.trim().slice(0, 300) : null, service: typeof j.service === 'string' && j.service.trim() ? j.service.trim().slice(0, 80) : null, options };
+    return { intent: j.intent, reply: j.reply.trim().slice(0, 900), summary: typeof j.summary === 'string' && j.summary.trim() ? j.summary.trim().slice(0, 300) : null, service: typeof j.service === 'string' && j.service.trim() ? j.service.trim().slice(0, 80) : null, options, prices: j.prices, after: typeof j.after === 'string' && j.after.trim() ? j.after.trim().slice(0, 500) : null };
   } catch {
     return null;
   }
@@ -173,9 +191,9 @@ export const PRICE_NOTICE: Record<'uk' | 'ru', string> = {
   uk: 'Вартість попередня — точну суму та що входить у послугу уточнить адміністратор.',
   ru: 'Стоимость предварительная — точную сумму и что входит в услугу уточнит администратор.',
 };
-const NAMES_PRICE = /\d[\d\s]*(?:[.,]\d+)?\s*(грн|₴|uah|грив)|безкоштовн|бесплатн/i;
-const HAS_NOTICE = /(попередн|предварительн)/i;
-export function withPriceNotice(reply: string, lang: 'uk' | 'ru'): string {
-  if (!NAMES_PRICE.test(reply) || HAS_NOTICE.test(reply)) return reply;
-  return `${reply.trim()}\n\n${PRICE_NOTICE[lang]}`;
+// The notice the model wrote itself, in either language, up to "the administrator will clarify"
+const NOTICE_ANY = /(?:Вартість попередня|Попередня вартість|Стоимость предварительная|Предварительная стоимость)[^\n]*?(?:уточнить\s+адміністратор|уточнит\s+администратор)\w*\.?/gi;
+// Removes a notice about the preliminary cost that the model wrote itself (the code adds its own, in the right language)
+export function stripNotice(text: string): string {
+  return text.replace(NOTICE_ANY, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }

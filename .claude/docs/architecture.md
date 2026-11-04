@@ -70,7 +70,7 @@ Computed by code from the database, never by AI. A report returns `{title, rule,
 
 ## Clinic knowledge base
 - `KbItem` (services with duration and price, doctors, addresses, FAQ), edited by owner and manager at `/knowledge` (the administrator reads). Only approved and active entries reach the model (`KbService.factsFor`); a change of content removes the approval; a price is quoted only if confirmed within 90 days (`PRICE_FRESH_DAYS`). With a long price list (more than 40 services) only the services that match the patient's words are put into the prompt (at most 25) plus the list of directions, and only their prices may be quoted. Import from the Cliniccards price list (verified on 112 dental) decodes HTML entities, treats a price of 0 as not set, keeps the description and the group, and creates drafts only (its currency is unknown, so a person confirms each price).
-- Guardrails (`ai/guardrails.ts`): `incomingHandoff(text, pricesKnown)` and `replyViolates(reply, allowedAmounts)` - a reply may contain only the amounts of fresh approved prices.
+- Guardrails (`ai/guardrails.ts`): `incomingHandoff(text, pricesKnown)` and the model names services by id and the code writes every price line from the database (`composePriceReply`); the model's free text may carry no sum.
 
 ## Writing to Cliniccards
 - Off by default, three keys: server `CLINICCARDS_WRITE_ENABLED`, server `CLINICCARDS_WRITE_LIVE` (only for the real address) and the clinic flag `bookingWriteEnabled` (service owner, `/platform`). Never run against a real clinic until the manual verification stage.

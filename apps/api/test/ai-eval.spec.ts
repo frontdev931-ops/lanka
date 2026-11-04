@@ -104,6 +104,8 @@ run('ИИ-помощник на настоящей модели', () => {
         row('Видалення зуба складного', 'Хірургія', 2200, 5),
         row('Первинна консультація', 'Консультації', 0, 6, true),
         row('Відбілювання зубів', 'Естетика', null, 7),
+        row('Огляд терапевта', 'Консультації', 400, 8),
+        row('Огляд хірурга', 'Консультації', 400, 9),
         ...Array.from({ length: 200 }, (_, i) => row(`Допоміжна позиція ${i} матеріал`, 'Матеріали', 50 + i, 100 + i)),
       ],
     });
@@ -131,6 +133,7 @@ run('ИИ-помощник на настоящей модели', () => {
     await check('невідома ціна', 'Скільки коштує відбілювання?', (r, h) => (h ? 'передача' : /\d\s*грн/i.test(r) ? 'названо суму для невідомої ціни' : !/адміністратор/i.test(r) ? 'не сказано про уточнення в адміністратора' : /(передали|зв’яжеться|зв\'яжеться|передав)/i.test(r) ? 'обіцяє передачу, якої не було' : null));
     await check('безкоштовно', 'Скільки коштує первинна консультація?', (r, h) => (h ? 'передача' : /безкоштовн|0\s*грн/i.test(r) ? null : 'не сказано, що безкоштовно'));
     await check('кілька варіантів', 'Скільки коштує видалення зуба?', (r, h) => (h ? 'передача' : (r.includes('900') && r.includes('2200')) || r.includes('?') ? null : 'обрано один варіант без уточнення'));
+    await check('однакова ціна двох послуг', 'Скільки коштує огляд?', (r, h) => (h ? 'передача' : !/Огляд терапевта: 400 грн/.test(r) || !/Огляд хірурга: 400 грн/.test(r) ? 'немає обох рядків із 400' : null));
     await check('сума різних послуг', 'Скільки буде гігієна і лікування карієсу разом?', (r, h) => (h ? null : /3300/.test(r) ? 'складена сума' : null));
     await check('немає в прайсі', 'Скільки коштує квантовий масаж п’ят?', (r) => (/\d\s*грн/i.test(r) ? 'названо ціну неіснуючої послуги' : null));
     // the price changes in the price list: the new one is told, never the old one
@@ -186,13 +189,87 @@ run('ИИ-помощник на настоящей модели', () => {
     await turn('А що входить у цю вартість?', (r, d) => notHanded(d) ?? (/гі[гє]*[єі]?на[^\n]*Фторування/i.test(r) ? 'склад комплексної чистки перенесено на гігієну' : null));
     await turn('А скільки коштує поставити пломбу?', (r, d) => notHanded(d) ?? (has(r, 1100).length ? 'немає ціни пломби 1100' : null));
     await turn('Скільки коштує видалити зуб?', (r, d) => notHanded(d) ?? ((has(r, 900, 2200).length === 0) || r.includes('?') ? null : 'не названо обидва варіанти'));
-    await turn('Сколько стоит чистка зубов?', (r, d) => notHanded(d) ?? (has(r, ...nums(first)).length ? `ціни відрізняються від української відповіді: ${nums(first)} / ${nums(r)}` : !/предварительн/i.test(r) ? 'немає пояснення російською' : /[іїє]/.test(r) ? 'змішано мови' : null));
+    await turn('Сколько стоит чистка зубов?', (r, d) => notHanded(d) ?? (has(r, ...nums(first)).length ? `ціни відрізняються від української відповіді: ${nums(first)} / ${nums(r)}` : !/предварительн/i.test(r) ? 'немає пояснення російською' : /Вартість попередня|попередня/i.test(r) || /[іїє]/.test(r.replace(/[«"][^»"\n]*[»"]|(?:Ультразвукова чистка зубів|Професійна гігєна|Чистка зубів комплексна)[^\n:]*/g, '')) ? 'змішано мови (поза назвами послуг)' : null));
     await turn('Хочу записатися на чистку', (r, d) => notHanded(d) ?? (/Передали заявку/i.test(r) ? 'обіцяє заявку, якої немає' : !/(яка саме|какая именно|яку|яка з|оберіть|уточн)/i.test(r) ? 'не уточнено, яка з трьох послуг' : null));
     await turn('А де ви знаходитесь?', (r) => (/(не можемо|не можем|в цьому чаті|в этом чате)/i.test(r) ? 'вигадана заборона' : !/уточн/i.test(r) ? 'не сказано, що адресу треба уточнити' : null));
     process.stdout.write('\n' + lines.join('\n') + '\n');
     await prisma.kbItem.deleteMany({ where: { clinicId } });
     await prisma.chatMessage.deleteMany({ where: { clinicId, chatId } });
     await prisma.clinic.update({ where: { id: clinicId }, data: { scheduleMode: 'DOCTORS' } });
+    expect(bad).toEqual([]);
+  });
+
+  // The live failure of 2026-11-04 ~10:48: «сколько стоит пломба» was handed to the administrator, and «яка вартість пломби.» right after it, in the
+  // same dialogue, got four prices. The price list below has those four positions (no title contains "пломба"). The server log lines of the
+  // answer ("AI chat ...") are collected and printed with every reply, so the exact path of each message is visible.
+  it('діалог з живого тесту: «сколько стоит пломба» і «яка вартість пломби.»', async () => {
+    const { Logger } = await import('@nestjs/common');
+    const logs: string[] = [];
+    const spy = jest.spyOn(Logger.prototype, 'log').mockImplementation((m: unknown) => {
+      if (String(m).startsWith('AI chat') || String(m).startsWith('AI autoreply handed')) logs.push(String(m).replace(/\(clinic [^)]*\)/, ''));
+    });
+    const now = new Date();
+    const mk = (title: string, category: string, priceUah: number, i: number) => ({ clinicId, kind: 'SERVICE', title, category, priceUah, text: '', source: 'CLINICCARDS', externalId: `pl${i}`, externalPrice: priceUah, approvedAt: now, reviewedAt: now });
+    await prisma.kbItem.createMany({
+      data: [
+        mk('Карієс 1 ст', 'Терапія', 2500, 1),
+        mk('Карієс 2 ст', 'Терапія', 2700, 2),
+        mk('Карієс 3 ст', 'Терапія', 3000, 3),
+        mk('Відновлення за допомогою СВШ', 'Терапія', 3200, 4),
+        mk('Видалення зуба простого', 'Хірургія', 900, 5),
+        mk('Професійна гігієна', 'Профілактика', 1500, 6),
+        ...Array.from({ length: 200 }, (_, i) => mk(`Допоміжна позиція ${i} матеріал`, 'Матеріали', 50 + i, 100 + i)),
+      ],
+    });
+    await prisma.clinic.update({ where: { id: clinicId }, data: { priceListSyncedAt: now } });
+    const chatId = 'evfill';
+    const out: string[] = [];
+    // the raw answers of the model (synthetic data only), to see what the validator rejected
+    const aiSvc = app.get(AiService);
+    const origComplete = aiSvc.complete.bind(aiSvc);
+    const raw: string[] = [];
+    const allRaw: string[] = [];
+    jest.spyOn(aiSvc, 'complete').mockImplementation(async (...a: Parameters<AiService['complete']>) => {
+      const r = await origComplete(...a);
+      raw.push(r.text);
+      allRaw.push(r.text);
+      return r;
+    });
+    for (const text of ['сколько стоит пломба', 'яка вартість пломби.']) {
+      logs.length = 0;
+      raw.length = 0;
+      await prisma.chatMessage.create({ data: { clinicId, channel: 'INSTAGRAM', chatId, direction: 'IN', text } });
+      const d = await assistant.draft(clinicId, 'INSTAGRAM', chatId);
+      await prisma.chatMessage.create({ data: { clinicId, channel: 'INSTAGRAM', chatId, direction: 'OUT', text: d.reply, byAi: true } });
+      out.push(`«${text}»\n   логи: ${logs.join(' | ')}\n   сирі відповіді моделі: ${raw.join(' ||| ')}\n   → ${d.handoff ? `ПЕРЕДАЧА (${d.reason})` : d.intent}: ${d.reply}`);
+    }
+    spy.mockRestore();
+    jest.restoreAllMocks();
+    process.stdout.write('\n' + out.join('\n') + '\n');
+    // what must hold for BOTH messages (the Russian and the Ukrainian one)
+    const bad: string[] = [];
+    const replies = (await prisma.chatMessage.findMany({ where: { clinicId, chatId, direction: 'OUT' }, orderBy: { createdAt: 'asc' } })).map((m) => m.text);
+    const nums = (t: string) => [...new Set([...t.replace(/(\d)[\s\u00a0](?=\d{3})/g, '$1').matchAll(/(\d+)\s*грн/g)].map((m) => Number(m[1])))].sort((a, b) => a - b);
+    replies.forEach((r, i) => {
+      const tag = `відповідь ${i + 1}`;
+      if (/Передали ваш/.test(r)) bad.push(`${tag}: передача замість цін`);
+      if (nums(r).join() !== '2500,2700,3000,3200') bad.push(`${tag}: ціни ${nums(r)}`);
+      if (!/Відновлення за допомогою СВШ/.test(r)) bad.push(`${tag}: назву перекладено або змінено`);
+      if (/(яка саме|яку саме|яка з цих|яку з цих|какая именно|какую именно|какой из|какая из)[^.?\n]*(потрібн|нужн)/i.test(r) || /(оберіть|выберите|уточніть|уточните)[^.\n]*(стад|степен|ступін|послуг|услуг)/i.test(r)) bad.push(`${tag}: просить пацієнта обрати стадію чи послугу`);
+      if (!/(лікар|врач)/i.test(r)) bad.push(`${tag}: не сказано, що варіант визначить лікар після огляду`);
+      if (/Видалення зуба|гігієна/i.test(r)) bad.push(`${tag}: додано непов'язану послугу`);
+    });
+    if (replies.length !== 2) bad.push(`відповідей ${replies.length}`);
+    // the model wrote no sum itself and named only services of the list, by id
+    const refs = await app.get((await import('../src/kb/kb.service')).KbService).serviceRefs(clinicId);
+    const fillIds = (await prisma.kbItem.findMany({ where: { clinicId, title: { in: ['Карієс 1 ст', 'Карієс 2 ст', 'Карієс 3 ст', 'Відновлення за допомогою СВШ'] } }, select: { id: true } })).map((x) => refs.get(x.id)!);
+    for (const rawAnswer of allRaw) {
+      const j = JSON.parse(rawAnswer.match(/\{[\s\S]*\}/)![0]) as { reply: string; after?: string; prices?: string[] };
+      if (/(грн|₴|гривн|гривень)/i.test(`${j.reply} ${j.after ?? ''}`)) bad.push('модель написала суму у своєму тексті');
+      if (!Array.isArray(j.prices) || !j.prices.length || j.prices.some((id) => !fillIds.includes(String(id).toUpperCase()))) bad.push(`prices: ${JSON.stringify(j.prices)}`);
+    }
+    await prisma.kbItem.deleteMany({ where: { clinicId } });
+    await prisma.chatMessage.deleteMany({ where: { clinicId, chatId } });
     expect(bad).toEqual([]);
   });
 
