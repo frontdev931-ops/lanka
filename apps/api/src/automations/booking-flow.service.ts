@@ -1,6 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { BookingRequest, Prisma } from '@prisma/client';
-import { bookingWriteSupported } from '../ai/ai.service';
 import { ChatAssistantService, SlotOption } from '../ai/chat-assistant.service';
 import { languageOf } from '../ai/guardrails';
 import { AvailabilityService } from '../booking/availability.service';
@@ -23,6 +22,8 @@ const MAX_ASKS = 6;
 const NOTICE_STUCK_MS = 5 * 60_000;
 // A request still waiting for a name or a phone this long after its last change no longer holds the dialog
 const COLLECT_STALE_MS = 6 * 3_600_000;
+// A typed "yes" is taken as a repeat of a finished scenario for this long after the confirmation
+const REPEAT_WINDOW_MS = 3 * 86_400_000;
 const FREE_STATUSES = ['CANCELLED', 'MOVED', 'DID_NOT_COME'];
 
 export type Lang = 'uk' | 'ru';
@@ -74,6 +75,9 @@ export function singleNameWord(text: string): string | null {
 const YES = /^\s*(так|да|yes|ок|окей|добре|гаразд|підтверджую|подтверждаю|згоден|согласен|угу|ага|звичайно|конечно)(?![\p{L}])/iu;
 const NO = /^\s*(ні|нет|no|не\s+треба|не\s+надо|інший|другой|скасувати|отмена)(?![\p{L}])/iu;
 
+// The whole message is only a "yes" ("так", "Да!", "ок."): nothing else asked, nothing else said
+const BARE_YES = /^\s*(так|да|yes|ок|окей|добре|гаразд|підтверджую|подтверждаю|згоден|согласен|угу|ага|звичайно|конечно)[\s.!)]*$/iu;
+
 const T = {
   uk: {
     askAll: 'Щоб оформити запис, напишіть, будь ласка, прізвище, ім’я та номер телефону. Можна одним повідомленням, наприклад: «Прізвище Коваль, ім’я Ірина, телефон 0971234567».',
@@ -84,6 +88,7 @@ const T = {
     handedPlain: 'Дякуємо! Передали заявку адміністратору. Очікуйте підтвердження запису.',
     confirmAskCabinets: (service: string | null, date: string, time: string, address: string | null) => `Підтверджуєте запис${service ? ` на ${service}` : ''} ${date} о ${time}${address ? `, ${address}` : ''}? Конкретного лікаря призначає клініка. Натисніть кнопку або напишіть «так» чи «ні».`,
     clinicAssigns: 'Лікаря призначить клініка',
+    alreadyDone: 'Це повідомлення стосується запису, який уже оформлено, тому нового запису ми не створювали. Щоб записатися ще раз, напишіть про це, наприклад: «хочу записатися ще».',
     settingsChanged: 'Налаштування запису змінилися, тому попередній вибір більше не діє. Оберіть, будь ласка, час ще раз.',
     servicePaused: 'Цю послугу тимчасово не можна записати онлайн. Адміністратор зв’яжеться з вами.',
     confirmAsk: (service: string | null, date: string, time: string, doctor: string | null) => `Підтверджуєте запис${service ? ` на ${service}` : ''} ${date} о ${time}${doctor ? `, лікар ${doctor}` : ''}? Натисніть кнопку або напишіть «так» чи «ні».`,
@@ -110,6 +115,7 @@ const T = {
     handedPlain: 'Спасибо! Передали заявку администратору. Ожидайте подтверждения записи.',
     confirmAskCabinets: (service: string | null, date: string, time: string, address: string | null) => `Подтверждаете запись${service ? ` на ${service}` : ''} ${date} в ${time}${address ? `, ${address}` : ''}? Конкретного врача назначает клиника. Нажмите кнопку или напишите «да» или «нет».`,
     clinicAssigns: 'Врача назначит клиника',
+    alreadyDone: 'Это сообщение относится к записи, которая уже оформлена, поэтому новую запись мы не создавали. Чтобы записаться ещё раз, напишите об этом, например: «хочу записаться ещё».',
     settingsChanged: 'Настройки записи изменились, поэтому прежний выбор больше не действует. Выберите, пожалуйста, время ещё раз.',
     servicePaused: 'Эту услугу временно нельзя записать онлайн. Администратор свяжется с вами.',
     confirmAsk: (service: string | null, date: string, time: string, doctor: string | null) => `Подтверждаете запись${service ? ` на ${service}` : ''} ${date} в ${time}${doctor ? `, врач ${doctor}` : ''}? Нажмите кнопку или напишите «да» или «нет».`,
@@ -136,7 +142,8 @@ export function confirmationText(lang: Lang, p: { service: string | null; starts
   if (p.service) lines.push(`${x.service}: ${p.service}`);
   lines.push(`${x.date}: ${fmtDate(clinicDate(p.startsAt))}`, `${x.time}: ${clinicHm(p.startsAt)}`);
   if (p.doctor) lines.push(`${x.doctor}: ${p.doctor}`);
-  else if (p.doctorNote) lines.push(`${x.doctor}: ${p.doctorNote}`);
+  // booking by cabinets: the sentence stands alone ("Лікаря призначить клініка"), not as the value of a "Doctor:" field
+  else if (p.doctorNote) lines.push(p.doctorNote);
   lines.push(`${x.clinic}: ${p.clinic}`);
   if (p.address) lines.push(`${x.address}: ${p.address}`);
   return lines.join('\n');
@@ -164,7 +171,7 @@ export class BookingFlowService {
   ) {}
 
   private async lang(c: FlowCtx): Promise<Lang> {
-    const last = await this.prisma.chatMessage.findMany({ where: { clinicId: c.clinicId, channel: c.channel, chatId: c.chatId, direction: 'IN', NOT: { text: { startsWith: 'Обрав час:' } } }, orderBy: { createdAt: 'desc' }, take: 6, select: { text: true } });
+    const last = await this.prisma.chatMessage.findMany({ where: { clinicId: c.clinicId, channel: c.channel, chatId: c.chatId, direction: 'IN', NOT: [{ text: { startsWith: 'Обрав час:' } }, { text: { in: ['Так, підтверджую', 'Ні, інший час'] } }] }, orderBy: { createdAt: 'desc' }, take: 6, select: { text: true } });
     return languageOf(last.map((m) => m.text));
   }
 
@@ -245,10 +252,43 @@ export class BookingFlowService {
     await this.advance(c, row.id);
   }
 
+
+  // The scenario is finished (the bot booked the visit, or the request went to the administrator) and the person answers it again: a repeated "yes" typed
+  // or a button of the old confirmation. Nothing is started, booked, offered or sent again; one short neutral line says so. It does not claim that the earlier
+  // visit is still valid (it may have been cancelled or deleted in Cliniccards): only what the bot did not do now.
+  private async finishedRepeat(c: FlowCtx, text: string | null, requestId?: string | null): Promise<boolean> {
+    const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
+    // a request that is still being collected or waits for the answer owns the dialogue
+    if (open && open.stage !== 'READY') return false;
+    let last: { confirmedAt: Date | null; stage: string; updatedAt: Date; id: string } | null;
+    if (requestId) {
+      // the button of a request of this chat (never of another chat or clinic)
+      last = await this.prisma.bookingRequest.findFirst({ where: { id: requestId, clinicId: c.clinicId, channel: c.channel, chatId: c.chatId }, select: { id: true, confirmedAt: true, stage: true, updatedAt: true } });
+      if (!last || (!last.confirmedAt && last.stage !== 'READY')) return false;
+    } else {
+      if (text === null || !BARE_YES.test(text)) return false;
+      last = open ?? (await this.prisma.bookingRequest.findFirst({ where: { clinicId: c.clinicId, channel: c.channel, chatId: c.chatId, kind: { in: ['BOOKING', 'RESCHEDULE'] }, confirmedAt: { gt: new Date(Date.now() - REPEAT_WINDOW_MS) } }, orderBy: { confirmedAt: 'desc' }, select: { id: true, confirmedAt: true, stage: true, updatedAt: true } }));
+      if (!last) return false;
+      // Only while the finished scenario is the last thing in the dialogue: after any answer of the AI or of a person a "yes" belongs to that talk
+      const since = last.confirmedAt ?? last.updatedAt;
+      const later = await this.prisma.chatMessage.findFirst({ where: { clinicId: c.clinicId, channel: c.channel, chatId: c.chatId, direction: 'OUT', createdAt: { gt: since }, OR: [{ byAi: true }, { authorUserId: { not: null } }] }, select: { id: true } });
+      if (later) return false;
+    }
+    // a request that is only just closed (the first click is still being worked on) is absorbed without a word
+    if (!last.confirmedAt && Date.now() - last.updatedAt.getTime() < 60_000) return true;
+    const x = T[await this.lang(c)];
+    const lastOut = await this.prisma.chatMessage.findFirst({ where: { clinicId: c.clinicId, channel: c.channel, chatId: c.chatId, direction: 'OUT' }, orderBy: { createdAt: 'desc' }, select: { text: true } });
+    // the same line is not repeated to a person who taps again and again
+    if (lastOut?.text !== x.alreadyDone) await this.say(c, x.alreadyDone);
+    this.log.log(`Booking flow ignored a repeated answer of a finished scenario (clinic ${c.clinicId}, ${c.channel})`);
+    return true;
+  }
+
   // ---- 2. later messages while the data is being collected ----
 
   // Returns true only when the message was taken as an answer AND the bot replied to it (otherwise the message goes on to the AI, never into silence)
   async onText(c: FlowCtx, text: string): Promise<boolean> {
+    if (await this.finishedRepeat(c, text)) return true;
     const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
     // A named doctor with no separate schedule: the person says "any doctor" in words
     if (open?.doctorState === 'WISH_ASKED' && !text.includes('?') && /(будь-?який|любой|все одно|всё равно|без різниці|без разницы)/i.test(text)) return this.onDoctorAnswer(c, 'any', null);
@@ -356,7 +396,7 @@ export class BookingFlowService {
       await this.say(c, T[lang].handedPlain);
       return true;
     }
-    const dec = await this.choice.answer({ clinicId: c.clinicId, patientId: c.patientId, service, texts, lang, request: open }, kind, doctorId);
+    const dec = await this.choice.answer({ clinicId: c.clinicId, patientId: c.patientId, service, texts, lang, request: open, auto: await this.autoMode(c.clinicId, c) }, kind, doctorId);
     if (dec.kind === 'NONE') return true;
     await this.prisma.bookingRequest.update({ where: { id: open.id }, data: this.requests.patchData(dec.patch) });
     if (dec.patch.doctorId && dec.patch.doctorId !== open.doctorId) {
@@ -459,7 +499,7 @@ export class BookingFlowService {
   // The answer to the question above (a button or a typed "так"/"ні"). A repeated answer does nothing the second time.
   async onConfirmAnswer(c: FlowCtx, yes: boolean, requestId: string | null): Promise<boolean> {
     const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
-    if (!open || open.stage !== 'CONFIRM' || (requestId && open.id !== requestId)) return false;
+    if (!open || open.stage !== 'CONFIRM' || (requestId && open.id !== requestId)) return requestId ? this.finishedRepeat(c, null, requestId) : false;
     if (!yes) {
       const claim = await this.prisma.bookingRequest.updateMany({ where: { id: open.id, stage: 'CONFIRM' }, data: { stage: 'NONE', slotAt: null } });
       if (!claim.count) return true;
@@ -483,12 +523,8 @@ export class BookingFlowService {
   // ---- 4. the automatic mode ----
 
   // The mode is on only where the clinic asked for it AND writing is allowed at all (service-wide switch and the clinic's own switch)
-  private async autoMode(clinicId: string, chat: { channel: string; chatId: string }): Promise<boolean> {
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiAutoBooking: true } });
-    if (!c.aiAutoBooking || !bookingWriteSupported()) return false;
-    // the live-test restriction: a dialog that is not allowed stays in the mode of a request for the administrator
-    if (!this.gate.allowed(clinicId, chat)) return false;
-    return (await this.booking.status(clinicId)).enabled;
+  private autoMode(clinicId: string, chat: { channel: string; chatId: string }): Promise<boolean> {
+    return this.booking.autoModeFor(clinicId, chat);
   }
 
   private async handToAdmin(c: FlowCtx, id: string, note: string, code?: BookingBlock) {

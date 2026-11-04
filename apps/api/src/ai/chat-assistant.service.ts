@@ -226,7 +226,7 @@ export class ChatAssistantService {
           return { intent: 'info', reply: ask, handoff: false, reason: null, summary: null, service: null, options: [] };
         }
         if (svc) {
-          const dec = await this.choice.decide({ clinicId, patientId: linkedPatientId, service: svc, texts: patientTexts, lang, request: openRequest });
+          const dec = await this.choice.decide({ clinicId, patientId: linkedPatientId, service: svc, texts: patientTexts, lang, request: openRequest, auto: await this.choice.autoFor(clinicId, { channel, chatId }) });
           // the reason of every hand-over of a booking is in the log (a fixed text of the system, the id of the service)
           this.log.log(`AI chat route: booking, service ${svc.id}, decision ${dec.kind}${dec.kind === 'HANDOFF' ? `, reason: ${dec.note}` : ''} (clinic ${clinicId})`);
           if (dec.kind !== 'NONE') return draftFromDecision(dec, parsed.summary, svc.title);

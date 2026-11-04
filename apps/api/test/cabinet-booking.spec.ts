@@ -268,7 +268,8 @@ describe('розмова в режимі за кабінетами', () => {
     expect(String(w[0].body.note)).not.toMatch(/лікар\s+dental|до лікаря/i);
     const text = last().text;
     expect(text).toContain('Ваш запис підтверджено ✅');
-    expect(text).toContain('Лікар: Лікаря призначить клініка');
+    expect(text).toContain('\nЛікаря призначить клініка');
+    expect(text).not.toContain('Лікар:');
     expect(text).not.toMatch(/Шевченко|Андрій|503/);
     const done = await reqOf(c);
     expect(done).toMatchObject({ status: 'DONE', confirmedBy: 'AUTO', scheduleMode: 'CABINETS', confirmedDoctor: null, noticeStatus: 'SENT' });
@@ -683,3 +684,150 @@ describe('тимчасове обмеження автозапису одним 
   });
 });
 
+
+describe('текст перед вибором часу відповідає фактичному режиму діалогу', () => {
+  const OFFER_AUTO_UK = 'Оберіть зручний час. Після цього попросимо вас підтвердити запис.';
+  const OFFER_AUTO_RU = 'Выберите удобное время. После этого попросим вас подтвердить запись.';
+  afterEach(() => {
+    delete process.env.AUTOBOOKING_TEST_ONLY;
+    delete process.env.AUTOBOOKING_TEST_DIALOGS;
+  });
+
+  it('автозапис: «оберіть час, після цього попросимо підтвердити», без слів про адміністратора; лікаря призначає клініка; ru так само', async () => {
+    const c = await clinic({ auto: true });
+    await write(c, 'Хочу записатися на консультацію');
+    expect(last().text).toContain(OFFER_AUTO_UK);
+    expect(last().text).toContain('Лікаря призначить клініка');
+    expect(last().text).not.toMatch(/адміністратор/i);
+    const r = await clinic({ auto: true });
+    await write(r, 'Хочу записаться на консультацию');
+    expect(last().text).toContain(OFFER_AUTO_RU);
+    expect(last().text).toContain('Врача назначит клиника');
+    expect(last().text).not.toMatch(/администратор/i);
+  });
+
+  it('заявка адміністратору: пояснення, що запис підтверджує адміністратор, лишається (автозапис вимкнено в клініці, ключ запису вимкнено, діалог поза тестовим списком)', async () => {
+    const off = await clinic(); // aiAutoBooking is off
+    await write(off, 'Хочу записатися на консультацію');
+    expect(last().text).toContain('Запис підтверджує адміністратор');
+    expect(last().text).not.toContain('попросимо вас підтвердити');
+    const noKey = await clinic({ auto: true });
+    await prisma.clinic.update({ where: { id: noKey.clinicId }, data: { bookingWriteEnabled: false } });
+    await write(noKey, 'Хочу записаться на консультацию');
+    expect(last().text).toContain('Запись подтверждает администратор');
+    const gated = await clinic({ auto: true });
+    process.env.AUTOBOOKING_TEST_ONLY = 'true';
+    process.env.AUTOBOOKING_TEST_DIALOGS = `${gated.clinicId}|INSTAGRAM|someone-else`;
+    await write(gated, 'Хочу записатися на консультацію');
+    expect(last().text).toContain('Запис підтверджує адміністратор');
+    // the dialogue that is on the list gets the automatic text
+    process.env.AUTOBOOKING_TEST_DIALOGS = `${gated.clinicId}|INSTAGRAM|${gated.chat}`;
+    await write(gated, 'Хочу записатися на консультацію ще раз');
+    expect(last().text).toContain(OFFER_AUTO_UK);
+  });
+
+  it('підтвердження за кабінетами: просто «Лікаря призначить клініка» без поля «Лікар:» (uk і ru)', async () => {
+    for (const [lang, say, assigns, label] of [['uk', 'Хочу записатися на консультацію', 'Лікаря призначить клініка', 'Лікар:'], ['ru', 'Хочу записаться на консультацию', 'Врача назначит клиника', 'Врач:']] as const) {
+      const c = await clinic({ auto: true });
+      await link(c, lang === 'uk' ? 0 : 1); // another card for the second round: the same patient cannot hold two visits at one time
+      await write(c, say);
+      await write(c, '', slots(last())[0]);
+      await write(c, lang === 'uk' ? 'так' : 'да');
+      const text = sent.filter((m) => m.text.includes(lang === 'uk' ? 'Ваш запис підтверджено' : 'Ваша запись подтверждена')).pop()!.text;
+      expect(text).toContain(`\n${assigns}`);
+      expect(text).not.toContain(label);
+    }
+  });
+});
+
+describe('завершений сценарій: повторне «так» і повторна кнопка нічого не запускають', () => {
+  const visitWrites = () => mock.writes.filter((x) => x.path === '/visits' || x.path === '/patients');
+  const NO_PROMISE = /залишається чинним|досі дійсн|остаётся действительн|по-прежнему действ/i;
+
+  // the state of everything a repeat could touch
+  const snapshot = async (c: C) => ({
+    requests: await prisma.bookingRequest.count({ where: { clinicId: c.clinicId } }),
+    patients: await prisma.patient.count({ where: { clinicId: c.clinicId } }),
+    writes: visitWrites().length,
+    confirmations: sent.filter((m) => /Ваш запис підтверджено|Ваша запись подтверждена/.test(m.text)).length,
+    confirmationRows: await prisma.chatMessage.count({ where: { clinicId: c.clinicId, externalId: { startsWith: 'bookconfirm:' } } }),
+  });
+
+  for (const [lang, start, yes, again, done] of [
+    ['uk', 'Хочу записатися на консультацію', 'так', 'Хочу записатися ще на консультацію', 'вже оформлено'],
+    ['ru', 'Хочу записаться на консультацию', 'да', 'Хочу записаться ещё на консультацию', 'уже оформлена'],
+  ] as const) {
+    it(`автозапис (${lang}): повторне «${yes}» і старі кнопки не пропонують вікон, не створюють заявку, картку чи візит і не шлють підтвердження; нова запис починається за явним наміром`, async () => {
+      const c = await clinic({ auto: true });
+      await link(c);
+      await write(c, start);
+      await write(c, '', slots(last())[0]);
+      await write(c, yes);
+      const request = await reqOf(c);
+      expect(request).toMatchObject({ status: 'DONE', confirmedBy: 'AUTO' });
+      const before = await snapshot(c);
+      expect(before).toMatchObject({ writes: 1, confirmations: 1, confirmationRows: 1 });
+
+      // a repeated typed answer, twice, with a polite variation
+      for (const text of [yes, `${yes}!`, yes]) {
+        const n = sent.length;
+        await write(c, text);
+        expect(sent.slice(n).every((m) => slots(m).length === 0 && m.buttons.length === 0)).toBe(true); // no windows, no buttons
+        expect(sent.slice(n).map((m) => m.text).join(' ')).not.toMatch(NO_PROMISE);
+      }
+      expect(last().text).toMatch(lang === 'uk' ? /не створювали/ : /не создавали/);
+      // the repeated buttons of the old confirmation, both of them
+      await write(c, '', `bookyes|${request.id}`);
+      await write(c, '', `bookno|${request.id}`);
+      expect(sent.slice(-1)[0].buttons).toEqual([]);
+      expect(await snapshot(c)).toEqual(before);
+      // the line is not repeated to a person who keeps tapping
+      expect(sent.filter((m) => m.text.includes(done) || /не створювали|не создавали/.test(m.text))).toHaveLength(1);
+      // a button of ANOTHER chat's request never touches this one
+      const other = await clinic({ auto: true });
+      await write(other, '', `bookyes|${request.id}`);
+      expect(await snapshot(c)).toEqual(before);
+
+      // an explicit new intention starts a new booking: windows are offered, a new request appears only for it
+      await write(c, again);
+      expect(slots(last()).length).toBeGreaterThan(0);
+      expect(last().text).toContain(lang === 'uk' ? 'Після цього попросимо' : 'После этого попросим');
+      expect(await prisma.bookingRequest.count({ where: { clinicId: c.clinicId } })).toBe(2);
+      expect(visitWrites()).toHaveLength(1); // still the one visit: nothing is booked until the patient chooses and says yes
+    });
+
+    it(`заявка адміністратору (${lang}): повторне «${yes}» після передачі не пропонує вікон і не створює нічого нового; явне «ще» продовжує звичайним шляхом`, async () => {
+      const c = await clinic();
+      await write(c, start);
+      await write(c, '', slots(last())[0]);
+      await write(c, lang === 'uk' ? 'Прізвище Коваль, ім’я Ірина, телефон 0971234567' : 'Фамилия Ковалёв, имя Ирина, телефон 0971234567');
+      expect(await reqOf(c)).toMatchObject({ stage: 'READY', confirmedAt: null });
+      const before = await snapshot(c);
+      for (const text of [yes, `${yes}.`]) {
+        const n = sent.length;
+        await write(c, text);
+        expect(sent.slice(n).every((m) => slots(m).length === 0)).toBe(true);
+        expect(sent.slice(n).map((m) => m.text).join(' ')).not.toMatch(NO_PROMISE);
+      }
+      expect(await snapshot(c)).toEqual(before);
+      expect(mock.writes).toHaveLength(0);
+      // an explicit new intention is not blocked: the normal path offers times again
+      await write(c, again);
+      expect(slots(last()).length).toBeGreaterThan(0);
+    });
+  }
+
+  it('«так» як відповідь на нове питання не поглинається: після відповіді ШІ або людини повторне «так» належить тій розмові', async () => {
+    const c = await clinic({ auto: true });
+    await link(c);
+    await write(c, 'Хочу записатися на консультацію');
+    await write(c, '', slots(last())[0]);
+    await write(c, 'так');
+    // the AI answers a new question: from now a "так" is a part of that talk, not a repeat of the finished scenario
+    await write(c, 'Де ви знаходитесь?');
+    const aiAnswers = sent.length;
+    await write(c, 'так');
+    expect(sent.slice(aiAnswers).map((m) => m.text).join(' ')).not.toMatch(/не створювали/);
+    expect(visitWrites()).toHaveLength(1);
+  });
+});

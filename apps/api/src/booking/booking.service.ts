@@ -82,6 +82,15 @@ export class BookingService {
     return { enabled: c.bookingWriteEnabled && !!connector?.createVisit && process.env.CLINICCARDS_WRITE_ENABLED === 'true' && liveWriteAllowed() };
   }
 
+  // Will THIS dialogue be booked by the bot itself? All the keys at once: the clinic's setting aiAutoBooking, the server and clinic write flags
+  // (status), and the live-test restriction of dialogues. The same answer decides the text the patient reads before choosing a time.
+  async autoModeFor(clinicId: string, chat: DialogOrigin): Promise<boolean> {
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiAutoBooking: true } });
+    if (!c.aiAutoBooking || process.env.CLINICCARDS_WRITE_ENABLED !== 'true') return false;
+    if (!this.gate.allowed(clinicId, chat)) return false;
+    return (await this.status(clinicId)).enabled;
+  }
+
   private async connector(clinicId: string): Promise<ClinicConnector> {
     const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { bookingWriteEnabled: true } });
     if (!c.bookingWriteEnabled) throw new BadRequestException('booking_write_disabled');

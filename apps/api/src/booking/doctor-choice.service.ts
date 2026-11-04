@@ -4,6 +4,7 @@ import { clinicDate } from '../common/clinic-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { AvailabilityService } from './availability.service';
 import { BLOCK_TEXT, BookingBlock, CabinetBookingService } from './cabinet-booking.service';
+import { BookingService } from './booking.service';
 import { DoctorsService } from './doctors.service';
 
 export type Lang = 'uk' | 'ru';
@@ -45,6 +46,9 @@ export interface ChoiceContext {
   texts: string[];
   lang: Lang;
   request: BookingRequest | null;
+  // The dialogue will be booked by the bot itself after the patient's "yes" (see BookingService.autoModeFor): the text before the choice of a time says so
+  // instead of "the administrator confirms". Unset means a request for the administrator.
+  auto?: boolean;
 }
 
 const name = (d: Pick<Doctor, 'lastName' | 'firstName'>) => `${d.lastName} ${d.firstName}`.trim();
@@ -77,8 +81,8 @@ export const serves = (d: Pick<Doctor, 'serviceIds'>, service: Pick<KbItem, 'id'
 const T = {
   uk: {
     ambiguous: (names: string[]) => `Уточніть, будь ласка, до якого лікаря: ${names.join(' чи ')}?`,
-    offer: (n: string) => `Вільний час у лікаря ${n}. Оберіть, будь ласка, зручний кнопкою нижче. Запис підтверджує адміністратор.`,
-    offerMany: 'Найближчий вільний час. Оберіть, будь ласка, зручний кнопкою нижче. Запис підтверджує адміністратор.',
+    offer: (n: string, auto: boolean) => (auto ? `Вільний час у лікаря ${n}. Оберіть зручний час. Після цього попросимо вас підтвердити запис.` : `Вільний час у лікаря ${n}. Оберіть, будь ласка, зручний кнопкою нижче. Запис підтверджує адміністратор.`),
+    offerMany: (auto: boolean) => (auto ? 'Найближчий вільний час. Оберіть зручний час. Після цього попросимо вас підтвердити запис.' : 'Найближчий вільний час. Оберіть, будь ласка, зручний кнопкою нижче. Запис підтверджує адміністратор.'),
     continue: (n: string, service: string) => `Раніше цю послугу («${service}») вам надавав(ла) ${n}. Продовжимо в цього лікаря?`,
     primary: (n: string) => `Для першого запису пропонуємо лікаря ${n}. Підходить?`,
     noWindows: (n: string, alt: string) => `У лікаря ${n} найближчим часом немає вільного часу для цієї послуги. Можемо запропонувати лікаря ${alt}. Згодні?`,
@@ -93,7 +97,7 @@ const T = {
     handedDoctor: (n: string) => `Передали заявку адміністратору з побажанням: лікар ${n}. Він підбере час та напише вам. Запис ще не підтверджено.`,
     askWho: 'Гаразд. Напишіть, будь ласка, до якого лікаря ви хочете, або що вам усе одно.',
     other: 'Інший',
-    offerCabinets: 'Найближчий вільний час. Конкретного лікаря призначає клініка. Оберіть, будь ласка, зручний час кнопкою нижче. Запис підтверджує адміністратор.',
+    offerCabinets: (auto: boolean) => (auto ? 'Найближчий вільний час. Лікаря призначить клініка. Оберіть зручний час. Після цього попросимо вас підтвердити запис.' : 'Найближчий вільний час. Конкретного лікаря призначає клініка. Оберіть, будь ласка, зручний час кнопкою нижче. Запис підтверджує адміністратор.'),
     wishAsk: (n: string) => `Ви згадали лікаря ${n}. Окремого розкладу цього лікаря ми не бачимо, тому не можемо обіцяти запис саме до нього. Можемо записати вас на зручний час до будь-якого лікаря або передати ваше побажання адміністратору, який уточнить. Що обираєте?`,
     wishAny: 'Будь-який лікар',
     wishAdmin: 'Побажання адміністратору',
@@ -102,8 +106,8 @@ const T = {
   },
   ru: {
     ambiguous: (names: string[]) => `Уточните, пожалуйста, к какому врачу: ${names.join(' или ')}?`,
-    offer: (n: string) => `Свободное время у врача ${n}. Выберите, пожалуйста, удобное кнопкой ниже. Запись подтверждает администратор.`,
-    offerMany: 'Ближайшее свободное время. Выберите, пожалуйста, удобное кнопкой ниже. Запись подтверждает администратор.',
+    offer: (n: string, auto: boolean) => (auto ? `Свободное время у врача ${n}. Выберите удобное время. После этого попросим вас подтвердить запись.` : `Свободное время у врача ${n}. Выберите, пожалуйста, удобное кнопкой ниже. Запись подтверждает администратор.`),
+    offerMany: (auto: boolean) => (auto ? 'Ближайшее свободное время. Выберите удобное время. После этого попросим вас подтвердить запись.' : 'Ближайшее свободное время. Выберите, пожалуйста, удобное кнопкой ниже. Запись подтверждает администратор.'),
     continue: (n: string, service: string) => `Ранее эту услугу («${service}») вам оказывал(а) ${n}. Продолжим у этого врача?`,
     primary: (n: string) => `Для первой записи предлагаем врача ${n}. Подходит?`,
     noWindows: (n: string, alt: string) => `У врача ${n} в ближайшее время нет свободного времени для этой услуги. Можем предложить врача ${alt}. Согласны?`,
@@ -118,7 +122,7 @@ const T = {
     handedDoctor: (n: string) => `Передали заявку администратору с пожеланием: врач ${n}. Он подберёт время и напишет вам. Запись ещё не подтверждена.`,
     askWho: 'Хорошо. Напишите, пожалуйста, к какому врачу вы хотите, или что вам всё равно.',
     other: 'Другой',
-    offerCabinets: 'Ближайшее свободное время. Конкретного врача назначает клиника. Выберите, пожалуйста, удобное время кнопкой ниже. Запись подтверждает администратор.',
+    offerCabinets: (auto: boolean) => (auto ? 'Ближайшее свободное время. Врача назначит клиника. Выберите удобное время. После этого попросим вас подтвердить запись.' : 'Ближайшее свободное время. Конкретного врача назначает клиника. Выберите, пожалуйста, удобное время кнопкой ниже. Запись подтверждает администратор.'),
     wishAsk: (n: string) => `Вы упомянули врача ${n}. Отдельного расписания этого врача мы не видим, поэтому не можем обещать запись именно к нему. Можем записать вас на удобное время к любому врачу или передать ваше пожелание администратору, который уточнит. Что выбираете?`,
     wishAny: 'Любой врач',
     wishAdmin: 'Пожелание администратору',
@@ -140,7 +144,13 @@ export class DoctorChoiceService {
     private doctors: DoctorsService,
     private availability: AvailabilityService,
     private cabinets: CabinetBookingService,
+    private booking: BookingService,
   ) {}
+
+  // The actual mode of one dialogue (server flags, clinic settings, the live-test restriction)
+  autoFor(clinicId: string, chat: { channel: string; chatId: string }): Promise<boolean> {
+    return this.booking.autoModeFor(clinicId, chat);
+  }
 
   // The doctors of the clinic; read from Cliniccards when nothing is stored yet (at most once per ten minutes per clinic)
   async known(clinicId: string): Promise<Doctor[]> {
@@ -314,7 +324,7 @@ export class DoctorChoiceService {
     const patch: RequestPatch = { doctorId: d.externalId, doctor: name(d), doctorReason: reason, doctorState: 'AGREED', pendingDoctorId: null };
     const options = await this.offerOptions(c.clinicId, [d], minutes, c.lang);
     if (!options.length) return this.noWindows(c, d, reason);
-    return { kind: 'OFFER', reply: x.offer(name(d)), options, patch };
+    return { kind: 'OFFER', reply: x.offer(name(d), c.auto === true), options, patch };
   }
 
   // The settled doctor has no time: another date is not enough here (the list covers two weeks), so another doctor is proposed, or a person
@@ -364,7 +374,7 @@ export class DoctorChoiceService {
       if (reason === 'URGENT') {
         const urgent = docs.filter((d) => d.acceptsUrgent);
         const options = await this.offerOptions(c.clinicId, urgent, minutes, c.lang);
-        return options.length ? { kind: 'OFFER', reply: x.offerMany, options, patch: { doctorReason: 'URGENT', doctorState: 'AGREED', pendingDoctorId: null, urgent: true } } : this.handoff(c, { doctorReason: 'URGENT', urgent: true }, 'жоден лікар, що приймає термінові звернення, не має вільного часу');
+        return options.length ? { kind: 'OFFER', reply: x.offerMany(false), options, patch: { doctorReason: 'URGENT', doctorState: 'AGREED', pendingDoctorId: null, urgent: true } } : this.handoff(c, { doctorReason: 'URGENT', urgent: true }, 'жоден лікар, що приймає термінові звернення, не має вільного часу');
       }
       return this.offerOrHandoff(c, pending, reason ?? 'SERVICE_MATCH', minutes);
     }
@@ -375,7 +385,7 @@ export class DoctorChoiceService {
       // the person keeps the doctor they wanted: his times if he has any, otherwise a person takes the urgent request
       if (kept) {
         const options = await this.offerOptions(c.clinicId, [kept], minutes, c.lang);
-        if (options.length) return { kind: 'OFFER', reply: x.offer(name(kept)), options, patch: { doctorId: kept.externalId, doctor: name(kept), doctorReason: 'CLIENT_CHOICE', doctorState: 'AGREED', pendingDoctorId: null, urgent: true } };
+        if (options.length) return { kind: 'OFFER', reply: x.offer(name(kept), false), options, patch: { doctorId: kept.externalId, doctor: name(kept), doctorReason: 'CLIENT_CHOICE', doctorState: 'AGREED', pendingDoctorId: null, urgent: true } };
         return this.handoff(c, { doctorState: 'AGREED', pendingDoctorId: null, urgent: true }, 'клієнт відмовився від іншого лікаря', kept);
       }
       return this.handoff(c, { urgent: true, pendingDoctorId: null }, 'клієнт відмовився від іншого лікаря');
@@ -417,7 +427,7 @@ export class DoctorChoiceService {
     // the reason is found step by step (settings, then the schedule read from Cliniccards now): the administrator sees exactly which one
     const r = await this.cabinets.blockReason(c.clinicId, svc);
     if (r.code) return this.cabinetHandoff(c, patch, r.code, r.code === 'schedule_unreadable' ? x.handedNoSchedule : r.code === 'service_not_allowed' || r.code === 'no_length' ? x.handedService : undefined);
-    return { kind: 'OFFER', reply: x.offerCabinets, options: r.offers.map((o) => ({ label: this.label(o.date, o.time, c.lang), date: o.date, time: o.time })), patch: { scheduleMode: 'CABINETS', ...patch } };
+    return { kind: 'OFFER', reply: x.offerCabinets(c.auto === true), options: r.offers.map((o) => ({ label: this.label(o.date, o.time, c.lang), date: o.date, time: o.time })), patch: { scheduleMode: 'CABINETS', ...patch } };
   }
 
   private async decideCabinets(c: ChoiceContext, sharedId: string | null): Promise<Decision> {
@@ -455,7 +465,7 @@ export class DoctorChoiceService {
       try {
         const offers = await this.cabinets.offers(c.clinicId, { minutes: c.service?.durationMin ?? 30, service: c.service, urgent: true });
         if (!offers.length) return { kind: 'HANDOFF', reply: x.handed, patch, note: 'немає вільного часу в кабінетах для термінових звернень' };
-        return { kind: 'OFFER', reply: x.offerCabinets, options: offers.map((o) => ({ label: this.label(o.date, o.time, c.lang), date: o.date, time: o.time })), patch };
+        return { kind: 'OFFER', reply: x.offerCabinets(false), options: offers.map((o) => ({ label: this.label(o.date, o.time, c.lang), date: o.date, time: o.time })), patch };
       } catch {
         return { kind: 'HANDOFF', reply: x.handedNoSchedule, patch, note: 'не вдалося оновити розклад Cliniccards' };
       }
@@ -476,7 +486,7 @@ export class DoctorChoiceService {
       const other = urgentDocs.find((d) => d.externalId === options[0].doctorId)!;
       return this.ask({ ...c, service: c.service ?? ({} as KbItem) }, x.urgentOther(name(other)), other, patch);
     }
-    return { kind: 'OFFER', reply: x.offerMany, options, patch: { ...patch, doctorState: 'AGREED' } };
+    return { kind: 'OFFER', reply: x.offerMany(false), options, patch: { ...patch, doctorState: 'AGREED' } };
   }
 
   static today = () => clinicDate(new Date());
