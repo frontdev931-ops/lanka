@@ -1,6 +1,7 @@
 // Tests run on a separate database stomat_test (created once, see npm run test:prepare), the working database is not touched.
 // A small pool per test app: many spec files in one run must not exhaust the PostgreSQL connection limit
-process.env.DATABASE_URL = 'postgresql://stomat:stomat@localhost:5432/stomat_test?connection_limit=4';
+// TEST_DATABASE_NAME lets a run use another (for example a freshly created) database next to stomat_test
+process.env.DATABASE_URL = `postgresql://stomat:stomat@localhost:5432/${process.env.TEST_DATABASE_NAME ?? 'stomat_test'}?connection_limit=4`;
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.ENCRYPTION_KEY = 'test-encryption-key';
 process.env.AUTO_SYNC_MINUTES = '0';

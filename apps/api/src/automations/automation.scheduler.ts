@@ -5,6 +5,8 @@ import { InboundService } from './inbound.service';
 import { WaitlistService } from './waitlist.service';
 import { CustomAutomationsService } from './custom-automations.service';
 import { OutboxService } from './outbox.service';
+import { AgentApprovalService } from './agent-approval.service';
+import { AgentAutoService } from './agent-auto.service';
 import { PlannerService } from './planner.service';
 
 // Once a minute sends approved messages, once in five minutes fills the queue for the scenarios that are on.
@@ -24,6 +26,8 @@ export class AutomationScheduler implements OnApplicationBootstrap, OnModuleDest
     private inbound: InboundService,
     private waitlist: WaitlistService,
     private custom: CustomAutomationsService,
+    private drafts: AgentApprovalService,
+    private auto: AgentAutoService,
   ) {}
 
   onApplicationBootstrap() {
@@ -47,8 +51,10 @@ export class AutomationScheduler implements OnApplicationBootstrap, OnModuleDest
       }
       if (this.n % 5 === 1) await this.custom.planAll().catch((e) => this.log.warn(`Custom automations: ${(e as Error).message}`));
       if (this.n % 5 === 1) await this.waitlist.tickAll().catch((e) => this.log.warn(`Waitlist: ${(e as Error).message}`));
+      await this.auto.sweep().catch((e) => this.log.warn(`Agent sweep: ${(e as Error).message}`));
       await this.inbound.retryDue().catch((e) => this.log.warn(`Inbox: ${(e as Error).message}`));
       if (this.n % 60 === 1) await this.inbound.purge().catch((e) => this.log.warn(`Inbox purge: ${(e as Error).message}`));
+      if (this.n % 60 === 1) await this.drafts.purge().catch((e) => this.log.warn(`Agent drafts purge: ${(e as Error).message}`));
       await this.outbox.process();
       await this.digest.tick().catch((e) => this.log.warn(`Дайджест: ${(e as Error).message}`));
     } finally {

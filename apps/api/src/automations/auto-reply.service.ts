@@ -4,6 +4,7 @@ import { ChatAssistantService } from '../ai/chat-assistant.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { slotPayload } from './channels';
 import { RequestKind, RequestsService } from './requests.service';
+import { FunnelEventsService } from '../funnel-events/funnel-events.service';
 import { MessengerService, SendError } from './messenger.service';
 
 
@@ -19,6 +20,7 @@ export class AutoReplyService {
     private assistant: ChatAssistantService,
     private messenger: MessengerService,
     private requests: RequestsService,
+    private funnel: FunnelEventsService,
   ) {}
 
   private async handOffNoAllowance(clinicId: string, channel: string, chatId: string) {
@@ -51,10 +53,13 @@ export class AutoReplyService {
 
   async onInbound(clinicId: string, channel: string, chatId: string): Promise<boolean> {
     try {
-      const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiAutoReply: true, aiRepliesPerChatDay: true, sendingEnabled: true, suspendedAt: true, plan: true } });
+      const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiAgentMode: true, aiAutoReply: true, aiRepliesPerChatDay: true, sendingEnabled: true, suspendedAt: true, plan: true } });
       if (clinic.suspendedAt) return this.skip(clinicId, channel, 'clinic_suspended');
       if (!clinic.aiEnabled) return this.skip(clinicId, channel, 'ai_off');
       if (!clinic.aiAutoReply) return this.skip(clinicId, channel, 'autoreply_off');
+      // The agent's target mode for the pilot is DRAFTS ONLY: in a clinic with aiAgentMode the old AI does not answer by itself next to it. Manual replies of staff
+      // and every independent automation (reminders, scenarios) are not affected; a clinic with aiAgentMode off behaves as before.
+      if (clinic.aiAgentMode) return this.skip(clinicId, channel, 'agent_mode_drafts_only');
       if (!clinic.sendingEnabled) return this.skip(clinicId, channel, 'sending_off');
       if (!hasFeature(clinic.plan, 'ai_autoreply')) return this.skip(clinicId, channel, 'plan_without_autoreply');
       const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel, externalId: chatId }, select: { optedOutAt: true, patientId: true } });
@@ -73,9 +78,11 @@ export class AutoReplyService {
       if (kind) {
         const lastIn = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, select: { text: true, contactName: true } });
         const named = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, contactName: { not: null } }, orderBy: { createdAt: 'desc' }, select: { contactName: true } });
-        await this.requests.upsert(clinicId, { channel, chatId, patientId: ch?.patientId ?? null, contactName: named?.contactName ?? null, kind, summary: kind === 'HANDOFF' && !d.summary ? `Питання передано людині: «${(lastIn?.text ?? '').slice(0, 200)}»` : (d.summary ?? (lastIn?.text ?? '').slice(0, 200)), service: kind === 'BOOKING' ? d.service : null, patch: d.requestPatch },
+        const row = await this.requests.upsert(clinicId, { channel, chatId, patientId: ch?.patientId ?? null, contactName: named?.contactName ?? null, kind, summary: kind === 'HANDOFF' && !d.summary ? `Питання передано людині: «${(lastIn?.text ?? '').slice(0, 200)}»` : (d.summary ?? (lastIn?.text ?? '').slice(0, 200)), service: kind === 'BOOKING' ? d.service : null, patch: d.requestPatch },
           // an urgent request is announced to the staff even when an open request of this chat already exists
           !!d.summary?.startsWith('ТЕРМІНОВО'));
+        // A request for a person now exists (a hand-over, a reschedule, a cancellation). A booking request is not one yet: the bot keeps collecting it.
+        if (kind !== 'BOOKING') await this.funnel.record(clinicId, { channel, chatId, kind: 'HANDED_OFF', refKey: row.id, reason: d.handoff ? (d.reason ?? 'handoff') : kind.toLowerCase(), linked: !!ch?.patientId });
       }
       try {
         await this.messenger.send(clinicId, channel, chatId, d.reply, d.options);
@@ -84,6 +91,9 @@ export class AutoReplyService {
         return this.skip(clinicId, channel, `send_failed_${e instanceof SendError ? e.reason : 'error'}`);
       }
       await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, direction: 'OUT', text: d.reply, byAi: true, ...(d.options.length ? { buttons: d.options.map((o) => ({ label: o.label, payload: slotPayload(o) })) } : {}) } });
+      // Times were really shown to the client (the message went out); a draft that nobody sent never gets here
+      // The message went out (a failed or unknown send never gets here). The key is stable under a repeated run of the handler.
+      if (d.options.some((o) => o.date && o.time)) await this.funnel.record(clinicId, { channel, chatId, kind: 'TIME_OFFERED', refKey: await this.funnel.offerKey(clinicId, channel, chatId, d.options), linked: !!ch?.patientId });
       return true;
     } catch (e) {
       // The reply allowance is used up: the conversation goes to a person, who sees a request (no debt, nothing is lost)

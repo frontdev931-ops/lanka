@@ -835,20 +835,37 @@ describe('дайджест руководителю в Telegram', () => {
 
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'OFF' }).expect(200);
     tg.sent.length = 0;
-    await digest.tick(at('10:00'));
+    await digest.tick(at('10:00'), { clinicId: c.clinicId });
     expect(tg.sent).toHaveLength(0);
 
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 9, weekday: weekday === 7 ? 1 : weekday + 1 }).expect(200);
-    await digest.tick(at('10:00'));
+    await digest.tick(at('10:00'), { clinicId: c.clinicId });
     expect(tg.sent).toHaveLength(0); // not the right weekday
 
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 9, weekday }).expect(200);
-    await digest.tick(at('08:00'));
+    await digest.tick(at('08:00'), { clinicId: c.clinicId });
     expect(tg.sent).toHaveLength(0); // too early
-    await digest.tick(at('10:00'));
+    await digest.tick(at('10:00'), { clinicId: c.clinicId });
     expect(tg.sent).toHaveLength(1);
-    await digest.tick(at('10:05'));
+    await digest.tick(at('10:05'), { clinicId: c.clinicId });
     expect(tg.sent).toHaveLength(1); // already sent today
+  });
+
+  it('цикл розсилки з областю одної клініки не чіпає чужі: інша клініка, якій дайджест належить цього дня, лишається неторканою', async () => {
+    const mine = await ready();
+    const other = await ready();
+    await bind(mine.token, mine.clinicId);
+    await bind(other.token, other.clinicId);
+    const digest = (app as INestApplication).get((await import('../src/automations/digest.service')).DigestService);
+    const weekday = new Date(`${clinicDate(new Date())}T00:00:00Z`).getUTCDay() || 7;
+    for (const c of [mine, other]) {
+      await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 9, weekday }).expect(200);
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { sendingEnabled: false, lastDigestAt: new Date(Date.now() - 8 * 86_400_000) } }); // due again, as every week
+    }
+    tg.sent.length = 0;
+    await digest.tick(localToUtc(`${clinicDate(new Date())} 10:00:00`), { clinicId: mine.clinicId });
+    expect(tg.sent).toHaveLength(1);
+    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: other.clinicId } })).lastDigestAt!.getTime()).toBeLessThan(Date.now() - 7 * 86_400_000);
   });
 });
 

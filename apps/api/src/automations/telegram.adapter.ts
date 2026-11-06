@@ -21,7 +21,7 @@ export class TelegramAdapter implements ChannelAdapter {
     try {
       await this.api.sendMessage(decrypt(i.apiKeyEnc), chatId, text, options.length ? { reply_markup: { inline_keyboard: options.map((o) => [{ text: o.label, callback_data: slotPayload(o) }]) } } : undefined);
     } catch (e) {
-      if (e instanceof TelegramError) throw new SendError(e.message, e.code === 403);
+      if (e instanceof TelegramError) throw new SendError(e.message, e.code === 403, 'failed', e.code === undefined || e.code >= 500);
       throw e;
     }
   }

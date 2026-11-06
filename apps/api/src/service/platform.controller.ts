@@ -1,5 +1,5 @@
-import { Body, Controller, ForbiddenException, Get, NotFoundException, Param, Patch, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsDateString, IsIn, IsInt, IsObject, IsOptional, Max, Min } from 'class-validator';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, Patch, UseGuards } from '@nestjs/common';
+import { IsBoolean, IsDateString, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
 import { AuthGuard, AuthUser, CurrentUser } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLAN_KEYS, PLANS, effectiveLimits, monthStart } from './plans';
@@ -24,6 +24,12 @@ class ClinicPatchDto {
   @IsOptional() @IsInt() @Min(0) @Max(1_000_000) aiPurchased?: number;
   // Writing appointments and patients to the clinic's system (also needs the server settings)
   @IsOptional() @IsBoolean() bookingWriteEnabled?: boolean;
+  // Foundation of the AI administrator-agent: collection of funnel events (the only switch of it) and the reserved agent switch; both off by default
+  @IsOptional() @IsBoolean() funnelEventsEnabled?: boolean;
+  @IsOptional() @IsBoolean() aiAgentMode?: boolean;
+  // The agent's limited AUTONOMOUS mode (off by default, also needs the server list AGENT_AUTO_DIALOGS) and the one service it may offer
+  @IsOptional() @IsBoolean() aiAgentAuto?: boolean;
+  @IsOptional() @IsString() agentAutoServiceId?: string | null;
 }
 
 @Controller('platform')
@@ -90,6 +96,8 @@ export class PlatformController {
     const limits: Record<string, number> | undefined = dto.limits
       ? Object.fromEntries(['users', 'messagesPerMonth', 'aiRepliesPerMonth'].filter((k) => Number.isInteger(dto.limits![k]) && (dto.limits![k] as number) >= 0).map((k) => [k, dto.limits![k] as number]))
       : undefined;
+    // the one test service must be an approved service of THIS clinic
+    if (dto.agentAutoServiceId && !(await this.prisma.kbItem.findFirst({ where: { id: dto.agentAutoServiceId, clinicId: id, kind: 'SERVICE', active: true, approvedAt: { not: null } }, select: { id: true } }))) throw new BadRequestException('service_not_found');
     const data = {
       ...(dto.plan ? { plan: dto.plan, aiMonthlyLimit: dto.aiMonthlyLimit ?? PLANS[dto.plan].limits.aiRepliesPerMonth } : dto.aiMonthlyLimit !== undefined ? { aiMonthlyLimit: dto.aiMonthlyLimit } : {}),
       ...(limits ? { limitOverrides: limits } : {}),
@@ -97,11 +105,15 @@ export class PlatformController {
       ...(dto.paidUntil ? { paidUntil: new Date(dto.paidUntil) } : {}),
       ...(dto.aiPurchased !== undefined ? { aiPurchased: dto.aiPurchased } : {}),
       ...(dto.bookingWriteEnabled !== undefined ? { bookingWriteEnabled: dto.bookingWriteEnabled } : {}),
+      ...(dto.funnelEventsEnabled !== undefined ? { funnelEventsEnabled: dto.funnelEventsEnabled } : {}),
+      ...(dto.aiAgentMode !== undefined ? { aiAgentMode: dto.aiAgentMode } : {}),
+      ...(dto.aiAgentAuto !== undefined ? { aiAgentAuto: dto.aiAgentAuto } : {}),
+      ...(dto.agentAutoServiceId !== undefined ? { agentAutoServiceId: dto.agentAutoServiceId || null } : {}),
       ...(dto.suspended !== undefined ? { suspendedAt: dto.suspended ? new Date() : null } : {}),
     };
     await this.prisma.clinic.update({ where: { id }, data });
     // The change is written to the clinic's own audit log, with the platform admin as the actor
-    await this.prisma.auditLog.create({ data: { clinicId: id, userId: u.userId, action: 'platform.clinic_changed', details: JSON.parse(JSON.stringify({ plan: dto.plan, suspended: dto.suspended, limits, billingStatus: dto.billingStatus, paidUntil: dto.paidUntil, aiPurchased: dto.aiPurchased, bookingWriteEnabled: dto.bookingWriteEnabled })) } });
+    await this.prisma.auditLog.create({ data: { clinicId: id, userId: u.userId, action: 'platform.clinic_changed', details: JSON.parse(JSON.stringify({ plan: dto.plan, suspended: dto.suspended, limits, billingStatus: dto.billingStatus, paidUntil: dto.paidUntil, aiPurchased: dto.aiPurchased, bookingWriteEnabled: dto.bookingWriteEnabled, funnelEventsEnabled: dto.funnelEventsEnabled, aiAgentMode: dto.aiAgentMode, aiAgentAuto: dto.aiAgentAuto, agentAutoServiceId: dto.agentAutoServiceId })) } });
     return { ok: true };
   }
 }

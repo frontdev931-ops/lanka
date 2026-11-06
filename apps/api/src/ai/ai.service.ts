@@ -2,6 +2,7 @@ import { autoBookingTestStatus } from '../booking/auto-booking-gate';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { hasFeature, periodStart } from '../service/plans';
+import { Contacts, NO_CONTACTS, maskText } from './contact-mask';
 import { LlmClient, LlmError, LlmResult } from './llm.client';
 
 // The AI may book on its own only where writing to the clinic's system is switched on at all: the service-wide switch
@@ -16,7 +17,7 @@ export class AiService {
   ) {}
 
   async status(clinicId: string) {
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiMonthlyLimit: true, aiAutoBooking: true, aiAutoReply: true, aiRepliesPerChatDay: true, aiPauseMinutes: true, sendingEnabled: true, aiAssistantEnabled: true, aiPurchased: true, periodStartsAt: true } });
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiAgentMode: true, aiMonthlyLimit: true, aiAutoBooking: true, aiAutoReply: true, aiRepliesPerChatDay: true, aiPauseMinutes: true, sendingEnabled: true, aiAssistantEnabled: true, aiPurchased: true, periodStartsAt: true } });
     // Only billable replies count; retries of one request are free
     const since = { clinicId, ok: true, billable: true, createdAt: { gte: periodStart(c) } };
     const [used, tokens] = await Promise.all([this.prisma.aiUsage.count({ where: since }), this.prisma.aiUsage.aggregate({ where: since, _sum: { inputTokens: true, outputTokens: true } })]);
@@ -26,6 +27,9 @@ export class AiService {
       monthlyLimit: c.aiMonthlyLimit,
       autoBooking: c.aiAutoBooking,
       autoReply: c.aiAutoReply,
+      // the agent's drafts-only rule: with aiAgentMode on the automatic reply above is held back (it does not answer by itself)
+      agentMode: c.aiAgentMode,
+      autoReplyHeldByAgent: c.aiAgentMode && c.aiAutoReply,
       repliesPerChatDay: c.aiRepliesPerChatDay,
       pauseMinutes: c.aiPauseMinutes,
       assistant: c.aiAssistantEnabled,
@@ -57,7 +61,7 @@ export class AiService {
   }
 
   // The only place that calls the AI. Checks that the AI is on and the monthly limit is not used up, records the usage (without the text).
-  async complete(clinicId: string, kind: string, system: string, messages: { role: 'user' | 'assistant'; content: string }[], maxTokens?: number, scope: 'chat' | 'assistant' = 'chat', billable = true): Promise<LlmResult> {
+  async complete(clinicId: string, kind: string, system: string, messages: { role: 'user' | 'assistant'; content: string }[], maxTokens?: number, scope: 'chat' | 'assistant' = 'chat', billable = true, opts: { schema?: Record<string, unknown>; contacts?: Contacts } = {}): Promise<LlmResult> {
     const st = await this.status(clinicId);
     // chat: replies to patients and drafts; assistant: the manager's assistant (each has its own switch)
     if (!st.available || !(scope === 'assistant' ? st.assistant : st.enabled)) throw new BadRequestException('ai_disabled');
@@ -71,7 +75,10 @@ export class AiService {
     const overIncluded = st.used >= st.monthlyLimit;
     if (billable && overIncluded && st.purchased <= 0) throw new BadRequestException('ai_limit');
     try {
-      const r = await this.llm.complete(system, messages, maxTokens);
+      // A COPY is cleaned before it leaves (the chat itself is not changed): every recognisable phone in the messages, the known names in the messages, and the known phones also in the system text (names are NOT masked there: a stem of a patient's name can be a common word of the clinic's own facts, for example a doctor's title); see contact-mask.ts. The retry after a
+      // refused answer goes through here too, so its text is cleaned the same way.
+      const contacts = opts.contacts ?? NO_CONTACTS;
+      const r = await this.llm.complete(maskText(system, { names: [], phones: contacts.phones }, false), messages.map((m) => ({ ...m, content: maskText(m.content, contacts) })), maxTokens, opts.schema ? { schema: opts.schema } : {});
       await this.prisma.aiUsage.create({ data: { clinicId, kind, ok: true, billable, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
       if (billable && overIncluded) await this.prisma.clinic.updateMany({ where: { id: clinicId, aiPurchased: { gt: 0 } }, data: { aiPurchased: { decrement: 1 } } });
       return r;

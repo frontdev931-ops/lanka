@@ -1,3 +1,4 @@
+import { contactsOf, scrubMessages } from './contact-mask';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { BookingRequest } from '@prisma/client';
 import { ReportsService } from '../reports/reports.service';
@@ -161,13 +162,15 @@ export class ChatAssistantService {
       return handoff(topic, lang);
     }
 
-    // For the model: alternating turns, starting with the patient. The patient's name and phone are never passed out.
+    // For the model: alternating turns, starting with the patient, of a CLEANED COPY of the dialogue (the phones and the contacts known for this chat are masked, the
+    // messages that only collect the contacts become a neutral note: see contact-mask.ts for what it covers and what it does not)
+    const contacts = await contactsOf(this.prisma, clinicId, channel, chatId);
+    const clean = scrubMessages(msgs.map((m) => ({ role: (m.direction === 'IN' ? 'user' : 'assistant') as 'user' | 'assistant', content: m.text })), contacts);
     const turns: { role: 'user' | 'assistant'; content: string }[] = [];
-    for (const m of msgs) {
-      const role = m.direction === 'IN' ? 'user' : 'assistant';
-      if (!turns.length && role === 'assistant') continue;
-      if (turns.length && turns[turns.length - 1].role === role) turns[turns.length - 1].content += `\n${m.text}`;
-      else turns.push({ role, content: m.text });
+    for (const m of clean) {
+      if (!turns.length && m.role === 'assistant') continue;
+      if (turns.length && turns[turns.length - 1].role === m.role) turns[turns.length - 1].content += `\n${m.content}`;
+      else turns.push({ role: m.role, content: m.content });
     }
 
     const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { name: true, workHours: true, publicAddress: true, publicPhone: true, publicDirections: true } });
@@ -194,7 +197,7 @@ export class ChatAssistantService {
     // The language is also said in the last turn, where it weighs most (the long prompt and the history in another language pull the model away from it)
     const modelTurns = turns.map((t, i) => (i === turns.length - 1 && t.role === 'user' ? { ...t, content: `${t.content}\n\n[Мова відповіді: ${lang === 'ru' ? 'російська' : 'українська'}]` } : t));
     const attempt = async (reminder: string, billable: boolean): Promise<Draft | HandoffReason> => {
-      const r = await this.ai.complete(clinicId, 'chat_draft', SYSTEM(clinic.name, hours, slotText, todayText(), facts, kbFacts, contactsLine) + `\n\nМОВА ВІДПОВІДІ (reply і after): ${lang === 'ru' ? 'російська' : 'українська'}, навіть якщо довідка українською. Лише самі назви послуг код виводить із довідки.` + reminder, modelTurns, 1500, 'chat', billable);
+      const r = await this.ai.complete(clinicId, 'chat_draft', SYSTEM(clinic.name, hours, slotText, todayText(), facts, kbFacts, contactsLine) + `\n\nМОВА ВІДПОВІДІ (reply і after): ${lang === 'ru' ? 'російська' : 'українська'}, навіть якщо довідка українською. Лише самі назви послуг код виводить із довідки.` + reminder, modelTurns, 1500, 'chat', billable, { contacts });
       const parsed = parseModelJson(r.text);
       if (!parsed) return 'model';
       if (parsed.intent === 'handoff') {

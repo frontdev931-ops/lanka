@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AgentAutoService } from './agent-auto.service';
 import { AutoReplyService } from './auto-reply.service';
 import { MessengerService, SendError } from './messenger.service';
 
@@ -11,6 +12,7 @@ export class ChatService {
     private prisma: PrismaService,
     private messenger: MessengerService,
     private autoReply: AutoReplyService,
+    private auto: AgentAutoService,
   ) {}
 
   // List of dialogues: by the last message of each chat, newest first; unread ones are counted separately
@@ -59,6 +61,8 @@ export class ChatService {
       optedOut: !!ch?.optedOutAt,
       // The AI is silent in this chat until this moment because a person answered; staff can give the dialog back to the bot
       botPausedUntil: (await this.autoReply.pausedUntil(clinicId, channel, chatId))?.toISOString() ?? null,
+      // the agent's autonomous mode: the dialogue is a person's until they give it back
+      agentOwnerHuman: (await this.prisma.conversationState.findUnique({ where: { clinicId_channel_chatId: { clinicId, channel, chatId } }, select: { owner: true } }))?.owner === 'HUMAN',
       messages: messages
         .reverse()
         .map((m) => ({ id: m.id, direction: m.direction, text: m.text, createdAt: m.createdAt, error: m.error, system: m.direction === 'OUT' && !m.authorUserId && !m.byAi, byAi: m.byAi })),
@@ -68,7 +72,7 @@ export class ChatService {
   // A staff reply. It goes out only while the master switch is on and only to a chat that has not opted out.
   async reply(clinicId: string, userId: string, channel: string, chatId: string, text: string) {
     if (!CHANNELS.includes(channel)) throw new BadRequestException('bad_channel');
-    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { sendingEnabled: true } });
+    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { sendingEnabled: true, aiAgentAuto: true } });
     if (!clinic.sendingEnabled) throw new BadRequestException('sending_disabled');
     const known = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId }, select: { id: true } });
     if (!known) throw new NotFoundException('conversation_not_found');
@@ -85,6 +89,8 @@ export class ChatService {
       throw new BadRequestException('send_failed');
     }
     await this.prisma.chatMessage.create({ data: base });
+    // A person answered: with the agent's autonomous mode on, the dialogue is theirs until they give it back explicitly (resume), not only for a while
+    if (clinic.aiAgentAuto) await this.prisma.conversationState.upsert({ where: { clinicId_channel_chatId: { clinicId, channel, chatId } }, create: { clinicId, channel, chatId, owner: 'HUMAN' }, update: { owner: 'HUMAN' } });
     return { ok: true };
   }
 
@@ -92,7 +98,11 @@ export class ChatService {
   async resumeBot(clinicId: string, channel: string, chatId: string) {
     const known = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId }, select: { id: true } });
     if (!known) throw new NotFoundException('conversation_not_found');
-    return this.autoReply.resume(clinicId, channel, chatId);
+    const r = await this.autoReply.resume(clinicId, channel, chatId);
+    // The dialogue goes back to the agent explicitly; a message nobody handled meanwhile is looked at now
+    await this.prisma.conversationState.updateMany({ where: { clinicId, channel, chatId }, data: { owner: 'BOT' } });
+    await this.auto.onInbound(clinicId, channel, chatId);
+    return r;
   }
 
   // Link an unknown chat to a patient card by hand (when the number did not match)

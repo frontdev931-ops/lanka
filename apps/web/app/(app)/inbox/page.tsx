@@ -8,6 +8,12 @@ import { fmtDateTime } from '../../../lib/ui';
 import { Alert, Badge, Card, Empty, Loading, PageHeader } from '../../../components/ui';
 import { BookingForm } from '../../../components/BookingForm';
 import { RequestConfirm } from '../../../components/RequestConfirm';
+import { AgentDraftPanel, AgentDraftView, Choice, Note, TKey } from '../../../components/AgentDraftPanel';
+
+// How a channel is named to staff; Telegram is the default one and has no badge in the list
+const CHANNEL_NAME: Record<string, string> = { TELEGRAM: 'Telegram', INSTAGRAM: 'Instagram', MESSENGER: 'Messenger', WHATSAPP: 'WhatsApp', VIBER: 'Viber', WEB: 'Web' };
+// Channels where an answer is allowed only within 24 hours after the person's last message
+const WINDOW_CHANNELS = new Set(['INSTAGRAM', 'MESSENGER', 'WHATSAPP']);
 
 interface Conv {
   channel: string;
@@ -27,6 +33,7 @@ interface Thread {
   optedOut: boolean;
   replyWindowOpen: boolean;
   botPausedUntil: string | null;
+  agentOwnerHuman?: boolean;
   dialogKey?: string;
   messages: { id: string; direction: 'IN' | 'OUT'; text: string; createdAt: string; error: string | null; system: boolean; byAi: boolean }[];
 }
@@ -78,6 +85,11 @@ export default function InboxPage() {
   const [search, setSearch] = useState('');
   const [found, setFound] = useState<PatientRow[]>([]);
   const [draftInfo, setDraftInfo] = useState<Draft | null>(null);
+  // the agent's draft kept on the server for review (only in a clinic with the agent switched on)
+  const [agentDraft, setAgentDraft] = useState<AgentDraftView | null>(null);
+  const [agentNote, setAgentNote] = useState<Note>(null);
+  // the request whose confirmation message was not delivered (the visit exists): the existing safe retry
+  const [noticeRetry, setNoticeRetry] = useState<string | null>(null);
   const [tab, setTab] = useState<'chats' | 'requests'>('chats');
   const [reqStatus, setReqStatus] = useState<'NEW' | 'DONE'>('NEW');
   const [reqs, setReqs] = useState<{ newCount: number; rows: Req[] } | null>(null);
@@ -184,9 +196,145 @@ export default function InboxPage() {
     setBusy(true);
     setError('');
     try {
-      const d = await api<Draft>(`/conversations/${open.channel}/${open.chatId}/draft`, { method: 'POST' });
-      setDraftInfo(d);
-      setText(d.reply);
+      const d = await api<Draft & Partial<AgentDraftView> & { agent?: boolean }>(`/conversations/${open.channel}/${open.chatId}/draft`, { method: 'POST' });
+      if (d.agent) {
+        // the agent's draft: shown for review, nothing is put into the reply field and nothing is sent
+        setAgentDraft(d as AgentDraftView);
+        setAgentNote(null);
+        setDraftInfo(null);
+      } else {
+        setDraftInfo(d);
+        setText(d.reply);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // restore a waiting draft of this chat (and its freshness) when the dialogue is opened or refreshed
+  const loadAgent = useCallback(async () => {
+    if (!open) return;
+    try {
+      const r = await api<{ draft: AgentDraftView | null }>(`/agent-drafts/latest?channel=${encodeURIComponent(open.channel)}&chatId=${encodeURIComponent(open.chatId)}`);
+      setAgentDraft(r.draft);
+    } catch {
+      setAgentDraft(null);
+    }
+  }, [open]);
+  useEffect(() => {
+    setAgentNote(null);
+    void loadAgent();
+    const id = setInterval(loadAgent, 12000);
+    return () => clearInterval(id);
+  }, [loadAgent]);
+
+  const approveAgent = async (choice: Choice) => {
+    if (!open || !agentDraft) return;
+    setBusy(true);
+    setAgentNote(null);
+    try {
+      const r = await api<{ ok: boolean; outcome: 'SENT' | 'FAILED' | 'UNKNOWN' | 'REFUSED'; code?: string; booking?: { visit: string | null; notice: string | null; requestId: string | null }; draft: AgentDraftView | null }>(`/agent-drafts/${agentDraft.id}/approve`, { method: 'POST', body: JSON.stringify({ revision: agentDraft.revision, choice }) });
+      if (r.outcome === 'SENT') {
+        setAgentDraft(null);
+        if (r.booking) {
+          // the visit and the message about it are separate results: a message that was not delivered does not undo the visit
+          const ok = r.booking.notice === 'SENT';
+          setAgentNote({ tone: ok ? 'success' : 'warn', key: ok ? 'agent.result.booked' : 'agent.result.bookedNoNotice' });
+          setNoticeRetry(ok ? null : r.booking.requestId);
+        } else setAgentNote({ tone: 'success', key: 'agent.result.sent' });
+        await loadThread(open);
+      } else if (r.outcome === 'FAILED') {
+        setAgentDraft(null);
+        setAgentNote({ tone: 'error', key: 'agent.result.failed' });
+        await loadThread(open);
+      } else if (r.outcome === 'UNKNOWN') {
+        // not shown as a success and not sent again: the staff member checks the chat
+        if (r.draft) setAgentDraft(r.draft);
+        setAgentNote({ tone: 'warn', key: 'agent.result.unknown' });
+        await loadThread(open);
+      } else {
+        // refused: nothing was sent. A changed draft (new times) is shown again for a new confirmation.
+        if (r.draft) setAgentDraft(r.draft);
+        setAgentNote({ tone: 'warn', key: `agent.code.${r.code ?? 'stale'}` });
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const resolveAgent = async (id: string, outcome: 'DELIVERED' | 'NOT_DELIVERED') => {
+    if (!open) return;
+    setBusy(true);
+    try {
+      await api(`/agent-drafts/${id}/resolve`, { method: 'POST', body: JSON.stringify({ outcome }) });
+      setAgentNote({ tone: 'success', key: 'agent.verify.done' });
+      await loadAgent();
+      await loadThread(open);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const recheckAgent = async (id: string) => {
+    if (!open) return;
+    setBusy(true);
+    try {
+      const r = await api<{ ok: boolean; outcome: 'SENT' | 'FAILED' | 'UNKNOWN' | 'REFUSED'; booking?: { notice: string | null; requestId: string | null }; draft: AgentDraftView | null }>(`/agent-drafts/${id}/recheck`, { method: 'POST', body: JSON.stringify({}) });
+      if (r.outcome === 'SENT') {
+        setAgentDraft(null);
+        const ok = r.booking?.notice === 'SENT';
+        setAgentNote({ tone: ok ? 'success' : 'warn', key: ok ? 'agent.result.booked' : 'agent.result.bookedNoNotice' });
+        setNoticeRetry(ok ? null : (r.booking?.requestId ?? null));
+      } else if (r.outcome === 'UNKNOWN') {
+        if (r.draft) setAgentDraft(r.draft);
+        setAgentNote({ tone: 'warn', key: 'agent.result.bookUnknown' });
+      } else await loadAgent();
+      await loadThread(open);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  // the booking steps are made by the code from the request: "refresh" makes the step again for the state of the request now (no model call)
+  const refreshStep = async () => {
+    if (!open) return;
+    setBusy(true);
+    try {
+      const r = await api<{ draft: AgentDraftView | null }>('/agent-drafts/refresh', { method: 'POST', body: JSON.stringify({ channel: open.channel, chatId: open.chatId }) });
+      setAgentDraft(r.draft);
+      setAgentNote(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const retryAgentNotice = async () => {
+    if (!noticeRetry || !open) return;
+    setBusy(true);
+    try {
+      await api(`/requests/${noticeRetry}/notice/retry`, { method: 'POST', body: JSON.stringify({}) });
+      setNoticeRetry(null);
+      setAgentNote({ tone: 'success', key: 'agent.result.booked' });
+      await loadThread(open);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const rejectAgent = async () => {
+    if (!agentDraft) return;
+    setBusy(true);
+    try {
+      await api(`/agent-drafts/${agentDraft.id}/reject`, { method: 'POST' });
+      setAgentDraft(null);
+      setAgentNote({ tone: 'info', key: 'agent.result.rejected' });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -318,7 +466,7 @@ export default function InboxPage() {
                   <button className="chat-item" onClick={() => setOpen({ channel: c.channel, chatId: c.chatId })}>
                     <span className="chat-name">
                       <b>{name(c)}</b>
-                      {c.channel !== 'TELEGRAM' && <Badge tone="blue">{({ INSTAGRAM: 'Instagram', MESSENGER: 'Messenger', WHATSAPP: 'WhatsApp', VIBER: 'Viber', WEB: 'Web' } as Record<string, string>)[c.channel] ?? c.channel}</Badge>}
+                      {c.channel !== 'TELEGRAM' && <Badge tone="blue">{CHANNEL_NAME[c.channel] ?? c.channel}</Badge>}
                       {!c.patient && <Badge tone="amber">{t('inbox.notLinked')}</Badge>}
                       {c.unread > 0 && <Badge tone="blue">{c.unread}</Badge>}
                     </span>
@@ -364,7 +512,13 @@ export default function InboxPage() {
                 </details>
               )}
               {thread.optedOut && <Alert tone="warn">{t('inbox.optedOut')}</Alert>}
-              {!thread.replyWindowOpen && <Alert tone="warn">{t('inbox.windowClosed')}</Alert>}
+              {!thread.replyWindowOpen && <Alert tone="warn">{t('inbox.windowClosed', { channel: CHANNEL_NAME[open?.channel ?? ''] ?? '' })}</Alert>}
+              {thread.agentOwnerHuman && !thread.botPausedUntil && (
+                <Alert tone="info">
+                  {t('inbox.agentHuman')}{' '}
+                  <button className="btn btn-sm" disabled={busy} onClick={resumeBot}>{t('inbox.botResume')}</button>
+                </Alert>
+              )}
               {thread.botPausedUntil && (
                 <Alert tone="info">
                   {t('inbox.botPaused', { time: new Date(thread.botPausedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}{' '}
@@ -383,6 +537,15 @@ export default function InboxPage() {
                   </div>
                 ))}
               </div>
+              {agentDraft && <AgentDraftPanel draft={agentDraft} busy={busy} note={agentNote} onApprove={approveAgent} onReject={rejectAgent} onRegenerate={['ask_data', 'ask_consent', 'create_visit', 'note'].includes(agentDraft.kind) ? refreshStep : makeDraft} onResolve={resolveAgent} onRecheck={recheckAgent} />}
+              {!agentDraft && agentNote && <Alert tone={agentNote.tone}>{t(agentNote.key as TKey)}</Alert>}
+              {!agentDraft && noticeRetry && (
+                <div className="toolbar agent-draft-actions">
+                  <button className="btn" disabled={busy} onClick={retryAgentNotice}>
+                    {t('agent.result.noticeRetry')}
+                  </button>
+                </div>
+              )}
               <div className="toolbar" style={{ marginBottom: 8 }}>
                 <button className="btn" disabled={busy || thread.optedOut || !thread.replyWindowOpen || thread.messages[thread.messages.length - 1]?.direction !== 'IN'} onClick={makeDraft}>
                   {t('inbox.draft')}
@@ -398,7 +561,7 @@ export default function InboxPage() {
                   {t('inbox.send')}
                 </button>
               </div>
-              <p className="muted" style={{ fontSize: 13 }}>{t('inbox.sendNote')}</p>
+              <p className="muted" style={{ fontSize: 13 }}>{t('inbox.sendNote', { channel: CHANNEL_NAME[open?.channel ?? ''] ?? '' })}{open && WINDOW_CHANNELS.has(open.channel) ? ` ${t('inbox.sendNoteWindow')}` : ''}</p>
             </>
           )}
         </Card>

@@ -195,12 +195,10 @@ describe('автоматичний запис: перевірка на mock:clin
     await tap(c);
     expect(mock.writes).toHaveLength(0);
     expect(sent.at(-1)!.text).toContain('прізвище, ім’я та номер телефону');
-    // two bare words are not split by their order
+    // two bare words are not split by their order: ONE short clarification, then the rest is asked (the surname is not asked again, the first name is not asked at all)
     await say(c, 'Наталія Бойко');
-    expect(sent.at(-1)!.text).toContain('ваше прізвище');
+    expect(sent.at(-1)!.text).toContain('що з цього прізвище — «Наталія» чи «Бойко»');
     await say(c, 'Бойко');
-    expect(sent.at(-1)!.text).toContain('ваше ім’я');
-    await say(c, 'Наталія');
     expect(sent.at(-1)!.text).toContain('номер телефону');
     await say(c, phone());
     expect(sent.at(-1)!.text).toContain('Підтверджуєте запис на Консультація');

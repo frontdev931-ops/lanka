@@ -204,8 +204,9 @@ export class DigestService {
   }
 
   // Once a minute: if the clinic's digest hour has come and it has not been sent today yet, we send it
-  async tick(now = new Date()) {
-    const clinics = await this.prisma.clinic.findMany({ where: { digestFrequency: { in: ['DAILY', 'WEEKLY'] }, suspendedAt: null }, select: { id: true, digestFrequency: true, digestHour: true, digestWeekday: true, lastDigestAt: true } });
+  // scope: only one clinic is looked at (the scheduler never passes it; a test uses it so that other clinics of a shared database do not take part)
+  async tick(now = new Date(), scope?: { clinicId: string }) {
+    const clinics = await this.prisma.clinic.findMany({ where: { digestFrequency: { in: ['DAILY', 'WEEKLY'] }, suspendedAt: null, ...(scope ? { id: scope.clinicId } : {}) }, select: { id: true, digestFrequency: true, digestHour: true, digestWeekday: true, lastDigestAt: true } });
     for (const c of clinics) {
       const today = clinicDate(now);
       if (c.lastDigestAt && clinicDate(c.lastDigestAt) === today) continue;

@@ -6,6 +6,7 @@ import { ReportsModule } from '../reports/reports.module';
 import { AssistantController } from './assistant.controller';
 import { AssistantService } from './assistant.service';
 import { AiController } from './ai.controller';
+import { AgentDraftService } from './agent-draft.service';
 import { ChatAssistantService } from './chat-assistant.service';
 import { AiService } from './ai.service';
 import { LlmClient } from './llm.client';
@@ -13,7 +14,7 @@ import { LlmClient } from './llm.client';
 @Module({
   imports: [ReportsModule, ReportBuilderModule, KbModule, BookingModule],
   controllers: [AiController, AssistantController],
-  providers: [LlmClient, AiService, ChatAssistantService, AssistantService],
-  exports: [AiService, ChatAssistantService],
+  providers: [LlmClient, AiService, ChatAssistantService, AgentDraftService, AssistantService],
+  exports: [AiService, ChatAssistantService, AgentDraftService],
 })
 export class AiModule {}

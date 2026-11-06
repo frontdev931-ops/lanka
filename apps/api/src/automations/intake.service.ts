@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { normalizePhone } from '../common/phone';
 import { PrismaService } from '../prisma/prisma.service';
 import { AutoReplyService } from './auto-reply.service';
+import { FunnelEventsService } from '../funnel-events/funnel-events.service';
+import { AgentAutoService } from './agent-auto.service';
 import { BookingFlowService } from './booking-flow.service';
 import { MessengerService } from './messenger.service';
 import { RequestsService } from './requests.service';
@@ -41,11 +43,19 @@ export class IntakeService {
     private autoReply: AutoReplyService,
     private requests: RequestsService,
     private flow: BookingFlowService,
+    private funnel: FunnelEventsService,
+    private auto: AgentAutoService,
   ) {}
 
   async handle(clinicId: string, m: IncomingMessage): Promise<void> {
+    await this.handleOne(clinicId, m);
+    // The agent's autonomous mode (off by default, and only for the listed dialogs): after the message is saved and the booking flow took its part
+    await this.auto.onInbound(clinicId, m.channel, m.chatId);
+  }
+
+  private async handleOne(clinicId: string, m: IncomingMessage): Promise<void> {
     const { channel, chatId } = m;
-    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { suspendedAt: true, sendingEnabled: true } });
+    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { suspendedAt: true, sendingEnabled: true, aiAgentMode: true } });
     if (clinic.suspendedAt) return;
     const text = m.text.trim();
     let payload = m.payload;
@@ -73,7 +83,7 @@ export class IntakeService {
     }
     const slot = payload ? SLOT.exec(payload) : null;
     // "yes, confirm" / "no, another time" under the question of the automatic booking
-    const answer = payload ? /^book(yes|no)\|([A-Za-z0-9]{10,40})$/.exec(payload) : null;
+    const answer = payload ? /^book(yes|no)\|([A-Za-z0-9]{10,40})(?:\|([A-Za-z0-9]{6,24}))?$/.exec(payload) : null;
     // the doctor: one of several named, or the answer to a proposed doctor
     const doc = payload ? /^doc(pick|yes|no|any|wish)\|([A-Za-z0-9]{1,40})$/.exec(payload) : null;
     if (!text && !slot && !answer && !doc) return; // photos, stickers and the like are not handled yet
@@ -99,6 +109,8 @@ export class IntakeService {
       // On a retry the message may be saved already (a repeated delivery never gets here: the durable inbox ignores it)
       if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')) throw e;
     }
+    // A real incoming message is a real enquiry (whatever the reply mode); the funnel counts the chat once
+    await this.funnel.record(clinicId, { channel, chatId, kind: 'INQUIRY', refKey: 'first', linked: !!ch?.patientId });
 
     if (STOP.test(text)) {
       await this.prisma.patientChannel.updateMany({ where: { clinicId, channel, externalId: chatId }, data: { optedOutAt: new Date() } });
@@ -116,7 +128,7 @@ export class IntakeService {
     }
 
     if (answer) {
-      await this.flow.onConfirmAnswer({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, answer[1] === 'yes', answer[2]);
+      await this.flow.onConfirmAnswer({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, answer[1] === 'yes', answer[2], answer[3] ?? null);
       return;
     }
 
@@ -129,8 +141,9 @@ export class IntakeService {
     // An answer to the bot's question about the name and the phone is not for the AI
     if (await this.flow.onText({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, text)) return;
     if (await this.autoReply.onInbound(clinicId, channel, chatId)) return;
-    // No AI answer: one polite reply per day, only when sending is on
-    if (!clinic.sendingEnabled) return;
+    // No AI answer: one polite reply per day, only when sending is on. With the agent's approval mode on nothing is sent by itself (and an automatic
+    // acknowledgement would also hide the patient's question from the draft: the draft answers the last message of the patient).
+    if (!clinic.sendingEnabled || clinic.aiAgentMode) return;
     const recent = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'OUT', authorUserId: null, createdAt: { gt: new Date(Date.now() - 86_400_000) } }, select: { id: true } });
     if (!recent) await this.reply(clinicId, channel, ch?.patientId ?? null, chatId, RECEIVED);
   }

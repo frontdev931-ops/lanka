@@ -601,3 +601,19 @@ body { -webkit-tap-highlight-color: transparent; }
 .dialog-id { margin: 8px 0; }
 .dialog-id summary { cursor: pointer; padding: 10px 0; min-height: 44px; display: flex; align-items: center; }
 .dialog-key { display: block; word-break: break-all; margin: 6px 0 10px; padding: 8px 10px; background: var(--surface-2, #f1f5f9); border-radius: 8px; font-size: 14px; }
+
+/* The agent's draft for a staff member (review and approval) */
+.agent-draft { border: 1px solid var(--border, #d9dee7); border-radius: 10px; padding: 12px; margin: 12px 0; display: flex; flex-direction: column; gap: 8px; background: var(--surface-2, #f7f9fc); }
+.agent-draft-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-draft-label { font-size: 13px; font-weight: 600; opacity: 0.75; margin-top: 4px; }
+.agent-draft-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; line-height: 1.45; padding: 10px 12px; border-radius: 8px; background: var(--surface, #fff); border: 1px solid var(--border, #d9dee7); }
+.agent-draft-options { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.agent-draft-options li { padding: 8px 12px; border-radius: 999px; border: 1px solid var(--border, #d9dee7); background: var(--surface, #fff); font-size: 15px; min-height: 36px; display: flex; align-items: center; }
+.agent-draft-sum { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 16px; }
+.agent-draft-sum dt { color: var(--muted, #5b6575); }
+.agent-draft-sum dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.agent-draft-do, .agent-draft-note { margin: 0; font-size: 14px; }
+.agent-draft-actions { margin-top: 4px; }
+@media (max-width: 640px) {
+  .agent-draft-actions > .btn { flex: 1 1 100%; min-height: 44px; }
+}

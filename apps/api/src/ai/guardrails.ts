@@ -36,8 +36,10 @@ export function handoffText(lang: 'ru' | 'uk'): string {
 export type HandoffReason = 'medical' | 'price' | 'complaint' | 'long' | 'reply_check' | 'model' | 'urgent';
 
 const TOPICS: { reason: HandoffReason; re: RegExp }[] = [
-  // health: symptoms, medicines, diagnoses: only a doctor or the administrator
-  { reason: 'medical', re: /(біль|болить|болю|болят|боль|болит|кров|кровит|кровь|температур|набряк|отек|отёк|опух|пухлин|флюс|антибіот|антибиот|таблетк|ліки|лекарств|препарат|дозуван|дозировк|алерг|вагітн|беремен|діагноз|диагноз|нестерпн|невыносим|швидк|скорая|нагноє|гній|гной)/i },
+  // health: symptoms, medicines, diagnoses: only a doctor or the administrator. The word "pain" (біль, боль) counts only as a WHOLE word: "більше" / "больше"
+  // (more) and "найбільш" contain it and are not a complaint. The same for "швидко/швидкий" (fast; only "швидка допомога" / "викличте швидку" is an ambulance) and
+  // "покров" ("кров" counts at the start of a word). Tablets ("таблетки від страху") stay a question about medicines.
+  { reason: 'medical', re: /((?<![\p{L}])(?:біль|болі|болем|болями|болях|боль|боли|болью|болей)(?![\p{L}])|болить|болю|болят|болит|(?<![\p{L}])кров(?!ать|ля|ел)|кровит|кровь|температур|набряк|отек|отёк|опух|пухлин|флюс|антибіот|антибиот|таблетк|ліки|лекарств|препарат|дозуван|дозировк|алерг|вагітн|беремен|діагноз|диагноз|нестерпн|невыносим|(?<![\p{L}])швидк\p{L}*\s+допомог|(?<![\p{L}])викли\p{L}*\s+швидк|скорая|нагноє|гній|гной)/iu },
   // money: we do not name prices, the administrator knows them
   { reason: 'price', re: /(скільки\s+кошт|сколько\s+стоит|ціна|цена|цены|ціни|вартість|стоимость|прайс|знижк|скидк|розстрочк|рассрочк|кредит)/i },
   // complaints and threats
@@ -109,7 +111,9 @@ const FREE_WORD: Record<'uk' | 'ru', string> = { uk: 'безкоштовно', r
 // The model chooses services by id; the code checks that every id is one of the services found for THIS clinic for this answer, then writes the
 // lines itself: the exact title and the exact sum from the database (an unknown, conflicting or vanished price is never a number and never a zero).
 // The model words the introduction and the closing; the code adds the notice about a preliminary cost in the language of the dialogue.
-export function composePriceReply(parts: { intro: string; after: string | null; ids: unknown }, items: PriceItem[], lang: 'uk' | 'ru'): { reply: string; dropped: number } | { problem: string } {
+// opts.noticeOnlyForKnown: the notice about a preliminary cost goes with a line that names a sum (state KNOWN) and not with a free service (the working bot keeps its
+// older rule: KNOWN or FREE). A line that says the price is to be clarified never needs it.
+export function composePriceReply(parts: { intro: string; after: string | null; ids: unknown }, items: PriceItem[], lang: 'uk' | 'ru', opts: { noticeOnlyForKnown?: boolean } = {}): { reply: string; dropped: number } | { problem: string } {
   const free = replyProblem(`${parts.intro}\n${parts.after ?? ''}`);
   if (free) return { problem: free };
   const ids = parts.ids === undefined || parts.ids === null ? [] : parts.ids;
@@ -135,7 +139,7 @@ export function composePriceReply(parts: { intro: string; after: string | null; 
     if (x.state === 'KNOWN' && x.amount !== null) return `- ${name}: ${MONEY_FORMAT.format(x.amount)} грн`;
     return `- ${name}: ${UNCLEAR[lang]}`;
   });
-  const priced = chosen.some((x) => x.state === 'KNOWN' || x.state === 'FREE');
+  const priced = chosen.some((x) => x.state === 'KNOWN' || (!opts.noticeOnlyForKnown && x.state === 'FREE'));
   const intro = stripNotice(parts.intro);
   const after = parts.after ? stripNotice(parts.after) : '';
   const block = lines.length ? `${lines.join('\n')}${priced ? `\n\n${PRICE_NOTICE[lang]}` : ''}` : '';
@@ -196,4 +200,67 @@ const NOTICE_ANY = /(?:Вартість попередня|Попередня в
 // Removes a notice about the preliminary cost that the model wrote itself (the code adds its own, in the right language)
 export function stripNotice(text: string): string {
   return text.replace(NOTICE_ANY, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// ---- the checks of the agent's draft (see .claude/docs/agent-administrator.md) ----
+
+// The last message asks for a price (the plain price words only; a discount or an instalment is a hand-over topic, see incomingHandoff)
+const PRICE_QUESTION = /(скільки\s+(?:це\s+|воно\s+|вона\s+)?кошт|сколько\s+(?:это\s+|оно\s+)?стоит|ціна|цена|цены|ціни|вартість|стоимость|прайс|почім|почем|по\s+чому)/i;
+export const isPriceQuestion = (text: string): boolean => PRICE_QUESTION.test(text);
+
+// A message that asks ONLY the price ("а скільки це коштує?", "яка ціна", "сколько это стоит"): nothing else is asked or said, so the code may answer it with the price of
+// the service the dialogue is about. A mixed message ("сколько стоит и можно ли при беременности") does not match: its other questions go by their own rules.
+const PRICE_ONLY = new RegExp(
+  '^(?:(?:а|ну|і|и|та|слухайте|скажіть|підкажіть|скажите|подскажите|будь\\s+ласка|пожалуйста)[\\s,]+)*' +
+    '(?:(?:скільки|сколько)\\s+(?:це\\s+|воно\\s+|вона\\s+|ця\\s+послуга\\s+|это\\s+|оно\\s+|эта\\s+услуга\\s+)?(?:коштує|коштуватиме|буде\\s+коштувати|стоит|будет\\s+стоить)' +
+    '|(?:яка|какая)\\s+(?:там\\s+|це\\s+|это\\s+)?(?:ціна|вартість|цена|стоимость)(?:\\s+(?:цієї\\s+послуги|этой\\s+услуги|за\\s+це|за\\s+это))?' +
+    '|(?:ціна|вартість|цена|стоимость))' +
+    '(?:[\\s,]+(?:будь\\s+ласка|пожалуйста))?\\s*[?!.]*$',
+  'iu',
+);
+export const isPriceOnlyQuestion = (text: string): boolean => PRICE_ONLY.test(text.trim());
+
+// Words of a promise the model must never make on its own (a sentence that DENIES the promise is fine): a discount, an instalment, a gift, a guarantee, a result, "painless", a percentage.
+// This is a list of risk words, NOT a proof: it does not catch every invented advantage. Advantages and prices reach a reply only through
+// approved entries named by reference; this list is a second net for the free text, and staff read every draft.
+const CLAIM_RISK: RegExp[] = [
+  /\d+\s*%/,
+  /(знижк|скидк|акці[яїйює]|акци[яиюй]|розстрочк|рассрочк|кредит|подарун|подарок|безкоштовн|бесплатн)/i,
+  /(гарант)/i,
+  /(без\s+болю|безболісн|безболезнен|не\s+боляче|не\s+больно)/i,
+  /(стовідсотков|стопроцентн|назавжди|навсегда)/i,
+];
+// A risk word is not a promise when the sentence DENIES the promise: "ми не гарантуємо результат", "не можемо обіцяти знижку", "знижок немає", "без знижок".
+// (Never for "без болю" / "не боляче": that is the promise itself.)
+const NON_PROMISE = /(не\s+(?:гарантуємо|обіцяємо|можемо\s+(?:гарантувати|обіцяти)|гарантируем|обещаем|можем\s+(?:гарантировать|обещать))|(?<![\p{L}])(?:немає|нема|нет|нету)(?![\p{L}])|(?<![\p{L}])без\s+(?:знижок|скидок|акцій|акций))/iu;
+const PAIN_PROMISE = /(без\s+болю|безболісн|безболезнен|не\s+боляче|не\s+больно)/i;
+// the first risk word that stands as a promise, or null
+export function claimMatch(text: string, approvedTitles: string[] = []): string | null {
+  // The exact approved title of a service is not a promise ("Безкоштовна перевірка" is the name of a service); ONLY the title is set aside, the text around it is
+  // scanned in full (so "безкоштовне лікування" next to it is still refused)
+  let scanned = text;
+  for (const title of [...new Set(approvedTitles)].filter(Boolean).sort((x, y) => y.length - x.length)) scanned = scanned.replace(new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'), ' ');
+  for (const sentence of scanned.split(/(?<=[.!?…])\s+|\n+/)) {
+    const denied = NON_PROMISE.test(sentence) && !PAIN_PROMISE.test(sentence.replace(/не\s+(?:гарантуємо|обіцяємо|можемо\s+(?:гарантувати|обіцяти)|гарантируем|обещаем|можем\s+(?:гарантировать|обещать))[^.!?…]*/i, ''));
+    for (const re of CLAIM_RISK) {
+      const m = re.exec(sentence);
+      if (m && !denied) return m[0];
+    }
+  }
+  return null;
+}
+export function claimProblem(text: string): 'risky_claim' | null {
+  return claimMatch(text) ? 'risky_claim' : null;
+}
+
+// When the code itself shows the free times and asks the client to choose, a sentence of the model that asks the same ("shall I find a time?", "choose a
+// convenient time") would be a second, competing next step. Such sentences are dropped from the model's text; its answer to the question stays.
+const SOLICIT = /(підібра|підбер|підбир|подобра|подбер|подбир|оберіть|виберіть|выберите|выбер|назвіть|назовите|який\s+(?:вам\s+)?час|какое\s+(?:вам\s+)?время|зручн\S*\s+(?:для\s+вас\s+)?(?:час|день)|удобн\S*\s+(?:для\s+вас\s+)?(?:время|день)|запропонуємо|предложим)/i;
+const TIME_WORD = /(час|времен|время|день|дату|дата|вікн|окошк|окн)/i;
+export function withoutTimeSolicitation(text: string): string {
+  return text
+    .split(/\n+/)
+    .map((para) => para.split(/(?<=[.!?…])\s+/).filter((sentence) => !(SOLICIT.test(sentence) && TIME_WORD.test(sentence))).join(' ').trim())
+    .filter(Boolean)
+    .join('\n\n');
 }

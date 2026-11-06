@@ -26,7 +26,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
     try {
       await this.api.sendText(decrypt(i.apiKeyEnc), phoneNumberId, chatId, text, options.map((o) => ({ title: o.label, payload: slotPayload(o) })));
     } catch (e) {
-      if (e instanceof MetaApiError) throw new SendError(e.message, false);
+      if (e instanceof MetaApiError) throw new SendError(e.message, false, 'failed', e.code === undefined || e.code >= 500);
       throw e;
     }
   }

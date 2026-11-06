@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { hashToken, newToken } from '../auth/tokens';
 import { isRussian } from '../ai/guardrails';
 import { AutoReplyService } from './auto-reply.service';
+import { FunnelEventsService } from '../funnel-events/funnel-events.service';
 import { BookingFlowService } from './booking-flow.service';
 import { DigestService } from './digest.service';
 import { InboundService } from './inbound.service';
@@ -43,6 +44,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     private inbound: InboundService,
     private waitlist: WaitlistService,
     private flow: BookingFlowService,
+    private funnel: FunnelEventsService,
   ) {
     this.inbound.register('TELEGRAM', async (clinicId, payload) => {
       const i = await this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.TELEGRAM } } });
@@ -227,6 +229,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: 'TELEGRAM', externalId: chatId }, select: { patientId: true } });
     const contactName = [m.from?.first_name, m.from?.last_name].filter(Boolean).join(' ') || (username ? `@${username}` : null);
     await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel: 'TELEGRAM', chatId, contactName, direction: 'IN', text: text.slice(0, 4000) } });
+    await this.funnel.record(clinicId, { channel: 'TELEGRAM', chatId, kind: 'INQUIRY', refKey: 'first', linked: !!ch?.patientId });
     // A comment on a low rating: we save it with the review, update the administrator's request, the AI does not reply
     const pending = ch?.patientId ? await this.prisma.review.findFirst({ where: { clinicId, patientId: ch.patientId, comment: null, awaitingUntil: { gt: new Date() } }, orderBy: { updatedAt: 'desc' } }) : null;
     if (pending) {
@@ -268,11 +271,11 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
       await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel: 'TELEGRAM', chatId, direction: 'IN', text: docAnswer[1] === 'yes' ? 'Так' : docAnswer[1] === 'no' ? 'Ні' : 'Обрав лікаря' } });
       return void (await this.flow.onDoctorAnswer({ clinicId, channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName: null }, docAnswer[1] as 'pick' | 'yes' | 'no' | 'any' | 'wish', docAnswer[2]));
     }
-    const book = /^book(yes|no)\|([A-Za-z0-9]{10,40})$/.exec(cq.data ?? '');
+    const book = /^book(yes|no)\|([A-Za-z0-9]{10,40})(?:\|([A-Za-z0-9]{6,24}))?$/.exec(cq.data ?? '');
     if (book) {
       const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: 'TELEGRAM', externalId: chatId }, select: { patientId: true } });
       await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel: 'TELEGRAM', chatId, direction: 'IN', text: book[1] === 'yes' ? 'Так, підтверджую' : 'Ні, інший час' } });
-      return void (await this.flow.onConfirmAnswer({ clinicId, channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName: null }, book[1] === 'yes', book[2]));
+      return void (await this.flow.onConfirmAnswer({ clinicId, channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName: null }, book[1] === 'yes', book[2], book[3] ?? null));
     }
     const m = /^slot\|(\d{4})-(\d{2})-(\d{2})\|(\d{2}:\d{2})(?:\|(.{1,24}))?$/u.exec(cq.data ?? '');
     if (!m) return;

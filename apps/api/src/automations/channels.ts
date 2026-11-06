@@ -27,6 +27,9 @@ export class SendError extends Error {
     // the person blocked the bot / the reply window is closed: do not try again
     readonly blocked = false,
     readonly reason: 'not_connected' | 'window_closed' | 'failed' = 'failed',
+    // The request may have reached the provider although no clear answer came (no response at all, a server error): a caller that must not send twice
+    // treats the result as UNKNOWN and never repeats it blindly. A clear refusal of the provider is not ambiguous.
+    readonly ambiguous = false,
   ) {
     super(message);
   }

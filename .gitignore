@@ -3,9 +3,12 @@ node_modules
 dist
 dist-qa
 .next
-.next-qa
+.next-*
 *.tsbuildinfo
 coverage
+
+# raw local runs of the agent evaluation on the real model (synthetic dialogues, budget ledgers); the findings are summarised in .claude/docs
+apps/api/eval-output/
 
 # secrets and local settings: real values live only in these files, never in git
 .env

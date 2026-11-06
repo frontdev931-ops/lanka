@@ -93,4 +93,37 @@ describe('вимоги Meta: відключення доступу і видал
     // a second request for the same id is fine and deletes nothing more
     expect((await form('/meta/data-deletion', signed(id)).expect(200)).body.confirmation_code).not.toBe(r.body.confirmation_code);
   });
+
+  it('видалення даних: чернетки агента, пам\'ять діалогу і події воронки цього чату зникають; інші чати й клініки не зачеплені', async () => {
+    const id = `ig${rnd()}`;
+    const other = `ig${rnd()}`;
+    const clinicId = await connected(id);
+    const strangerClinic = await connected(`ig${rnd()}`);
+    const seed = async (cid: string, chat: string, channel = 'INSTAGRAM') => {
+      await prisma.chatMessage.create({ data: { clinicId: cid, channel, chatId: chat, direction: 'IN', text: 'Привіт' } });
+      await prisma.agentDraft.create({ data: { clinicId: cid, channel, chatId: chat, basisMessageId: 'm', basisAt: new Date(), stateVersion: 0, basisOwner: 'BOT', snapshot: { reply: 'Текст' } } });
+      const st = await prisma.conversationState.create({ data: { clinicId: cid, channel, chatId: chat } });
+      await prisma.funnelEvent.create({ data: { clinicId: cid, conversationId: st.id, kind: 'TIME_OFFERED', refKey: `k${rnd()}` } });
+    };
+    const count = async (cid: string, chat: string) => ({
+      drafts: await prisma.agentDraft.count({ where: { clinicId: cid, chatId: chat } }),
+      states: await prisma.conversationState.count({ where: { clinicId: cid, chatId: chat } }),
+      events: await prisma.funnelEvent.count({ where: { clinicId: cid, conversation: { chatId: chat } } }),
+    });
+    await seed(clinicId, id);
+    await seed(clinicId, other); // another dialogue of the same clinic
+    await seed(clinicId, id, 'TELEGRAM'); // the same id in a channel that is not Meta's
+    await seed(strangerClinic, other); // another clinic
+    expect(await count(clinicId, id)).toEqual({ drafts: 2, states: 2, events: 2 });
+
+    await form('/meta/data-deletion', signed(id)).expect(200);
+
+    const telegram = { drafts: await prisma.agentDraft.count({ where: { clinicId, chatId: id, channel: 'TELEGRAM' } }), states: await prisma.conversationState.count({ where: { clinicId, chatId: id, channel: 'TELEGRAM' } }), events: await prisma.funnelEvent.count({ where: { clinicId, conversation: { chatId: id, channel: 'TELEGRAM' } } }) };
+    expect(telegram).toEqual({ drafts: 1, states: 1, events: 1 });
+    expect(await prisma.agentDraft.count({ where: { clinicId, chatId: id, channel: 'INSTAGRAM' } })).toBe(0);
+    expect(await prisma.conversationState.count({ where: { clinicId, chatId: id, channel: 'INSTAGRAM' } })).toBe(0);
+    expect(await prisma.funnelEvent.count({ where: { clinicId, conversation: { chatId: id, channel: 'INSTAGRAM' } } })).toBe(0);
+    expect(await count(clinicId, other)).toEqual({ drafts: 1, states: 1, events: 1 });
+    expect(await count(strangerClinic, other)).toEqual({ drafts: 1, states: 1, events: 1 });
+  });
 });

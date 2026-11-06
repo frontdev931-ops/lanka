@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Headers, 
 import type { Request, Response } from 'express';
 import { Role } from '@prisma/client';
 import { IsArray, IsBoolean, IsIn, IsInt, IsObject, Max, Min, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { AgentApprovalService } from './agent-approval.service';
 import { ChatAssistantService } from '../ai/chat-assistant.service';
 import { AuthGuard, AuthUser, CurrentUser, Roles } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -449,6 +450,8 @@ export class ConversationsController {
   constructor(
     private chat: ChatService,
     private assistant: ChatAssistantService,
+    private approval: AgentApprovalService,
+    private prisma: PrismaService,
   ) {}
 
   @Get()
@@ -482,8 +485,11 @@ export class ConversationsController {
   @Post(':channel/:chatId/draft')
   @Roles(...OPERATORS)
   @HttpCode(200)
-  draft(@CurrentUser() u: AuthUser, @Param('channel') channel: string, @Param('chatId') chatId: string) {
-    return this.assistant.draft(u.clinicId, channel, chatId);
+  async draft(@CurrentUser() u: AuthUser, @Param('channel') channel: string, @Param('chatId') chatId: string) {
+    // Behind the clinic's agent switch the draft is made by the agent path (the decision contract, nothing executed); otherwise the working bot's draft, unchanged
+    const agent = (await this.prisma.clinic.findUnique({ where: { id: u.clinicId }, select: { aiAgentMode: true } }))?.aiAgentMode;
+    // the agent's draft is STORED for review and approval by a staff member; generating it executes nothing
+    return agent ? this.approval.create(u.clinicId, u.userId, channel, chatId) : this.assistant.draft(u.clinicId, channel, chatId);
   }
 
   @Post(':channel/:chatId/link')

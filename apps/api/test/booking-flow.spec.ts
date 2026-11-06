@@ -142,17 +142,14 @@ describe('режим «Заявка адміністратору»', () => {
     expect(sent.map((m) => m.text).join('\n')).not.toContain('Передали');
     expect(await requestOf(c.clinicId)).toMatchObject({ stage: 'COLLECT', service: 'Чистка', lastName: null, firstName: null, phone: null });
 
-    // two bare words are not split by their order: the bot asks for the surname on its own
+    // two bare words are not split by their order: ONE short clarification (never a guess), an answer that is neither of the two words is asked again
     await say(c.clinicId, chat, 'Ірина Коваль');
-    expect(last().text).toContain('ваше прізвище');
+    expect(last().text).toContain('що з цього прізвище — «Ірина» чи «Коваль»');
+    expect(await requestOf(c.clinicId)).toMatchObject({ lastName: null, firstName: null });
+    await say(c.clinicId, chat, 'Іванов');
+    expect(last().text).toContain('що з цього прізвище — «Ірина» чи «Коваль»');
     expect(await requestOf(c.clinicId)).toMatchObject({ lastName: null, firstName: null });
     await say(c.clinicId, chat, 'Коваль');
-    expect(last().text).toContain('ваше ім’я');
-    expect(await requestOf(c.clinicId)).toMatchObject({ lastName: 'Коваль', firstName: null });
-    // an answer of several words to "your first name?" is asked again, not guessed
-    await say(c.clinicId, chat, 'Ірина Петрівна');
-    expect(last().text).toContain('ваше ім’я');
-    await say(c.clinicId, chat, 'Ірина');
     expect(last().text).toContain('номер телефону');
     expect(await requestOf(c.clinicId)).toMatchObject({ stage: 'COLLECT', lastName: 'Коваль', firstName: 'Ірина' });
 

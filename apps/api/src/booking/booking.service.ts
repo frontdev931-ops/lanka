@@ -1,5 +1,6 @@
 import { liveWriteAllowed } from '../integrations/cliniccards.client';
 import { AutoBookingGate, DialogOrigin } from './auto-booking-gate';
+import { FunnelEventsService } from '../funnel-events/funnel-events.service';
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -68,6 +69,7 @@ export class BookingService {
     private prisma: PrismaService,
     private sync: SyncService,
     private gate: AutoBookingGate,
+    private funnel: FunnelEventsService,
   ) {}
 
   private key(...parts: (string | number)[]) {
@@ -228,6 +230,10 @@ export class BookingService {
           update: {},
         });
         if (d.requestId) await this.prisma.bookingRequest.updateMany({ where: { id: d.requestId, clinicId, status: 'NEW' }, data: { status: 'DONE', handledById: userId, handledAt: new Date() } });
+        // The visit exists and belongs to this request (the attempt that made it carries the request id): the one place where BOOKED is written.
+        // A visit that someone else made, or one that only looks the same, never gets here.
+        const req = d.requestId ? await this.prisma.bookingRequest.findFirst({ where: { id: d.requestId, clinicId }, select: { id: true, channel: true, chatId: true, patientId: true } }) : null;
+        if (req) await this.funnel.record(clinicId, { channel: req.channel, chatId: req.chatId, kind: 'BOOKED', refKey: req.id, source: userId ? 'ADMIN' : 'AUTO', reason: 'visit_created', linked: !!req.patientId });
         await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'booking.created', details: { visit: externalId, patientId: patient.id, at: startsAt.toISOString() } } });
       },
     });

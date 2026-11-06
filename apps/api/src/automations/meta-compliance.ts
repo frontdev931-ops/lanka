@@ -63,6 +63,9 @@ export class MetaComplianceService {
     const messages = await this.prisma.chatMessage.deleteMany({ where: { channel: { in: META_CHANNELS }, chatId: userId } });
     const links = await this.prisma.patientChannel.deleteMany({ where: { channel: { in: META_CHANNELS }, externalId: userId } });
     const requests = await this.prisma.bookingRequest.deleteMany({ where: { channel: { in: META_CHANNELS }, chatId: userId } });
+    // the agent's stored drafts and its memory of these chats (the service, the counters, the funnel events of the chat) go with them
+    await this.prisma.agentDraft.deleteMany({ where: { channel: { in: META_CHANNELS }, chatId: userId } });
+    await this.prisma.conversationState.deleteMany({ where: { channel: { in: META_CHANNELS }, chatId: userId } });
     const code = `DD-${randomBytes(8).toString('hex')}`;
     await this.prisma.dataDeletionRequest.create({ data: { code, externalUserId: userId, status: 'DELETED', summary: { disconnected, messages: messages.count, chatLinks: links.count, requests: requests.count } } });
     const origin = (process.env.WEB_ORIGIN ?? 'http://localhost:3000').replace(/\/$/, '');
