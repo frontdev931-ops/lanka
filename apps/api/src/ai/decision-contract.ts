@@ -30,6 +30,13 @@ export interface DecisionContext {
   priceQuestion: boolean;
   clarifyCount: number;
   maxClarify: number;
+  // the code read the last message as an objection (a price concern, fear, hesitation, a refusal): no time is offered in the same turn whatever the model labelled it
+  objection?: boolean;
+  // stage 2: the last message carries a signal of booking intent (a request to book or to see times, a wish about the time, an accepted offer of times, an answer to the question about the service).
+  // When this is false, OFFER_TIME is not carried out: "okay", "thanks" or a question about the contents of a service is answered, and the times are not looked up. Undefined = not enforced.
+  bookingIntent?: boolean;
+  // true: OFFER_TIME without that signal is not carried out (set in a dialogue that has just had an objection, or for a bare "okay/thanks"); false/undefined: the model's choice stands except after a doubt
+  intentRequired?: boolean;
 }
 
 export type Resolved = { ok: true; decision: Decision; notes: string[] } | { ok: false; problem: string };
@@ -80,7 +87,12 @@ export function resolveDecision(raw: unknown, ctx: DecisionContext): Resolved {
 
   // a price question is answered first, always (the answer carries the price lines; hand-over is the only exception)
   if (ctx.priceQuestion && action !== 'HAND_OFF' && !prices.length) return { ok: false, problem: 'price_question_unanswered' };
-  if (kind === 'CLARIFY' && ctx.clarifyCount >= ctx.maxClarify) return { ok: false, problem: 'clarify_limit' };
+  // a clarification inside an objection (fear, distrust) is not the clarification about the service: it does not use that limit (its own rule: one per concern, see the draft service)
+  if (kind === 'CLARIFY' && !ctx.objection && ctx.clarifyCount >= ctx.maxClarify) return { ok: false, problem: 'clarify_limit' };
+  if (kind === 'CLARIFY' && ctx.objection) {
+    decision.content.kind = 'HANDLE_DOUBT';
+    notes.push('objection_clarify_as_doubt');
+  }
 
   if (action === 'HAND_OFF') {
     // hand-over overrides everything: no selling, no offer; the content stays as the words of the hand-over
@@ -98,6 +110,14 @@ export function resolveDecision(raw: unknown, ctx: DecisionContext): Resolved {
     if (kind === 'CLARIFY') {
       // a question and an action in one turn would be two things at once: the question stays
       notes.push('clarify_with_next_dropped');
+      action = 'NONE';
+    } else if ((kind === 'HANDLE_DOUBT' || ctx.objection) && action === 'OFFER_TIME' && !ctx.bookingIntent) {
+      // an answer to a doubt ("too expensive", "I am afraid") is not a push to book: the times are not offered in the same turn; a patient who wants to book says so
+      notes.push('offer_after_doubt');
+      action = 'NONE';
+    } else if (action === 'OFFER_TIME' && ctx.intentRequired && !ctx.bookingIntent) {
+      // information-seeking, "okay", "thanks": answered; the times are looked up only when the patient moves toward a booking
+      notes.push('offer_without_intent');
       action = 'NONE';
     } else if (action === 'OFFER_TIME' && !service && !ctx.hasService) {
       notes.push('offer_without_service');

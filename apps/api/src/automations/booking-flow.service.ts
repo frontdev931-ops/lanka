@@ -1,3 +1,4 @@
+import { conversationLanguage } from '../ai/conversation-language';
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { BookingRequest, Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -7,7 +8,12 @@ import { AvailabilityService } from '../booking/availability.service';
 import { AutoBookingGate } from '../booking/auto-booking-gate';
 import { BLOCK_TEXT, BookingBlock, CabinetBookingService } from '../booking/cabinet-booking.service';
 import { BookingService } from '../booking/booking.service';
-import { DoctorChoiceService, isNo, isYes, serves } from '../booking/doctor-choice.service';
+import { CabinetWish, DoctorChoiceService, RequestPatch, isNo, isYes, matchDoctors, serves } from '../booking/doctor-choice.service';
+
+// a message that speaks about a doctor at all (a bare surname may be the patient's own name in a contact answer)
+const DOCTOR_NOUN = /(?<![\p{L}])(?:лікар\p{L}*|врач\p{L}*|доктор\p{L}*|стоматолог\p{L}*)(?![\p{L}])/iu;
+const TO_SURNAME = /(?:^|[^\p{L}])(?:до|к)\s+\p{Lu}[\p{L}'’-]{2,}/u;
+const DOCTOR_WORD = { test: (t: string) => DOCTOR_NOUN.test(t) || TO_SURNAME.test(t) };
 import { clinicDate, clinicHm, localToUtc } from '../common/clinic-time';
 import { normalizePhone } from '../common/phone';
 import { SyncService } from '../integrations/sync.service';
@@ -142,6 +148,7 @@ const T = {
     handedPlain: 'Дякуємо! Передали заявку адміністратору. Очікуйте підтвердження запису.',
     confirmAskCabinets: (service: string | null, date: string, time: string, address: string | null) => `Підтверджуєте запис${service ? ` на ${service}` : ''} ${date} о ${time}${address ? `, ${address}` : ''}? Конкретного лікаря призначає клініка. Натисніть кнопку або напишіть «так» чи «ні».`,
     clinicAssigns: 'Лікаря призначить клініка',
+    wishNote: (n: string) => `Ваше побажання щодо лікаря ${n} передамо клініці, але запис саме до цього лікаря не гарантуємо.`,
     alreadyDone: 'Це повідомлення стосується запису, який уже оформлено, тому нового запису ми не створювали. Щоб записатися ще раз, напишіть про це, наприклад: «хочу записатися ще».',
     settingsChanged: 'Налаштування запису змінилися, тому попередній вибір більше не діє. Оберіть, будь ласка, час ще раз.',
     servicePaused: 'Цю послугу тимчасово не можна записати онлайн. Адміністратор зв’яжеться з вами.',
@@ -172,6 +179,7 @@ const T = {
     handedPlain: 'Спасибо! Передали заявку администратору. Ожидайте подтверждения записи.',
     confirmAskCabinets: (service: string | null, date: string, time: string, address: string | null) => `Подтверждаете запись${service ? ` на ${service}` : ''} ${date} в ${time}${address ? `, ${address}` : ''}? Конкретного врача назначает клиника. Нажмите кнопку или напишите «да» или «нет».`,
     clinicAssigns: 'Врача назначит клиника',
+    wishNote: (n: string) => `Ваше пожелание о враче ${n} передадим клинике, но запись именно к этому врачу не гарантируем.`,
     alreadyDone: 'Это сообщение относится к записи, которая уже оформлена, поэтому новую запись мы не создавали. Чтобы записаться ещё раз, напишите об этом, например: «хочу записаться ещё».',
     settingsChanged: 'Настройки записи изменились, поэтому прежний выбор больше не действует. Выберите, пожалуйста, время ещё раз.',
     servicePaused: 'Эту услугу временно нельзя записать онлайн. Администратор свяжется с вами.',
@@ -234,6 +242,8 @@ export class BookingFlowService {
   }
 
   private async lang(c: FlowCtx): Promise<Lang> {
+    // the agent's clinics read the language the same way as the agent's own texts (so it does not change in the middle of a booking); the working bot keeps its old reading
+    if (await this.agentMode(c.clinicId)) return conversationLanguage(this.prisma, c.clinicId, c.channel, c.chatId);
     const last = await this.prisma.chatMessage.findMany({ where: { clinicId: c.clinicId, channel: c.channel, chatId: c.chatId, direction: 'IN', NOT: [{ text: { startsWith: 'Обрав час:' } }, { text: { in: ['Так, підтверджую', 'Ні, інший час'] } }] }, orderBy: { createdAt: 'desc' }, take: 6, select: { text: true } });
     return languageOf(last.map((m) => m.text));
   }
@@ -322,6 +332,8 @@ export class BookingFlowService {
     } else if (slot.doctor && cm.scheduleMode === 'DOCTORS' && !slot.doctor.startsWith('#')) doctorPatch = { doctor: slot.doctor };
     // a different time or doctor than before: the request is collected again, and the automatic mode asks the person's yes again
     // (a changed time or service also withdraws any earlier consent: it was given for something else)
+    // Agent path, cabinets: a doctor the patient named before the time is kept on the request (settled: "a doctor the clinic assigns"; not settled: the step asks first)
+    if (agent && cm.scheduleMode === 'CABINETS') Object.assign(doctorPatch, this.wishPatch(await this.choice.cabinetWishState(c.clinicId, c.channel, c.chatId)) ?? {});
     await this.prisma.bookingRequest.update({ where: { id: row.id }, data: { slotAt, ...doctorPatch, scheduleMode: cm.scheduleMode, stage: 'COLLECT', autoState: null, autoNote: null, asks: 0, consentKey: null, consentAt: null, consentMessageId: null } });
     await this.advance(c, row.id);
   }
@@ -363,11 +375,40 @@ export class BookingFlowService {
   // Returns true only when the message was taken as an answer AND the bot replied to it (otherwise the message goes on to the AI, never into silence)
   async onText(c: FlowCtx, text: string): Promise<boolean> {
     if (await this.finishedRepeat(c, text)) return true;
-    const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
-    // A named doctor with no separate schedule: the person says "any doctor" in words
-    if (open?.doctorState === 'WISH_ASKED' && !text.includes('?') && /(будь-?який|любой|все одно|всё равно|без різниці|без разницы)/i.test(text)) return this.onDoctorAnswer(c, 'any', null);
+    let open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
+    const agent = await this.agentMode(c.clinicId);
+    // Agent path, cabinets, a time already chosen: a doctor named now (while the contacts are given, or after the summary) is not dropped. The wish and its state go onto
+    // the request and every earlier consent is withdrawn (it was given without it); the data already given stay. The step asks the doctor question before anything else.
+    if (agent && open?.kind === 'BOOKING' && open.slotAt && open.scheduleMode === 'CABINETS' && ['COLLECT', 'CONFIRM', 'CONSENT'].includes(open.stage) && !open.confirmedAt) {
+      const ws = await this.choice.cabinetWishState(c.clinicId, c.channel, c.chatId);
+      const wp = this.wishPatch(ws);
+      if (wp && (wp.wishedDoctor !== open.wishedDoctor || wp.doctorState !== open.doctorState)) {
+        await this.prisma.bookingRequest.update({ where: { id: open.id }, data: { ...wp, stage: 'COLLECT', consentKey: null, consentAt: null, consentMessageId: null, ...(wp.doctorState === 'ANY_DOCTOR' ? { asks: 0 } : {}) } });
+        this.log.log(`Agent booking: the doctor wish changed during the booking (${wp.doctorState}; clinic ${c.clinicId}, ${c.channel})`);
+        // the wish goes to the administrator: the agent's draft makes the one hand-over (the booking request and its data stay for the staff)
+        if (wp.doctorState === 'WISH_ADMIN') return false;
+        open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
+        // a message that only named the doctor or answered the question is taken (the step asks next); one that also gives data goes on below
+        if (!parsePhone(text) && !parseLabeledNames(text).lastName && !parseLabeledNames(text).firstName) return true;
+      } else if (ws && (ws.lastNames || ws.lastIsAnswer) && open.doctorState === 'WISH_ASKED') {
+        // the same question still open (an unclear answer): taken, the step asks again (a limited number of times)
+        if (!text.includes('?')) return true;
+      }
+    }
+    // Agent path, doctors mode, a time already chosen: another doctor named now. The time belongs to the doctor it was offered with, so it is released (with the consent);
+    // the contacts already given stay; the agent's draft settles the new doctor with DoctorChoiceService and offers that doctor's times.
+    if (agent && open?.kind === 'BOOKING' && open.slotAt && open.scheduleMode === 'DOCTORS' && ['COLLECT', 'CONFIRM', 'CONSENT'].includes(open.stage) && !open.confirmedAt && DOCTOR_WORD.test(text)) {
+      const named = matchDoctors(text, await this.prisma.doctor.findMany({ where: { clinicId: c.clinicId, active: true }, select: { externalId: true, lastName: true, firstName: true } }));
+      if (named.length && !(named.length === 1 && named[0] === open.doctorId)) {
+        await this.prisma.bookingRequest.update({ where: { id: open.id }, data: { slotAt: null, stage: 'NONE', autoState: null, autoNote: null, consentKey: null, consentAt: null, consentMessageId: null, doctorId: null, doctor: null, doctorReason: null, doctorState: null, pendingDoctorId: null } });
+        this.log.log(`Agent booking: another doctor was named during the booking (clinic ${c.clinicId}, ${c.channel})`);
+        return false;
+      }
+    }
+    // A named doctor with no separate schedule: the person says "any doctor" in words (the old bot; the agent path is above)
+    if (!agent && open?.doctorState === 'WISH_ASKED' && !text.includes('?') && /(будь-?який|любой|все одно|всё равно|без різниці|без разницы)/i.test(text)) return this.onDoctorAnswer(c, 'any', null);
     // A proposed doctor waits for the person's "yes" or "no"
-    if (open?.doctorState === 'PROPOSED' && open.stage !== 'CONFIRM' && !text.includes('?')) {
+    if (!agent && open?.doctorState === 'PROPOSED' && open.stage !== 'CONFIRM' && !text.includes('?')) {
       if (isYes(text)) return this.onDoctorAnswer(c, 'yes', open.pendingDoctorId);
       if (isNo(text)) return this.onDoctorAnswer(c, 'no', open.pendingDoctorId);
     }
@@ -466,6 +507,8 @@ export class BookingFlowService {
 
   // docpick: the person chose one of the doctors named; docyes/docno: the answer to a proposed doctor. A repeated answer does nothing twice.
   async onDoctorAnswer(c: FlowCtx, kind: 'pick' | 'yes' | 'no' | 'any' | 'wish', doctorId: string | null): Promise<boolean> {
+    // Agent path: the answer is read by the agent's draft (the same DoctorChoiceService.answer) and its result is saved only when that draft is really sent
+    if (await this.agentMode(c.clinicId)) return false;
     const open = await this.requests.openFor(c.clinicId, c.channel, c.chatId);
     if (!open) return false;
     if (kind === 'any' || kind === 'wish') {
@@ -718,9 +761,11 @@ export class BookingFlowService {
   // ---- 6. the agent path: the steps a staff member approves ----
 
   // The things the patient must agree to: the service, the time and how the doctor is chosen. A change of any of them needs a new "yes".
-  private consentKeyOf(r: { service: string | null; slotAt: Date | null; scheduleMode: string | null; doctorId: string | null; lastName?: string | null; firstName?: string | null; phone?: string | null }): string {
-    // what the patient confirms: the service, the time, how the doctor is chosen, and the contacts the visit will be made for (shown in the question)
-    return createHash('sha256').update([r.service ?? '', r.slotAt?.toISOString() ?? '', r.scheduleMode ?? '', r.doctorId ?? '', r.lastName ?? '', r.firstName ?? '', r.phone ?? ''].join('|')).digest('hex').slice(0, 24);
+  private consentKeyOf(r: { service: string | null; slotAt: Date | null; scheduleMode: string | null; doctorId: string | null; lastName?: string | null; firstName?: string | null; phone?: string | null; wishedDoctor?: string | null; doctorState?: string | null }): string {
+    // what the patient confirms: the service, the time, how the doctor is chosen, and the contacts the visit will be made for (shown in the question); a wished doctor and
+    // its state too, when there is one (a consent given before the wish, or before it was settled, is not a consent to the booking with it)
+    const wish = r.wishedDoctor || r.doctorState ? [r.wishedDoctor ?? '', r.doctorState ?? ''] : [];
+    return createHash('sha256').update([r.service ?? '', r.slotAt?.toISOString() ?? '', r.scheduleMode ?? '', r.doctorId ?? '', r.lastName ?? '', r.firstName ?? '', r.phone ?? '', ...wish].join('|')).digest('hex').slice(0, 24);
   }
 
   // The next question about the contacts, the same in both modes. Already received phone and explicit names stay; only what is missing is asked: both names in one short
@@ -745,7 +790,7 @@ export class BookingFlowService {
 
   // The state a step is made for, from the request alone (no reads of other systems): a step whose key no longer matches is stale
   agentKeyOf(r: BookingRequest & { patient?: { fullName: string; phone: string | null } | null }): string {
-    return [r.stage, r.slotAt?.toISOString() ?? '', r.service ?? '', this.missingOf(r).join('+'), r.asks, r.consentKey ?? '', r.consentAt ? 1 : 0, r.confirmedAt ? 1 : 0, r.autoNote === 'slot_gone' ? 'gone' : r.autoNote === 'data_disputed' ? 'disputed' : '', r.patientId ?? '', r.fullName ?? '', r.askField ?? ''].join('|');
+    return [r.stage, r.slotAt?.toISOString() ?? '', r.service ?? '', this.missingOf(r).join('+'), r.asks, r.consentKey ?? '', r.consentAt ? 1 : 0, r.confirmedAt ? 1 : 0, r.autoNote === 'slot_gone' ? 'gone' : r.autoNote === 'data_disputed' ? 'disputed' : '', r.patientId ?? '', r.fullName ?? '', r.askField ?? '', r.doctorState ?? '', r.wishedDoctor ?? ''].join('|');
   }
 
   // After the summary of the data and the question "do you confirm?" the patient corrects the name or the phone, or says the data are wrong. The old consent and its
@@ -808,7 +853,9 @@ export class BookingFlowService {
     if (service) {
       const duration = await this.durationFor(c.clinicId, service);
       if (duration) {
-        const p = await this.placement(c, { ...(open ?? ({ clinicId: c.clinicId, service: null, doctorId: null, doctor: null, doctorReason: null } as unknown as BookingRequest)), service, slotAt }, duration);
+        // (doctors mode: the button carries its doctor; the place is checked for THAT doctor)
+        const slotDoctor = slot.doctor?.startsWith('#') ? { doctorId: slot.doctor.slice(1) } : {};
+        const p = await this.placement(c, { ...(open ?? ({ clinicId: c.clinicId, service: null, doctorId: null, doctor: null, doctorReason: null } as unknown as BookingRequest)), service, slotAt, ...slotDoctor }, duration);
         if (!p.ok && p.busy) {
           if (open) await this.prisma.bookingRequest.update({ where: { id: open.id }, data: { slotAt: null, stage: 'NONE', autoNote: 'slot_gone', consentKey: null, consentAt: null, consentMessageId: null } });
           return refuse('place_taken');
@@ -841,6 +888,23 @@ export class BookingFlowService {
     return { clinicId: r.clinicId, channel: r.channel, chatId: r.chatId, patientId: r.patientId, contactName: r.contactName };
   }
 
+  // Agent path: the doctor decision of a draft that was REALLY sent (a question about the doctor, or that doctor's times) is saved on the booking request of the dialogue,
+  // the way the old bot saves it with its reply (a silent request: the staff are told when it is complete). Called only by the execution of an approved/autonomous draft.
+  async applyDoctorPatch(clinicId: string, channel: string, chatId: string, service: string | null, patch: RequestPatch): Promise<void> {
+    const open = await this.requests.openFor(clinicId, channel, chatId);
+    if (open?.confirmedAt || (open && open.kind !== 'BOOKING')) return;
+    const row = open ?? (await this.requests.upsert(clinicId, { channel, chatId, patientId: (await this.prisma.patientChannel.findFirst({ where: { clinicId, channel, externalId: chatId }, select: { patientId: true } }))?.patientId ?? null, kind: 'BOOKING', summary: 'Запис через агента', service }, false, true));
+    await this.prisma.bookingRequest.update({ where: { id: row.id }, data: { ...this.requests.patchData(patch), scheduleMode: 'DOCTORS', ...(service ? { service: service.slice(0, 80) } : {}) } });
+    if (patch.doctorId && patch.doctorId !== open?.doctorId) await this.prisma.auditLog.create({ data: { clinicId, userId: null, action: 'booking_request.doctor', details: { request: row.id, doctorId: patch.doctorId, reason: patch.doctorReason ?? null } } });
+  }
+
+  // The doctor wish of the dialogue as fields of the request (cabinets mode, agent path). null: no doctor was named.
+  private wishPatch(ws: CabinetWish | null): { wishedDoctor: string | null; doctorState: 'WISH_ASKED' | 'ANY_DOCTOR' | 'WISH_ADMIN' } | null {
+    if (!ws || (!ws.wish && !ws.ambiguous.length)) return null;
+    const state = ws.state === 'ANY' ? 'ANY_DOCTOR' : ws.state === 'ADMIN' ? 'WISH_ADMIN' : 'WISH_ASKED';
+    return { wishedDoctor: ws.wish ?? ws.ambiguous.join(' / '), doctorState: state };
+  }
+
   // The next step of the booking for the open request of this dialogue, for a staff member to approve. Fresh checks (the place, the length of the service, who
   // the person is) are made here, so a step is never staged for something that cannot be done.
   // `resume`: the id of the answer the agent has just sent to a question the patient asked in the middle of the booking: the pending step is asked again once
@@ -855,6 +919,22 @@ export class BookingFlowService {
     if (r.autoNote === 'data_disputed') return note('data_wrong');
     const c = this.ctxOf(r);
     const x = T[await this.lang(c)];
+    // Cabinets mode, a doctor the patient named: settled before anything else (before the data, the consent and the visit). The wish for the administrator is not a step
+    // (the agent's draft makes the hand-over); an open question is asked by the code (the old bot's own text), not again while the patient has not answered, and a person
+    // takes it after two unclear answers.
+    if (r.scheduleMode === 'CABINETS' && r.doctorState === 'WISH_ADMIN') return { step: 'NONE' };
+    if (r.scheduleMode === 'CABINETS' && r.doctorState === 'WISH_ASKED') {
+      const ws = await this.choice.cabinetWishState(clinicId, r.channel, r.chatId);
+      if (ws && (ws.wish || ws.ambiguous.length)) {
+        if (ws.asked >= 2 && !ws.lastNames) return note('manual', `бажаний лікар: ${ws.wish ?? ws.ambiguous.join(' / ')}`);
+        // a tap on an old button of the booking (the consent of before) is not an answer to this question: the question is not repeated for it
+        const last = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel: r.channel, chatId: r.chatId, NOT: [{ direction: 'OUT', error: { not: null } }, { direction: 'IN', text: { in: ['Так, підтверджую', 'Ні, інший час', 'Да, подтверждаю', 'Нет, другое время'] } }] }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: { direction: true } });
+        if (last?.direction === 'OUT' && !resume) return { step: 'NONE' };
+        const lang = await this.lang(c);
+        const text = ws.ambiguous.length ? this.choice.ambiguousQuestion(lang, ws.ambiguous) : this.choice.wishQuestion(lang, ws.wish!);
+        return { step: 'ASK_DATA', key, requestId, text, field: 'doctor', missing: [], asks: r.asks };
+      }
+    }
     const missing = this.missingOf(r);
     if (missing.length) {
       if (r.asks >= MAX_ASKS) return note('manual');
@@ -894,7 +974,9 @@ export class BookingFlowService {
     // the summary the patient confirms: the contacts the visit will be made for, then the service and the time
     const who = x.confirmWho(summary.name, summary.phone);
     const question = byCabinets ? x.confirmAskCabinets(r.service, summary.date, summary.time, address) : x.confirmAsk(r.service, summary.date, summary.time, r.doctor);
-    const text = summary.name || summary.phone ? `${who}\n${question}` : question;
+    // a doctor the patient wished, accepted as "assigned by the clinic": said once more as a wish, never as a booked doctor
+    const wishLine = byCabinets && r.wishedDoctor && r.doctorState === 'ANY_DOCTOR' ? x.wishNote(r.wishedDoctor) : null;
+    const text = [summary.name || summary.phone ? who : null, wishLine, question].filter(Boolean).join('\n');
     return {
       step: 'ASK_CONSENT',
       key,
@@ -1053,6 +1135,32 @@ export class BookingFlowService {
     if (!place) return { ok: false, busy: true };
     if (!place.doctorId) return { ok: false, busy: false, note: 'лікаря не визначено (Cliniccards вимагає лікаря для запису), запис потрібно внести вручну' };
     return { ok: true, cabinetId: place.cabinetId, doctorId: place.doctorId, doctorName: place.doctorName };
+  }
+
+  // Where an EXISTING visit can be moved to: the same service, the same doctor (in the cabinets mode the same shared account) and the same length; the rules of a
+  // booking (the service allowed and provided by the doctor, a real schedule, a free cabinet for the whole visit) with only the visit itself left out of the busy
+  // times. Never another doctor. `busy`: the time is not free; otherwise `note` says why it cannot be done here.
+  async movePlacement(clinicId: string, v: { externalId: string; doctorId: string | null; service: string | null; minutes: number }, startsAt: Date): Promise<{ ok: true; cabinetId: string } | { ok: false; busy: boolean; note: string }> {
+    const cm = await this.clinicMode(clinicId);
+    const svc = await this.choice.findService(clinicId, v.service);
+    if (!svc || svc.missingInSourceAt) return { ok: false, busy: false, note: 'послугу візиту не визначено однозначно' };
+    if (!v.doctorId) return { ok: false, busy: false, note: 'у візиті немає лікаря' };
+    if (cm.scheduleMode === 'CABINETS') {
+      if (!svc.onlineBooking) return { ok: false, busy: false, note: BLOCK_TEXT.service_not_allowed };
+      if (v.doctorId !== cm.sharedDoctorId) return { ok: false, busy: false, note: 'візит не на спільному профілі клініки' };
+      try {
+        const p = await this.cabinets.placeFor(clinicId, startsAt, v.minutes, svc, v.externalId);
+        return p ? { ok: true, cabinetId: p.cabinetId } : { ok: false, busy: true, note: 'час зайнятий' };
+      } catch {
+        return { ok: false, busy: false, note: BLOCK_TEXT.schedule_unreadable };
+      }
+    }
+    const doc = await this.prisma.doctor.findUnique({ where: { clinicId_externalId: { clinicId, externalId: v.doctorId } } });
+    if (!doc || !doc.active) return { ok: false, busy: false, note: 'лікаря немає серед лікарів Cliniccards' };
+    if (serves(doc, svc) !== 'yes') return { ok: false, busy: false, note: 'лікар не надає цю послугу або це не налаштовано' };
+    if ((await this.availability.source(clinicId, doc.externalId)) === 'NONE') return { ok: false, busy: false, note: 'у лікаря немає надійного розкладу' };
+    const p = await this.availability.placeFor(clinicId, doc.externalId, startsAt, v.minutes, v.externalId);
+    return p ? { ok: true, cabinetId: p.cabinetId } : { ok: false, busy: true, note: 'час зайнятий' };
   }
 
   // The length of the visit from the clinic's approved reference

@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module';
 import { AgentApprovalService } from '../src/automations/agent-approval.service';
 import { SendError } from '../src/automations/channels';
 import { AgentAutoService } from '../src/automations/agent-auto.service';
+import { AgentAutoGate } from '../src/automations/agent-auto-gate';
 import { IntakeService } from '../src/automations/intake.service';
 import { SyncService } from '../src/integrations/sync.service';
 import { RequestsService } from '../src/automations/requests.service';
@@ -270,15 +271,17 @@ describe('автономний режим агента: той самий шля
     await ask(other);
     expect(transport.sent).toHaveLength(before);
     expect(await prisma.agentDraft.count({ where: { clinicId: c.c.clinicId, chatId: other.chat } })).toBe(0);
-    // 4. the booking is not by cabinets / no test service
+    // 4. no test service: denied in both scheduling modes (the doctors mode is allowed since 2026-11-11, see agent-administrator.md section 41; an unknown mode is not)
     const d = await autoClinic();
-    await prisma.clinic.update({ where: { id: d.c.clinicId }, data: { scheduleMode: 'DOCTORS' } });
+    await prisma.clinic.update({ where: { id: d.c.clinicId }, data: { scheduleMode: 'DOCTORS', agentAutoServiceId: null } });
     const n1 = transport.sent.length;
     await ask(d.c);
     expect(transport.sent).toHaveLength(n1);
-    await prisma.clinic.update({ where: { id: d.c.clinicId }, data: { scheduleMode: 'CABINETS', agentAutoServiceId: null } });
+    await prisma.clinic.update({ where: { id: d.c.clinicId }, data: { scheduleMode: 'CABINETS' } });
     await ask(d.c);
     expect(transport.sent).toHaveLength(n1);
+    await prisma.clinic.update({ where: { id: d.c.clinicId }, data: { scheduleMode: 'OTHER', agentAutoServiceId: d.c.consult.id } });
+    expect(await app.get(AgentAutoGate).denied(d.c.clinicId, 'INSTAGRAM', d.c.chat)).toBe('not_cabinets');
     // the manual path of the clinic with the agent only is unchanged: a staff member makes the draft and approves it
     const draft = await make(a.c);
     expect((await approve(a.c, draft, 'SEND_TIMES').expect(200)).body).toMatchObject({ outcome: 'SENT' });
@@ -895,11 +898,13 @@ describe('після завершеного запису: коротко код�
     await ask(c, 'А скільки триває консультація?');
     expect(modelCalls).toBe(calls + 1);
     expect(sendsTo(c).slice(n).map((m) => m.text).join(' ')).toContain('Ваш запис уже підтверджено, чекаємо вас.'); // not refused as a "done" claim: the system's record says it is true
-    // a request to move the booking is a hand-over (the model proposes it, the code executes the hand-over; the booking itself is not touched)
-    scriptedModel(() => decision({ reply: 'Передаємо.' }, { action: 'HAND_OFF', reason: 'needs_clarification' }));
+    // a request to move the visit THIS dialogue booked is the code's move (since 2026-11-11, agent-administrator.md section 46): the question about the day and the
+    // time, no model call; the visit itself is not touched until the patient confirms a new time (see test/agent-move.spec.ts)
+    const k = modelCalls;
     await ask(c, 'Мені треба перенести запис на інший день');
-    expect(await stateOf(c)).toMatchObject({ owner: 'HUMAN' });
-    expect(await prisma.bookingRequest.count({ where: { clinicId: c.clinicId, chatId: c.chat, kind: 'HANDOFF' } })).toBe(1);
+    expect(modelCalls).toBe(k);
+    expect(sendsTo(c)[sendsTo(c).length - 1].text).toContain('На який день і час вам зручно його перенести?');
+    expect(await stateOf(c)).toMatchObject({ owner: 'BOT' });
     expect(visitWrites()).toHaveLength(1);
   });
 });

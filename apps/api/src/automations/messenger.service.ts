@@ -45,9 +45,14 @@ export class MessengerService {
 
   // True when we may answer now: the channel has no window, or the person wrote to us inside it
   async windowOpen(clinicId: string, channel: string, chatId: string): Promise<boolean> {
+    return this.windowOpenAt(clinicId, channel, chatId, new Date());
+  }
+
+  // The same rule for a later moment (a reminder planned now and sent then): the person's last message must be less than the window before `at`
+  async windowOpenAt(clinicId: string, channel: string, chatId: string, at: Date): Promise<boolean> {
     const ms = this.adapters.get(channel)?.caps.replyWindowMs;
     if (!ms) return true;
     const last = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } });
-    return !!last && Date.now() - last.createdAt.getTime() < ms;
+    return !!last && at.getTime() - last.createdAt.getTime() < ms;
   }
 }

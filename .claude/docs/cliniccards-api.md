@@ -136,6 +136,7 @@ Source: the public Postman collection of the official documentation (the address
 - GET `/schedule-settings` (working days with opening and closing time, holidays, `min_free_time`) and the online-booking methods `/booking-settings`, `/booking-items` exist. We use none of them yet.
 
 ### Assumptions that remain (to verify on a live clinic with the owner)
+*Correction (2026-11-11):* creating a visit (POST `/visits`) was tested by the owner on a live Cliniccards; the older notes above that say no write was ever sent to a real clinic are out of date for creation. Cancelling and rescheduling (PUT `/visits`) were NOT verified live: points 7 and 9-11 below stay open.
 1. Which `status` a clinic wants for a visit made from outside (`PLANNED` is the documentation's example; `BOOKING` or `NOT_CONFIRMED` may fit better).
 2. Whether the API refuses an unknown `doctor_id`, a doctor who has no shift at that time, a cabinet that is not the doctor's, or a time outside the working hours (nothing of this is documented; the mock does not check it).
 3. Whether a visit made through the API needs `price_items_ids` for the service to show in the card (documented as optional).
@@ -144,6 +145,9 @@ Source: the public Postman collection of the official documentation (the address
 6. Rate limits, error texts and the behaviour on a lost answer (the mock imitates a lost answer; the real API may behave differently).
 7. The exact status and fields of a cancelled or moved visit afterwards.
 8. Booking by cabinets (one shared account as `doctor_id` in several cabinets at the same time): the documentation of POST/PUT `/visits` says nothing about overlapping visits of one doctor_id, so whether the API accepts or refuses them is unknown (LANKA's own check is per cabinet in this mode).
+9. PUT `/visits` with `status: CANCELLED`: is it accepted as a full replace, does the visit stay (not deleted) with that status, and is `price_items` kept when `price_items_ids` is absent (documented, not verified). The mock keeps the visit and its items.
+10. There is no conditional update (no version or `date_edited` check on PUT): a change a staff member makes in Cliniccards between our fresh read and our PUT is overwritten by the fields we repeat. LANKA narrows the window (a fresh read right before the PUT) but cannot close it.
+11. Rescheduling: does the clinic move a visit by changing its time (one PUT on the same visit, what `BookingService.reschedule` does) or by marking it MOVED and creating a new one? The reports of reschedules count the MOVED status, which a PUT of the time does not leave.
 
 ## Working hours, price list and cabinets: what the API gives (checked against the official documentation, 2026-11-03)
 - **Working hours of the clinic**: GET `/schedule-settings` (read; already in the whitelist) returns `working_days` (`day_of_week` 1 Monday ... 7 Sunday, `active` 1/0, `opening`, `closing` as HH:MM), `holidays` (YYYY-MM-DD) and display settings (`min_free_time`). The sync reads it into `Clinic.workHours` with the source CLINICCARDS, but only while the clinic has not typed its own hours: hours typed by hand (source MANUAL) are never replaced by a sync, only by the explicit button "Підтягнути з Cliniccards". The holidays become closed days (a manual exception for that date wins). All seven days must be understood, otherwise nothing is imported; hours are never derived from visits or from a calendar. Not verified on a live clinic: the real answer of 112 dental.

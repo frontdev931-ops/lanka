@@ -3,8 +3,9 @@ import { Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { clinicDate, clinicHm, clinicMonth, localToUtc, startOfClinicDay } from '../common/clinic-time';
 import { readWorkHours } from '../clinic/work-hours';
-import { COLUMN_LABEL, Lang, REPORT_RULE, REPORT_TEXT, ReportId, VALUE_LABEL } from '../common/i18n';
+import { COLUMN_LABEL, LANKA_MOVES_TEXT, Lang, REPORT_RULE, REPORT_TEXT, ReportId, VALUE_LABEL } from '../common/i18n';
 import { cellLabel } from './report-export';
+import { lankaMoves } from './lanka-moves';
 
 // Cliniccards statuses: the visit took place / the appointment is no longer valid.
 const DONE = 'VISITED';
@@ -35,6 +36,20 @@ export interface Report {
   // A reason shown instead of data that would only be a guess (for example no reliable schedule for the free times), or null
   notice?: string | null;
   // The values kind (status code), rebooked (boolean) and an empty source are labelled by the client in its own language
+  rows: Row[];
+  // Separate parts of a report with their own rule, totals and rows (never added to the main rows): "Rescheduled through LANKA" of missed-visits
+  sections?: ReportSection[];
+}
+
+export interface ReportSection {
+  key: string;
+  title: string;
+  rule: string;
+  summary: { label: string; value: number }[];
+  // e.g. the legacy audit entries that are not counted
+  note: string | null;
+  columns: { key: string; label: string }[];
+  // already in the report's language (no client labelling)
   rows: Row[];
 }
 
@@ -114,6 +129,41 @@ export class ReportsService {
       // Free windows by cabinet hours are not tied to a doctor: the "Doctor" column is then not needed
       columns: meta.columns.filter((key) => !(id === 'free-slots' && key === 'doctor' && rows.every((r) => !r.doctor))).map((key) => ({ key, label: COLUMN_LABEL[lang][key] ?? key })),
       rows,
+      ...(meta.id === 'missed-visits' ? { rule: `${REPORT_RULE[meta.id][lang](d, max)}. ${LANKA_MOVES_TEXT[lang].mainNote}`, sections: [await this.lankaMovesSection(clinicId, d, lang)] } : {}),
+    };
+  }
+
+  // "Rescheduled through LANKA": the operations of the period by their date (the same counting as the digest, lanka-moves.ts), with what is recorded of each
+  private async lankaMovesSection(clinicId: string, days: number, lang: Lang): Promise<ReportSection> {
+    const now = new Date();
+    const t = LANKA_MOVES_TEXT[lang];
+    const m = await lankaMoves(this.prisma, clinicId, new Date(now.getTime() - days * DAY), new Date(now.getTime() + 1));
+    const ops = [...m.operations].sort((a, b) => b.at.getTime() - a.at.getTime());
+    const visits = await this.prisma.visit.findMany({ where: { clinicId, externalId: { in: ops.map((o) => o.visit).filter((v): v is string => !!v) } }, select: { externalId: true, patient: { select: { fullName: true } } } });
+    const patientOf = new Map(visits.map((v) => [v.externalId, v.patient.fullName]));
+    // staff names only of members of this clinic
+    const users = await this.prisma.user.findMany({ where: { id: { in: ops.map((o) => o.userId).filter((u): u is string => !!u) }, memberships: { some: { clinicId } } }, select: { id: true, name: true } });
+    const nameOf = new Map(users.map((u) => [u.id, u.name]));
+    const at = (d: Date | null) => (d ? `${clinicDate(d)} ${clinicHm(d)}` : t.notRecorded);
+    const cols = ['opWhen', 'visitRef', 'patient', 'oldWhen', 'newWhen', 'actor'];
+    return {
+      key: 'lanka-moves',
+      title: t.title,
+      rule: t.rule(days),
+      summary: [
+        { label: t.operations, value: ops.length },
+        { label: t.visits, value: m.visits },
+      ],
+      note: m.legacy ? t.legacy(m.legacy) : null,
+      columns: cols.map((key) => ({ key, label: COLUMN_LABEL[lang][key] ?? key })),
+      rows: ops.map((o) => ({
+        opWhen: at(o.at),
+        visitRef: o.visit ?? t.notRecorded,
+        patient: (o.visit && patientOf.get(o.visit)) || t.noVisit,
+        oldWhen: at(o.from),
+        newWhen: at(o.to),
+        actor: o.actor === 'agent' ? t.agent : o.actor === 'staff' ? t.staff(o.userId ? (nameOf.get(o.userId) ?? null) : null) : t.unknown,
+      })),
     };
   }
 
@@ -545,6 +595,16 @@ export class ReportsService {
     const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
     const head = report.columns.map((c) => esc(c.label)).join(';');
     const lines = report.rows.map((r) => report.columns.map((c) => esc(text(c.key, r[c.key]))).join(';'));
-    return '﻿' + [head, ...lines].join('\r\n');
+    // a separate section after an empty line: its title, rule, totals and its own table (never mixed into the rows above)
+    const parts = (report.sections ?? []).flatMap((sec) => [
+      '',
+      esc(sec.title),
+      esc(sec.rule),
+      ...sec.summary.map((x) => `${esc(x.label)};${x.value}`),
+      ...(sec.note ? [esc(sec.note)] : []),
+      sec.columns.map((c) => esc(c.label)).join(';'),
+      ...sec.rows.map((r) => sec.columns.map((c) => esc(text(c.key, r[c.key]))).join(';')),
+    ]);
+    return '﻿' + [head, ...lines, ...parts].join('\r\n');
   }
 }

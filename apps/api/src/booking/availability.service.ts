@@ -45,13 +45,14 @@ export class AvailabilityService {
   }
 
   // Free windows of one doctor for the visit length, sorted by time
-  async windows(clinicId: string, doctorId: string, opts: { days?: number; minutes: number }): Promise<FreeWindow[]> {
+  // `ignoreVisitId`: the external id of the ONE visit that is being moved (its own place does not count against its new time; every other visit does)
+  async windows(clinicId: string, doctorId: string, opts: { days?: number; minutes: number; ignoreVisitId?: string }): Promise<FreeWindow[]> {
     const days = opts.days ?? 14;
     const { from, to, dates } = this.range(days);
     const [shifts, availability, visits, blocks, cabinets] = await Promise.all([
       this.prisma.shift.findMany({ where: { clinicId, doctorId, startsAt: { gte: from, lt: to } } }),
       this.prisma.doctorAvailability.findMany({ where: { clinicId, doctorId } }),
-      this.prisma.visit.findMany({ where: { clinicId, status: { notIn: INACTIVE }, startsAt: { gte: from, lt: to } }, select: { doctorId: true, cabinetId: true, startsAt: true, endsAt: true } }),
+      this.prisma.visit.findMany({ where: { clinicId, status: { notIn: INACTIVE }, startsAt: { gte: from, lt: to } }, select: { externalId: true, doctorId: true, cabinetId: true, startsAt: true, endsAt: true } }),
       this.prisma.reservedBlock.findMany({ where: { clinicId, startsAt: { gte: from, lt: to } }, select: { cabinetId: true, startsAt: true, endsAt: true } }),
       this.prisma.cabinet.findMany({ where: { clinicId }, select: { externalId: true, name: true } }),
     ]);
@@ -82,7 +83,7 @@ export class AvailabilityService {
       for (const h of hours.get(date) ?? []) {
         const busy: [number, number][] = [];
         for (const v of visits) {
-          if (clinicDate(v.startsAt) !== date || (v.doctorId !== doctorId && v.cabinetId !== h.cabinetId)) continue;
+          if (clinicDate(v.startsAt) !== date || (v.doctorId !== doctorId && v.cabinetId !== h.cabinetId) || (opts.ignoreVisitId && v.externalId === opts.ignoreVisitId)) continue;
           const end = v.endsAt ?? new Date(v.startsAt.getTime() + 30 * MIN);
           busy.push([toMin(clinicHm(v.startsAt)), clinicDate(end) === date ? toMin(clinicHm(end)) : 24 * 60]);
         }
@@ -92,8 +93,12 @@ export class AvailabilityService {
         }
         let cursor = date === today ? Math.max(h.s, earliestToday) : h.s;
         for (const [a, b] of busy.sort((x, y) => x[0] - y[0])) {
-          if (a > cursor && a - cursor >= opts.minutes) out.push({ date, startMin: cursor, endMin: a, cabinetId: h.cabinetId, cabinetName: names.get(h.cabinetId) ?? null, source });
+          // a free gap ends at the next busy time OR at the end of the working interval, whichever is first: a visit of another doctor in the same cabinet after
+          // the doctor's hours must not stretch his free time past them (it did: 10:00-10:10 hours and a visit at 11:00 gave a free 10:00-11:00)
+          const end = Math.min(a, h.e);
+          if (end > cursor && end - cursor >= opts.minutes) out.push({ date, startMin: cursor, endMin: end, cabinetId: h.cabinetId, cabinetName: names.get(h.cabinetId) ?? null, source });
           cursor = Math.max(cursor, b);
+          if (cursor >= h.e) break;
         }
         if (h.e - cursor >= opts.minutes) out.push({ date, startMin: cursor, endMin: h.e, cabinetId: h.cabinetId, cabinetName: names.get(h.cabinetId) ?? null, source });
       }
@@ -102,11 +107,11 @@ export class AvailabilityService {
   }
 
   // The cabinet in which this doctor can take this exact time, or null when he cannot (not working, busy, or the cabinet is busy)
-  async placeFor(clinicId: string, doctorId: string, startsAt: Date, minutes: number): Promise<{ cabinetId: string; cabinetName: string | null } | null> {
+  async placeFor(clinicId: string, doctorId: string, startsAt: Date, minutes: number, ignoreVisitId?: string): Promise<{ cabinetId: string; cabinetName: string | null } | null> {
     const date = clinicDate(startsAt);
     const start = toMin(clinicHm(startsAt));
     const days = Math.max(2, Math.ceil((startsAt.getTime() - Date.now()) / 86_400_000) + 2);
-    const w = (await this.windows(clinicId, doctorId, { days: Math.min(days, 90), minutes })).find((x) => x.date === date && x.startMin <= start && start + minutes <= x.endMin);
+    const w = (await this.windows(clinicId, doctorId, { days: Math.min(days, 90), minutes, ignoreVisitId })).find((x) => x.date === date && x.startMin <= start && start + minutes <= x.endMin);
     return w ? { cabinetId: w.cabinetId, cabinetName: w.cabinetName } : null;
   }
 

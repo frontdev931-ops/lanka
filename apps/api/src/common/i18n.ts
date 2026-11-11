@@ -708,6 +708,7 @@ export const COLUMN_LABEL: Record<Lang, Record<string, string>> = {
   uk: {
     fullName: 'Пацієнт', phone: 'Телефон', visitedAt: 'Візит', lastService: 'Послуга', lastDoctor: 'Лікар', daysSince: 'Днів минуло', visitTime: 'Час', visitStatus: 'Статус запису',
     visitAt: 'Дата запису', kind: 'Що сталося', doctor: 'Лікар', service: 'Послуга', rebooked: 'Записаний знову',
+    opWhen: 'Дата перенесення', visitRef: 'Візит у Cliniccards', patient: 'Пацієнт', oldWhen: 'Був час', newWhen: 'Новий час', actor: 'Хто переніс',
     lastVisitAt: 'Останній візит', source: 'Джерело', patients: 'Пацієнтів', active: 'Були на прийомі', visits: 'Візитів', revenue: 'Сума послуг',
     openItems: 'Не виконано послуг', openSum: 'Сума невиконаного', lifetimePaid: 'Оплачено всього', lastDoneAt: 'Останній виконаний', debt: 'Борг', balanceIssued: 'Виставлено',
     balancePaid: 'Сплачено', month: 'Місяць', invoiced: 'Виставлено', paid: 'Сплачено', paymentsCount: 'Платежів', dayAt: 'Дата', cabinet: 'Кабінет',
@@ -716,6 +717,7 @@ export const COLUMN_LABEL: Record<Lang, Record<string, string>> = {
   ru: {
     fullName: 'Пациент', phone: 'Телефон', visitedAt: 'Посещение', lastService: 'Услуга', lastDoctor: 'Врач', daysSince: 'Дней прошло', visitTime: 'Время', visitStatus: 'Статус записи',
     visitAt: 'Дата записи', kind: 'Что случилось', doctor: 'Врач', service: 'Услуга', rebooked: 'Записан снова',
+    opWhen: 'Дата переноса', visitRef: 'Визит в Cliniccards', patient: 'Пациент', oldWhen: 'Было время', newWhen: 'Новое время', actor: 'Кто перенёс',
     lastVisitAt: 'Последний визит', source: 'Источник', patients: 'Пациентов', active: 'Были на приёме', visits: 'Визитов', revenue: 'Сумма услуг',
     openItems: 'Не выполнено услуг', openSum: 'Сумма невыполненного', lifetimePaid: 'Оплачено всего', lastDoneAt: 'Последний выполненный', debt: 'Долг', balanceIssued: 'Выставлено',
     balancePaid: 'Оплачено', month: 'Месяц', invoiced: 'Выставлено', paid: 'Оплачено', paymentsCount: 'Платежей', dayAt: 'Дата', cabinet: 'Кабинет',
@@ -724,6 +726,7 @@ export const COLUMN_LABEL: Record<Lang, Record<string, string>> = {
   en: {
     fullName: 'Patient', phone: 'Phone', visitedAt: 'Visit', lastService: 'Service', lastDoctor: 'Doctor', daysSince: 'Days ago', visitTime: 'Time', visitStatus: 'Appointment status',
     visitAt: 'Appointment date', kind: 'What happened', doctor: 'Doctor', service: 'Service', rebooked: 'Rebooked',
+    opWhen: 'Moved on', visitRef: 'Visit in Cliniccards', patient: 'Patient', oldWhen: 'Was at', newWhen: 'New time', actor: 'Moved by',
     lastVisitAt: 'Last visit', source: 'Source', patients: 'Patients', active: 'Attended', visits: 'Visits', revenue: 'Services total',
     openItems: 'Unfinished services', openSum: 'Unfinished total', lifetimePaid: 'Paid in total', lastDoneAt: 'Last completed', debt: 'Debt', balanceIssued: 'Billed',
     balancePaid: 'Paid', month: 'Month', invoiced: 'Invoiced', paid: 'Paid', paymentsCount: 'Payments', dayAt: 'Date', cabinet: 'Cabinet',
@@ -732,6 +735,34 @@ export const COLUMN_LABEL: Record<Lang, Record<string, string>> = {
 };
 
 // Подписи значений для CSV (в интерфейсе их показывает веб-клиент)
+// The section "Rescheduled through LANKA" of the report of no-shows, cancellations and reschedules (and its digest line)
+export const LANKA_MOVES_TEXT: Record<Lang, { title: string; rule: (d: number) => string; operations: string; visits: string; legacy: (n: number) => string; agent: string; staff: (name: string | null) => string; unknown: string; noVisit: string; notRecorded: string; mainNote: string }> = {
+  uk: {
+    title: 'Перенесено через LANKA',
+    rule: (d) => `Підтверджені перенесення візитів, зроблені через LANKA (дія персоналу або агент), за датою перенесення за останні ${d} дн. Одна операція — одна підтверджена спроба перенесення (повтори одного запису аудиту рахуються один раз, за найранішою датою); один візит може бути перенесений кілька разів. Це не статус MOVED у Cliniccards: перенесення через LANKA лишає той самий візит активним, тому ці числа не додаються до записів зі статусом MOVED вище`,
+    operations: 'Операцій перенесення', visits: 'Різних візитів',
+    legacy: (n) => `Ще ${n} старих записів аудиту без ідентифікатора операції: їх не включено до числа операцій`,
+    agent: 'Агент LANKA', staff: (name) => (name ? `Співробітник: ${name}` : 'Співробітник'), unknown: 'Невідомо', noVisit: 'Візиту вже немає в копії LANKA', notRecorded: 'не записано',
+    mainNote: 'Перенесення через LANKA показано окремо нижче й до цих записів не додаються',
+  },
+  ru: {
+    title: 'Перенесено через LANKA',
+    rule: (d) => `Подтверждённые переносы визитов, сделанные через LANKA (действие персонала или агент), по дате переноса за последние ${d} дн. Одна операция — одна подтверждённая попытка переноса (повторы одной записи аудита считаются один раз, по самой ранней дате); один визит может быть перенесён несколько раз. Это не статус MOVED в Cliniccards: перенос через LANKA оставляет тот же визит активным, поэтому эти числа не прибавляются к записям со статусом MOVED выше`,
+    operations: 'Операций переноса', visits: 'Разных визитов',
+    legacy: (n) => `Ещё ${n} старых записей аудита без идентификатора операции: в число операций не включены`,
+    agent: 'Агент LANKA', staff: (name) => (name ? `Сотрудник: ${name}` : 'Сотрудник'), unknown: 'Неизвестно', noVisit: 'Визита уже нет в копии LANKA', notRecorded: 'не записано',
+    mainNote: 'Переносы через LANKA показаны отдельно ниже и к этим записям не прибавляются',
+  },
+  en: {
+    title: 'Rescheduled through LANKA',
+    rule: (d) => `Confirmed moves of visits made through LANKA (a staff action or the agent), by the date of the move, in the last ${d} days. One operation is one confirmed rescheduling attempt (repeated audit entries of it count once, at the earliest date); one visit can be moved several times. This is not the MOVED status of Cliniccards: a move through LANKA keeps the same visit active, so these numbers are not added to the MOVED appointments above`,
+    operations: 'Rescheduling operations', visits: 'Distinct visits',
+    legacy: (n) => `${n} more older audit entries without an operation id: not included in the number of operations`,
+    agent: 'LANKA agent', staff: (name) => (name ? `Staff: ${name}` : 'Staff'), unknown: 'Unknown', noVisit: 'The visit is no longer in LANKA’s copy', notRecorded: 'not recorded',
+    mainNote: 'Moves through LANKA are shown separately below and are not added to these appointments',
+  },
+};
+
 export const VALUE_LABEL: Record<Lang, { kind: Record<string, string>; status: Record<string, string>; yes: string; no: string; notSpecified: string }> = {
   uk: { kind: { DID_NOT_COME: 'Неявка', CANCELLED: 'Скасування', MOVED: 'Перенесення' }, status: { PLANNED: 'Запланований', CONFIRMED: 'Підтверджений', NOT_CONFIRMED: 'Не підтверджений', IN_CLINIC: 'У клініці', IN_CHAIR: 'У кріслі' }, yes: 'Так', no: 'Ні', notSpecified: 'Не вказано' },
   ru: { kind: { DID_NOT_COME: 'Неявка', CANCELLED: 'Отмена', MOVED: 'Перенос' }, status: { PLANNED: 'Запланирован', CONFIRMED: 'Подтверждён', NOT_CONFIRMED: 'Не подтверждён', IN_CLINIC: 'В клинике', IN_CHAIR: 'В кресле' }, yes: 'Да', no: 'Нет', notSpecified: 'Не указан' },

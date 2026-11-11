@@ -265,7 +265,8 @@ export class CabinetBookingService {
   }
 
   // Free windows by cabinet. Hours are the clinic's working hours with their exceptions; unset hours offer nothing.
-  async windows(clinicId: string, opts: { minutes: number; service?: { cabinetIds: string[] } | null; urgent?: boolean; days?: number; force?: boolean }): Promise<CabinetWindow[]> {
+  // `ignoreVisitId`: the external id of the ONE visit that is being moved (only its own place is left out)
+  async windows(clinicId: string, opts: { minutes: number; service?: { cabinetIds: string[] } | null; urgent?: boolean; days?: number; force?: boolean; ignoreVisitId?: string }): Promise<CabinetWindow[]> {
     const days = opts.days ?? 7;
     const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { workHours: true, workHoursExceptions: true, workHoursSource: true, workHoursHolidays: true } });
     const configured = !!clinic.workHours && typeof clinic.workHours === 'object' && Object.keys(clinic.workHours as object).length > 0;
@@ -288,7 +289,7 @@ export class CabinetBookingService {
         // EVERY visit in the cabinet counts, whatever doctor_id it has (the shared account is not one busy physical doctor)
         const busy: [number, number][] = [];
         for (const v of visits) {
-          if (v.cabinetId !== cabinetId || INACTIVE.includes(v.status) || clinicDate(v.startsAt) !== date) continue;
+          if (v.cabinetId !== cabinetId || INACTIVE.includes(v.status) || clinicDate(v.startsAt) !== date || (opts.ignoreVisitId && v.externalId === opts.ignoreVisitId)) continue;
           const end = v.endsAt ?? new Date(v.startsAt.getTime() + 30 * MIN);
           busy.push([toMin(clinicHm(v.startsAt)), clinicDate(end) === date ? toMin(clinicHm(end)) : 24 * 60]);
         }
@@ -323,11 +324,11 @@ export class CabinetBookingService {
   }
 
   // The cabinet for this exact time, from data read right now (never from the cache): null when no allowed cabinet is free for the whole visit
-  async placeFor(clinicId: string, startsAt: Date, minutes: number, service: { cabinetIds: string[] } | null): Promise<{ cabinetId: string } | null> {
+  async placeFor(clinicId: string, startsAt: Date, minutes: number, service: { cabinetIds: string[] } | null, ignoreVisitId?: string): Promise<{ cabinetId: string } | null> {
     const date = clinicDate(startsAt);
     const start = toMin(clinicHm(startsAt));
     const days = Math.min(30, Math.max(2, Math.ceil((startsAt.getTime() - Date.now()) / 86_400_000) + 2));
-    const w = (await this.windows(clinicId, { minutes, service, days, force: true })).find((x) => x.date === date && x.startMin <= start && start + minutes <= x.endMin);
+    const w = (await this.windows(clinicId, { minutes, service, days, force: true, ignoreVisitId })).find((x) => x.date === date && x.startMin <= start && start + minutes <= x.endMin);
     return w ? { cabinetId: w.cabinetId } : null;
   }
 

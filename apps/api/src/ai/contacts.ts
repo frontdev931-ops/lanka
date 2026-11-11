@@ -16,15 +16,34 @@ const HOURS = /(графік|график|режим\s+робот|режим\s+�
 // A message that also asks for a booking or a change goes to the model, which sees the contacts too
 const BOOKING = /(запис|записат|запиш|окн|вікн|вікон|хочу|перенес|скас|відмін|отмен)/i;
 
-export function wantsContacts(text: string): { address: boolean; phone: boolean; hours: boolean } | null {
-  if (text.length > 120 || BOOKING.test(text)) return null;
+// Is the message ONLY about the contacts? A second question in the same message (joined by "and", or a second question mark) is not: the agent hands such a
+// message to the model, which sees the contacts too, so no question is dropped. The check is structural (a joined clause, a second question), not a phrase list.
+const JOINED = /(?:^|[\s,;])(?:і|й|та|и|а\s+ще|а\s+также|ще|еще|також|также|плюс)\s+\S/i;
+export function contactsOnly(text: string): boolean {
+  return (text.match(/\?/g) ?? []).length <= 1 && !JOINED.test(text);
+}
+
+// A reply that gives an address or a phone number the clinic never entered (and the knowledge base does not hold) is an invention: the agent's check refuses it, so the
+// "not known" answer is the only one that can be sent. Words of a street and a long digit sequence are looked for; it is a net, not a proof.
+const ADDRESS_WORDS = /(?<![\p{L}])(?:вул\.|вулиц\S*|просп\.|проспект\S*|бульвар\S*|провулок|пров\.|ул\.|улиц\S*|переулок|площ\S*)/iu;
+const LONG_DIGITS = /(?:\+?\d[\s().-]*){9,}/;
+export function inventedContact(reply: string, known: { address: boolean; phone: boolean }): 'address' | 'phone' | null {
+  if (!known.address && ADDRESS_WORDS.test(reply)) return 'address';
+  if (!known.phone && LONG_DIGITS.test(reply)) return 'phone';
+  return null;
+}
+
+// ignoreBooking: the agent answers the contacts of a message that CLOSES the exchange ("не хочу записуватися, скажіть ваш графік"): its booking words are a refusal, not a request to book
+export function wantsContacts(text: string, opts: { ignoreBooking?: boolean } = {}): { address: boolean; phone: boolean; hours: boolean } | null {
+  if (text.length > 120 || (!opts.ignoreBooking && BOOKING.test(text))) return null;
   const w = { address: ADDRESS.test(text), phone: PHONE.test(text), hours: HOURS.test(text) };
   return w.address || w.phone || w.hours ? w : null;
 }
 
 // null when nothing that was asked is known: the model (or a person) takes the question
-export function contactReply(text: string, lang: 'ru' | 'uk', c: Contacts): string | null {
-  const w = wantsContacts(text);
+// invite: the closing "if you want to book, write to us" of the working bot; the agent leaves it out (a booking is offered once, by its own rule, not in every answer)
+export function contactReply(text: string, lang: 'ru' | 'uk', c: Contacts, opts: { invite?: boolean; ignoreBooking?: boolean } = {}): string | null {
+  const w = wantsContacts(text, { ignoreBooking: opts.ignoreBooking });
   if (!w) return null;
   const ru = lang === 'ru';
   const parts: string[] = [];
@@ -39,7 +58,7 @@ export function contactReply(text: string, lang: 'ru' | 'uk', c: Contacts): stri
   if (w.hours && !c.hours) unknown.push(ru ? 'график работы' : 'графік роботи');
   if (unknown.length && !c.inKnowledgeBase) parts.push(ru ? `Данных о том, что вы спросили (${unknown.join(', ')}), у нас сейчас нет, это нужно уточнить у администратора клиники.` : `Даних про те, що ви запитали (${unknown.join(', ')}), у нас зараз немає, це потрібно уточнити в адміністратора клініки.`);
   if (!parts.length) return null;
-  parts.push(ru ? 'Если хотите записаться, напишите нам.' : 'Якщо хочете записатися, напишіть нам.');
+  if (opts.invite !== false) parts.push(ru ? 'Если хотите записаться, напишите нам.' : 'Якщо хочете записатися, напишіть нам.');
   return parts.join('\n\n');
 }
 

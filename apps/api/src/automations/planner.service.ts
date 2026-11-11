@@ -3,6 +3,10 @@ import { clinicDate, clinicHm } from '../common/clinic-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { marketingAllowed } from './consent';
 import { Kind, SCENARIOS, Scenario, render, scenario } from './scenarios';
+import { reminderKey, timeChangedAt } from './visit-reminders';
+import { MessengerService } from './messenger.service';
+import { nextSendMoment } from './send-window';
+import { Provider } from '@prisma/client';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -26,7 +30,11 @@ export interface RuleReport {
   candidates: number; // how many match the condition
   alreadyQueued: number; // for how many a message is already created
   toQueue: number; // how many will be queued
-  noChannel: number; // no messenger connected
+  noChannel: number; // no messenger connected (no linked recipient)
+  // appointment reminders through a linked Instagram conversation, when there is no usable Telegram: why one was not queued
+  channelDisconnected: number; // the conversation is linked, but the clinic's Instagram is not connected
+  windowClosed: number; // the 24-hour reply window is closed, or will be closed when the message can go out
+  optedOut: number; // the patient said stop (or blocked the clinic's bot) on a channel: no other channel is used instead
   blockedConsent: number; // no consent for marketing
   paused: number; // the patient opted out or is paused
   tooSoon: number; // a marketing message to this patient was already sent recently
@@ -35,7 +43,10 @@ export interface RuleReport {
 
 @Injectable()
 export class PlannerService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private messenger: MessengerService,
+  ) {}
 
   async rules(clinicId: string) {
     const rows = await this.prisma.automationRule.findMany({ where: { clinicId } });
@@ -53,22 +64,60 @@ export class PlannerService {
     });
   }
 
+  // The channel of one patient's message, or null with the reason counted. Telegram: a linked chat without a stop, as before. Instagram, only for the appointment
+  // reminder and only without a usable Telegram: a conversation of THIS clinic linked to the patient (the IGSID of a real conversation: never a username, a
+  // preferred contact, a note or a phone), the clinic's Instagram connected, no stop on any channel, and the 24-hour window still open when the message can go
+  // out (now, or the morning's start of the sending hours). The sender checks the window again right before sending.
+  private async channelFor(clinicId: string, key: string, channels: { channel: string; externalId: string; optedOutAt: Date | null }[], now: Date, row: RuleReport): Promise<string | null> {
+    if (channels.some((c) => c.channel === 'TELEGRAM' && !c.optedOutAt)) return 'TELEGRAM';
+    const ig = channels.find((c) => c.channel === 'INSTAGRAM');
+    if (key !== 'visit-reminder' || !ig) {
+      row.noChannel++;
+      return null;
+    }
+    // a stop the patient gave on a channel (the text "stop", or blocking the bot) is not bypassed by writing in another one
+    if (channels.some((c) => c.optedOutAt)) {
+      row.optedOut++;
+      return null;
+    }
+    if (!(await this.igConnected(clinicId))) {
+      row.channelDisconnected++;
+      return null;
+    }
+    if (!(await this.messenger.windowOpenAt(clinicId, 'INSTAGRAM', ig.externalId, nextSendMoment(now)))) {
+      row.windowClosed++;
+      return null;
+    }
+    return 'INSTAGRAM';
+  }
+
+  private async igConnected(clinicId: string): Promise<boolean> {
+    const i = await this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.INSTAGRAM } }, select: { apiKeyEnc: true } });
+    return !!i?.apiKeyEnc;
+  }
+
   // Picks the candidates of a scenario for the current moment
   private async candidates(clinicId: string, s: Scenario, params: Record<string, unknown>, now: Date): Promise<Candidate[]> {
     if (s.key === 'visit-reminder') {
       const hours = (Array.isArray(params.hoursBefore) ? params.hoursBefore : [24]).map(Number).filter((h) => h > 0 && h <= 72);
       const visits = await this.prisma.visit.findMany({
         where: { clinicId, status: { in: ACTIVE_VISIT }, startsAt: { gt: new Date(now.getTime() + 30 * 60_000), lte: new Date(now.getTime() + 72 * HOUR) }, patient: { removedAt: null } },
-        select: { id: true, patientId: true, startsAt: true, bookedAt: true },
+        select: { id: true, externalId: true, patientId: true, startsAt: true, bookedAt: true },
       });
+      // when the time of a visit was last changed (moved through LANKA, or a new time seen by the sync)
+      const changed = await timeChangedAt(this.prisma, clinicId, visits.map((v) => v.externalId), new Date(now.getTime() - 4 * DAY));
       const out: Candidate[] = [];
       for (const v of visits) {
         for (const h of hours) {
           const at = new Date(v.startsAt.getTime() - h * HOUR);
-          // A reminder is created when no more than h hours are left before the appointment; for those booked later than that moment it is not needed
+          // A reminder is created when no more than h hours are left before the appointment; for those booked later than that moment it is not needed,
+          // and neither for a visit whose time changed after that moment (no reminder sent only because the visit moved)
           if (at.getTime() > now.getTime()) continue;
           if (v.bookedAt && v.bookedAt.getTime() > at.getTime()) continue;
-          out.push({ patientId: v.patientId, visitId: v.id, dedupeKey: `visit-reminder:${v.id}:${h}`, vars: { date: clinicDate(v.startsAt).slice(5).split('-').reverse().join('.'), time: clinicHm(v.startsAt) }, scheduledFor: now, expiresAt: v.startsAt });
+          const moved = changed.get(v.externalId);
+          if (moved && moved.getTime() > at.getTime()) continue;
+          // one reminder per revision of the visit (its start time) and offset
+          out.push({ patientId: v.patientId, visitId: v.id, dedupeKey: reminderKey(v.id, h, v.startsAt), vars: { date: clinicDate(v.startsAt).slice(5).split('-').reverse().join('.'), time: clinicHm(v.startsAt) }, scheduledFor: now, expiresAt: v.startsAt });
         }
       }
       return out;
@@ -231,13 +280,13 @@ export class PlannerService {
       if (!r.enabled && !opts.includeDisabled) continue;
       const sc = scenario(r.key)!;
       const cands = await this.candidates(clinicId, sc, r.params, now);
-      const row: RuleReport = { key: r.key, enabled: r.enabled, candidates: cands.length, alreadyQueued: 0, toQueue: 0, noChannel: 0, blockedConsent: 0, paused: 0, tooSoon: 0, sample: [] };
+      const row: RuleReport = { key: r.key, enabled: r.enabled, candidates: cands.length, alreadyQueued: 0, toQueue: 0, noChannel: 0, channelDisconnected: 0, windowClosed: 0, optedOut: 0, blockedConsent: 0, paused: 0, tooSoon: 0, sample: [] };
       if (cands.length) {
         const patients = new Map(
           (
             await this.prisma.patient.findMany({
               where: { clinicId, id: { in: [...new Set(cands.map((c) => c.patientId))] } },
-              select: { id: true, fullName: true, consent: true, automationPaused: true, channels: { where: { channel: 'TELEGRAM', optedOutAt: null }, select: { id: true } } },
+              select: { id: true, fullName: true, consent: true, automationPaused: true, channels: { where: { clinicId, channel: { in: ['TELEGRAM', 'INSTAGRAM'] } }, select: { channel: true, externalId: true, optedOutAt: true } } },
             })
           ).map((p) => [p.id, p]),
         );
@@ -265,19 +314,17 @@ export class PlannerService {
             row.tooSoon++;
             continue;
           }
-          // Only Telegram is connected now; SMS will be added as a fallback channel
-          if (!p.channels.length) {
-            row.noChannel++;
-            continue;
-          }
+          // Telegram first (as always); an appointment reminder may go to the patient's linked Instagram conversation when there is no usable Telegram
+          const channel = await this.channelFor(clinicId, r.key, p.channels, now, row);
+          if (!channel) continue;
           const text = render(r.text, { fullName: p.fullName, clinic: clinic.name, ...c.vars });
           row.toQueue++;
-          if (row.sample.length < 5) row.sample.push({ patient: p.fullName, channel: 'TELEGRAM', text });
+          if (row.sample.length < 5) row.sample.push({ patient: p.fullName, channel, text });
           create.push({
             clinicId,
             patientId: c.patientId,
             ruleKey: r.key,
-            channel: 'TELEGRAM',
+            channel,
             text,
             // Service messages go out at once if the clinic allowed it; the others wait for the staff's confirmation
             status: sc.kind === 'service' && clinic.autoSendService ? 'APPROVED' : 'PENDING_APPROVAL',

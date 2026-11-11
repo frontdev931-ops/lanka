@@ -111,3 +111,46 @@ The invitation to leave a public review (`Clinic.reviewUrl`) goes to every patie
 - The sender of a message is an Instagram-scoped id, not a phone number, so patients are never matched automatically.
 - Live check needs a public https address, the Meta app and its review (`docs/02-hosting-and-security.md`).
 
+
+### Appointment reminders in a linked Instagram conversation (2026-11-11, built and tested on fakes, not verified live)
+This updates the line above: there are still no campaigns or scenarios in Instagram, but an **appointment reminder** can go to Instagram when the platform allows it.
+
+**When a reminder goes to Instagram** (all must hold; the scheduler `planner.service.ts`, scenario "Нагадування про візит" only):
+- **Telegram first, unchanged.** A linked Telegram chat without a stop always wins.
+- **Only a real conversation.** There is no usable Telegram, and the patient's card has a linked Instagram conversation of this clinic (an Instagram-scoped id of a conversation the patient started, linked by a staff member, by the identity check, or by the automatic booking that made the card). A username, a profile link, a note, the "preferred contact" of Cliniccards or a matching phone never make a recipient: Cliniccards gives no Instagram address at all.
+- **The clinic's Instagram is connected.**
+- **No stop on any channel.** The patient has not said stop (or blocked the clinic's bot) on any channel. Such a stop is the patient's own act and is not bypassed by writing in another channel; a disconnected channel or a failed delivery is not a stop.
+- **Consent and pause as before.** A withdrawn consent or a paused patient gets no reminder anywhere.
+- **The 24-hour window will be open when the message can go out:** now, or 08:00 when it is night. Only the standard 24-hour rule is used: no longer window for ads, no HUMAN_AGENT tag (it is for a person's replies only, never for automatic messages).
+
+**Sending** (`outbox.service.ts`):
+- Through the Instagram channel sender, which checks the 24-hour window again right before sending.
+- Text only: no Telegram buttons or links, no quick replies. The patient answers by an ordinary message, which works on desktop Instagram too. The sent text is shown in the conversation.
+- Every outcome is final for that queued message (one per appointment time and reminder offset, across all channels): there is no retry and never another channel instead.
+
+| Outcome | Status in the queue | Reason shown |
+|---|---|---|
+| Window closed by now | Cancelled | «Вікно Instagram закрито…» |
+| The clinic's Instagram disconnected | Cancelled | «Instagram клініки не підключено» |
+| A stop on any channel since planning | Cancelled | «Пацієнт відмовився від повідомлень в іншому каналі» |
+| The provider refused | Error | The provider's message (the link is not marked as a stop) |
+| No clear answer | **Result unknown** (a status of its own) | «Результат доставки невідомий: повторно не надсилається» |
+
+**What staff see.** The preview of the scenario counts separately:
+- «немає підключеного каналу»;
+- «діалог Instagram прив’язано, але Instagram клініки не підключено»;
+- «вікно Instagram закрито або закриється до відправки»;
+- «пацієнт відмовився в одному з каналів»;
+- consent and pause, as before.
+
+The queue shows the status and the reason of each message. The existing rule "booked after the reminder's moment: no reminder" is unchanged, and the preview does not count it.
+
+**Examples.**
+- **Reminder 24 hours before a visit tomorrow at 10:00, the patient wrote in Instagram yesterday at 15:00, no Telegram.** The reminder is made today at 10:00, the window is open (19 hours), so it is queued for Instagram and sent as text.
+- **Visit in a week, last Instagram message a week ago.** Window closed: not queued, counted as «вікно Instagram закрито…»; the patient needs Telegram or a call.
+
+**Limits.**
+- It works only for patients who wrote to the clinic in Instagram in the last 24 hours before the reminder, and whose conversation is linked to the card.
+- The 7-day window after a Click-to-Direct ad is not used: its origin is not recorded.
+- Custom "before the visit" automations stay Telegram-only.
+- Not verified on a live Instagram account (App Review is not passed).

@@ -109,8 +109,12 @@ model Clinic {
   aiAgentMode         Boolean              @default(false)
   funnelEventsEnabled Boolean              @default(false)
   // The agent's limited AUTONOMOUS mode (answers, offers times, asks, books after the patient's consent without a button): off by default, never implied by
-  // aiAgentMode, and effective only for the dialogs listed in the server variable AGENT_AUTO_DIALOGS and only for this one service of the approved reference
+  // aiAgentMode, and effective only for the dialogs listed in the server variable AGENT_AUTO_DIALOGS and only for the services of its explicit set
   aiAgentAuto         Boolean              @default(false)
+  // The set of services the autonomous mode may book (approved, active services of this clinic, at most five), chosen by the service owner. Authoritative once
+  // agentAutoServicesSet is true (an empty set disables autonomy); before that the older single agentAutoServiceId still applies (kept for compatibility).
+  agentAutoServiceIds  String[]            @default([])
+  agentAutoServicesSet Boolean             @default(false)
   agentAutoServiceId  String?
   conversationStates  ConversationState[]
   funnelEvents        FunnelEvent[]

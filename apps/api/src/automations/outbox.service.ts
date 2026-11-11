@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Provider } from '@prisma/client';
-import { clinicHm } from '../common/clinic-time';
 import { decrypt } from '../common/crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramApi, TelegramError } from './telegram.api';
@@ -9,11 +8,11 @@ import { scenario } from './scenarios';
 import { effectiveLimits, periodStart } from '../service/plans';
 import { WaitlistService } from './waitlist.service';
 import { CustomAutomationsService } from './custom-automations.service';
-
-const ACTIVE_VISIT = ['PLANNED', 'CONFIRMED', 'NOT_CONFIRMED'];
+import { reminderStale } from './visit-reminders';
 // Sending window in the clinic's time zone: we do not write to patients at night
-const SEND_FROM = '08:00';
-const SEND_TO = '22:00';
+import { inSendWindow } from './send-window';
+import { MessengerService } from './messenger.service';
+import { SendError } from './channels';
 
 @Injectable()
 export class OutboxService {
@@ -24,6 +23,7 @@ export class OutboxService {
     private telegram: TelegramApi,
     private waitlist: WaitlistService,
     private custom: CustomAutomationsService,
+    private messenger: MessengerService,
   ) {}
 
   async list(clinicId: string, status: string, page: number) {
@@ -80,8 +80,7 @@ export class OutboxService {
   async process(now = new Date(), scope?: { clinicId?: string }): Promise<{ sent: number; failed: number; skipped: number }> {
     const out = { sent: 0, failed: 0, skipped: 0 };
     const due = await this.prisma.outboundMessage.findMany({ where: { status: 'APPROVED', scheduledFor: { lte: now }, ...(scope?.clinicId ? { clinicId: scope.clinicId } : {}), clinic: { sendingEnabled: true, suspendedAt: null } }, orderBy: { scheduledFor: 'asc' }, take: 200 });
-    const hm = clinicHm(now);
-    const inWindow = hm >= SEND_FROM && hm < SEND_TO;
+    const inWindow = inSendWindow(now);
     const tokens = new Map<string, string | null>();
     const confirmFor = new Map<string, boolean>();
     const assume = new Map<string, boolean>((await this.prisma.clinic.findMany({ where: { id: { in: [...new Set(due.map((m) => m.clinicId))] } }, select: { id: true, assumeConsent: true } })).map((c) => [c.id, c.assumeConsent]));
@@ -124,18 +123,58 @@ export class OutboxService {
           continue;
         }
       }
-      if (m.ruleKey === 'visit-reminder' && m.visitId) {
-        const v = await this.prisma.visit.findUnique({ where: { id: m.visitId }, select: { status: true, startsAt: true } });
-        if (!v || !ACTIVE_VISIT.includes(v.status) || v.startsAt <= now) {
+      // a reminder of a visit's time (the built-in one, or a clinic's "before the visit" automation) is sent only for the visit as it was made for: the same
+      // visit, active, at the SAME time (the start it was made for, see visit-reminders.ts); a moved or cancelled visit's reminder is cancelled, never sent with the old time
+      const rule = m.ruleKey.startsWith('auto:') && m.visitId ? await this.prisma.automation.findFirst({ where: { id: m.ruleKey.slice(5), clinicId: m.clinicId }, select: { trigger: true } }) : null;
+      const beforeVisit = m.ruleKey === 'visit-reminder' || (rule?.trigger as { type?: string } | null | undefined)?.type === 'VISIT_BEFORE';
+      if (beforeVisit && m.visitId) {
+        const v = await this.prisma.visit.findFirst({ where: { id: m.visitId, clinicId: m.clinicId }, select: { status: true, startsAt: true } });
+        if (reminderStale(v, m) || !v || v.startsAt <= now) {
           await mark('CANCELLED', 'Запис змінено або скасовано');
           out.skipped++;
           continue;
         }
       }
       const ch = await this.prisma.patientChannel.findUnique({ where: { patientId_channel: { patientId: m.patientId, channel: m.channel } } });
-      if (!ch || ch.optedOutAt) {
+      if (!ch || ch.optedOutAt || ch.clinicId !== m.clinicId) {
         await mark('CANCELLED', 'Пацієнт не підключений до каналу');
         out.skipped++;
+        continue;
+      }
+      // An appointment reminder in the patient's linked Instagram conversation: text only (no Telegram buttons or links), through the channel sender, which checks
+      // the 24-hour window right before sending. Each outcome is final for this row: no retry, and never another channel instead.
+      if (m.channel === 'INSTAGRAM') {
+        if (await this.prisma.patientChannel.count({ where: { clinicId: m.clinicId, patientId: m.patientId, optedOutAt: { not: null } } })) {
+          await mark('CANCELLED', 'Пацієнт відмовився від повідомлень в іншому каналі');
+          out.skipped++;
+          continue;
+        }
+        try {
+          await this.messenger.send(m.clinicId, 'INSTAGRAM', ch.externalId, m.text, []);
+        } catch (e) {
+          const se = e instanceof SendError ? e : null;
+          if (se?.reason === 'window_closed') {
+            await mark('CANCELLED', 'Вікно Instagram закрито: понад 24 години без повідомлення пацієнта');
+            out.skipped++;
+          } else if (se?.reason === 'not_connected') {
+            await mark('CANCELLED', 'Instagram клініки не підключено');
+            out.skipped++;
+          } else if (se?.ambiguous) {
+            // the provider may have received it: not repeated, not sent elsewhere; a person checks the conversation
+            await mark('UNKNOWN', 'Результат доставки невідомий: повторно не надсилається');
+            out.failed++;
+          } else {
+            await mark('FAILED', (se?.message ?? 'Не вдалося надіслати').slice(0, 200));
+            out.failed++;
+          }
+          this.log.warn(`Нагадування в Instagram не надіслано: ${(e as Error).message}`);
+          continue;
+        }
+        await mark('SENT');
+        // the conversation shows what the clinic sent
+        await this.prisma.chatMessage.create({ data: { clinicId: m.clinicId, patientId: m.patientId, channel: 'INSTAGRAM', chatId: ch.externalId, direction: 'OUT', text: m.text } });
+        left.set(m.clinicId, (left.get(m.clinicId) ?? 1) - 1);
+        out.sent++;
         continue;
       }
       if (!tokens.has(m.clinicId)) {

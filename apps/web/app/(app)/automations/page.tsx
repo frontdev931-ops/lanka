@@ -52,6 +52,10 @@ interface Preview {
   alreadyQueued: number;
   toQueue: number;
   noChannel: number;
+  // the appointment reminder through a linked Instagram conversation (when there is no usable Telegram): why it was not queued
+  channelDisconnected?: number;
+  windowClosed?: number;
+  optedOut?: number;
   blockedConsent: number;
   paused: number;
   tooSoon: number;
@@ -84,8 +88,9 @@ const TONE: Record<string, 'gray' | 'amber' | 'blue' | 'green' | 'red'> = {
   FAILED: 'red',
   CANCELLED: 'gray',
   EXPIRED: 'gray',
+  UNKNOWN: 'amber',
 };
-const STATUSES = ['PENDING_APPROVAL', 'APPROVED', 'SENT', 'FAILED', 'CANCELLED', 'EXPIRED'] as const;
+const STATUSES = ['PENDING_APPROVAL', 'APPROVED', 'SENT', 'FAILED', 'UNKNOWN', 'CANCELLED', 'EXPIRED'] as const;
 const HOURS = [2, 3, 6, 12, 24, 48];
 
 export default function AutomationsPage() {
@@ -523,6 +528,9 @@ export default function AutomationsPage() {
                   <div className="rule-preview">
                     <b>{t('au.now')}:</b> {t('au.nowLine', { c: p.candidates, q: p.toQueue, w: p.alreadyQueued })}
                     {p.noChannel > 0 && <span> · {t('au.noChannel', { n: p.noChannel })}</span>}
+                    {!!p.channelDisconnected && <span> · {t('au.igDisconnected', { n: p.channelDisconnected })}</span>}
+                    {!!p.windowClosed && <span> · {t('au.igWindow', { n: p.windowClosed })}</span>}
+                    {!!p.optedOut && <span> · {t('au.optedOut', { n: p.optedOut })}</span>}
                     {p.blockedConsent > 0 && <span> · {t('au.noConsent', { n: p.blockedConsent })}</span>}
                     {p.paused > 0 && <span> · {t('au.paused', { n: p.paused })}</span>}
                     {p.tooSoon > 0 && <span> · {t('au.tooSoon', { n: p.tooSoon })}</span>}

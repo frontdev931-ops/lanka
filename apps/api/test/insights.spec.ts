@@ -19,6 +19,8 @@ const http = () => request(app.getHttpServer());
 const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
 const PASSWORD = 'correct-horse-battery';
 const day = 86_400_000;
+// the clinics created by this file (the only ones whose schedules runDue() may see)
+const own = new Set<string>();
 
 beforeAll(async () => {
   app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
@@ -28,8 +30,18 @@ beforeAll(async () => {
   prisma = app.get(PrismaService);
   mail = app.get(MailService);
   insights = app.get(InsightsService);
+  // Isolation: the test database is shared and never emptied, and runDue() works on EVERY due schedule of the database (at most 50 per call). Rows left by earlier runs and other files
+  // become due again as days pass, so the checks "nothing else is due" and "one more mail" would depend on how old the database is. Instead of switching those rows off, the reads of
+  // schedules WITHOUT a clinic filter (only the runDue() batch) are narrowed to the clinics this file creates (`own`); the rows of everybody else are neither read, sent nor modified.
+  // Mail goes to the in-process outbox of this app instance (no provider is configured in tests), which starts empty. Production code is untouched.
+  const original = prisma.scheduledReport.findMany.bind(prisma.scheduledReport);
+  jest.spyOn(prisma.scheduledReport, 'findMany').mockImplementation(((args?: { where?: Record<string, unknown> }) => {
+    const where = args?.where ?? {};
+    return original({ ...args, where: 'clinicId' in where ? where : { ...where, clinicId: { in: [...own] } } } as never);
+  }) as never);
 });
 afterAll(async () => {
+  jest.restoreAllMocks();
   await app.close();
 });
 
@@ -38,6 +50,7 @@ async function clinic(plan = 'PRO') {
   const res = await http().post('/auth/register').send({ acceptTerms: true, clinicName: `Клініка ${rnd()}`, name: 'Анна', email, password: PASSWORD }).expect(201);
   const user = await prisma.user.findUniqueOrThrow({ where: { email }, include: { memberships: true } });
   const clinicId = user.memberships[0].clinicId;
+  own.add(clinicId);
   await prisma.clinic.update({ where: { id: clinicId }, data: { plan } });
   return { token: res.body.accessToken as string, clinicId, email, userId: user.id };
 }

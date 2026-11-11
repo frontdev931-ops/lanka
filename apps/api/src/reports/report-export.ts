@@ -49,6 +49,20 @@ export async function toXlsx(report: Report, lang: Lang): Promise<Buffer> {
   report.columns.forEach((_, i) => (ws.getColumn(i + 1).width = widths[i]));
   ws.views = [{ state: 'frozen', ySplit: 5 }];
   if (report.rows.length) ws.autoFilter = { from: { row: 5, column: 1 }, to: { row: 5 + report.rows.length, column: report.columns.length } };
+  // each separate section on its own sheet: its title, rule, totals and table (never mixed into the main rows)
+  for (const sec of report.sections ?? []) {
+    const ss = wb.addWorksheet(sec.title.slice(0, 31).replace(/[\\/?*[\]:]/g, ' '));
+    ss.addRow([sec.title]).font = { bold: true, size: 14 };
+    ss.addRow([`${t.rule}: ${sec.rule}`]);
+    for (const x of sec.summary) ss.addRow([x.label, x.value]);
+    if (sec.note) ss.addRow([sec.note]);
+    ss.addRow([]);
+    const h = ss.addRow(sec.columns.map((c) => c.label));
+    h.font = { bold: true };
+    h.eachCell((c) => (c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6F2F1' } }));
+    for (const r of sec.rows) ss.addRow(sec.columns.map((c) => cellLabel(lang, c.key, r[c.key])));
+    sec.columns.forEach((c, i) => (ss.getColumn(i + 1).width = Math.min(40, Math.max(14, c.label.length + 2, ...sec.rows.map((r) => String(r[c.key] ?? '').length + 2)))));
+  }
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
@@ -89,11 +103,12 @@ export function toPdf(report: Report, lang: Lang): Promise<Buffer> {
       doc.font(font).fontSize(fs);
       return Math.max(...cells.map((c, i) => doc.heightOfString(c, { width: cw[i] - pad * 2 }))) + pad * 2;
     };
+    let headerCells = report.columns.map((c) => c.label);
     const drawRow = (cells: string[], header: boolean) => {
       const h = rowHeight(cells, header ? 'b' : 'r');
       if (doc.y + h > doc.page.height - doc.page.margins.bottom - 14) {
         doc.addPage();
-        drawRow(report.columns.map((c) => c.label), true);
+        drawRow(headerCells, true);
       }
       const y = doc.y;
       if (header) doc.rect(left, y, width, h).fill('#E6F2F1').fillColor('#000');
@@ -110,6 +125,19 @@ export function toPdf(report: Report, lang: Lang): Promise<Buffer> {
     drawRow(report.columns.map((c) => c.label), true);
     for (const r of report.rows.slice(0, PDF_MAX_ROWS)) drawRow(report.columns.map((c) => cellLabel(lang, c.key, r[c.key])), false);
     if (report.rows.length > PDF_MAX_ROWS) doc.moveDown(0.5).font('r').fontSize(8.5).text(t.cut.replace('{n}', String(PDF_MAX_ROWS)), left, doc.y);
+
+    // a separate section: its own heading, rule, totals and table (equal column widths), after the main table
+    for (const sec of report.sections ?? []) {
+      doc.moveDown(1).font('b').fontSize(12).fillColor('#000').text(sec.title, left, doc.y, { width });
+      doc.font('r').fontSize(8.5).fillColor('#444').text(`${t.rule}: ${sec.rule}`, { width });
+      doc.text(sec.summary.map((x) => `${x.label}: ${x.value}`).join(' · '), { width });
+      if (sec.note) doc.text(sec.note, { width });
+      doc.fillColor('#000').moveDown(0.4);
+      cw.splice(0, cw.length, ...sec.columns.map(() => width / sec.columns.length));
+      headerCells = sec.columns.map((c) => c.label);
+      drawRow(headerCells, true);
+      for (const r of sec.rows.slice(0, PDF_MAX_ROWS)) drawRow(sec.columns.map((c) => cellLabel(lang, c.key, r[c.key])), false);
+    }
 
     // page numbers
     const range = doc.bufferedPageRange();

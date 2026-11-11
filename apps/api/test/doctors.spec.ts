@@ -154,6 +154,54 @@ describe('налаштування лікарів', () => {
   });
 });
 
+// The length of the visit against the doctor's working hours (the cause of the short-window observation of agent-administrator.md section 41): a free gap ends at the next
+// busy time OR at the end of the working interval; the final check before a booking (placeFor) reads the same windows
+describe('тривалість візиту в межах робочого часу лікаря', () => {
+  const setup = async (rows: { from: string; to: string }[]) => {
+    const c = await prisma.clinic.create({ data: { name: `Тривалість ${rnd()}` } });
+    const p = await prisma.patient.create({ data: { clinicId: c.id, externalId: `p${rnd()}`, fullName: 'Тест' } });
+    await prisma.doctor.create({ data: { clinicId: c.id, externalId: '906', lastName: 'Гнатюк', firstName: 'Віра', serviceIds: [] } });
+    await prisma.doctorAvailability.createMany({ data: [1, 2, 3, 4, 5, 6, 7].flatMap((weekday) => rows.map((r) => ({ clinicId: c.id, doctorId: '906', weekday, fromHm: r.from, toHm: r.to, cabinetId: '801' }))) });
+    const day = clinicDate(new Date(Date.now() + 2 * 86_400_000));
+    const at = (hm: string) => localToUtc(`${day} ${hm}:00`);
+    const visit = (from: string, to: string, doctorId = '501') => prisma.visit.create({ data: { clinicId: c.id, patientId: p.id, externalId: `v${rnd()}`, doctorId, cabinetId: '801', startsAt: at(from), endsAt: at(to), status: 'PLANNED' } });
+    const av = app.get(AvailabilityService);
+    return { c, day, at, visit, windows: () => av.windows(c.id, '906', { minutes: 30 }), place: (hm: string) => av.placeFor(c.id, '906', at(hm), 30) };
+  };
+
+  it('робочий інтервал 10:00–10:10: 30-хвилинний візит не вміщується, навіть коли пізніше в тому ж кабінеті стоїть візит іншого лікаря (раніше це давало вікно 10:00–11:00)', async () => {
+    const x = await setup([{ from: '10:00', to: '10:10' }]);
+    expect(await x.windows()).toEqual([]);
+    await x.visit('11:00', '11:30');
+    expect((await x.windows()).filter((w) => w.date === x.day)).toEqual([]);
+    expect(await x.place('10:00')).toBeNull();
+    await prisma.clinic.delete({ where: { id: x.c.id } });
+  });
+
+  it('рівно 30 хвилин вміщується; візит не виходить за межі зміни й не перетинає перерву (окремий інтервал чи блок у кабінеті)', async () => {
+    const a = await setup([{ from: '10:00', to: '10:30' }]);
+    await a.visit('11:00', '11:30');
+    expect((await a.windows()).filter((w) => w.date === a.day)).toEqual([expect.objectContaining({ startMin: 600, endMin: 630 })]);
+    expect(await a.place('10:00')).not.toBeNull();
+    expect(await a.place('10:05')).toBeNull(); // would end at 10:35
+    await prisma.clinic.delete({ where: { id: a.c.id } });
+    // two working intervals with a break 12:00–12:30; a visit of another doctor in the cabinet 13:00–13:30; a reserved block 10:45–11:00
+    const b = await setup([{ from: '10:00', to: '12:00' }, { from: '12:30', to: '14:00' }]);
+    await b.visit('13:00', '13:30');
+    await prisma.reservedBlock.create({ data: { clinicId: b.c.id, externalId: `b${rnd()}`, cabinetId: '801', startsAt: b.at('10:45'), endsAt: b.at('11:00') } });
+    expect(await b.place('11:45')).toBeNull(); // across the break
+    expect(await b.place('12:30')).not.toBeNull();
+    expect(await b.place('12:45')).toBeNull(); // into the visit at 13:00
+    expect(await b.place('13:30')).not.toBeNull();
+    expect(await b.place('13:45')).toBeNull(); // past the end of the shift
+    expect(await b.place('10:30')).toBeNull(); // into the block
+    expect(await b.place('11:00')).not.toBeNull();
+    const day = (await b.windows()).filter((w) => w.date === b.day).map((w) => [w.startMin, w.endMin]);
+    expect(day).toEqual([[600, 645], [660, 720], [750, 780], [810, 840]]);
+    await prisma.clinic.delete({ where: { id: b.c.id } });
+  });
+});
+
 describe('розклад, який клініка веде в LANKA, і вільний час лікаря', () => {
   it('розклад зберігається з перевіркою: години, кабінет, перетин власних рядків, зайнятий кабінет іншого лікаря', async () => {
     const c = await clinic();

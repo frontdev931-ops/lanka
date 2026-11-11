@@ -33,6 +33,8 @@ interface Report {
   columns: { key: string; label: string }[];
   rows: Record<string, Cell>[];
   canCreateTasks: boolean;
+  // separate parts with their own rule and totals, already in the chosen language (never added to the rows above)
+  sections?: { key: string; title: string; rule: string; summary: { label: string; value: number }[]; note: string | null; columns: { key: string; label: string }[]; rows: Record<string, Cell>[] }[];
 }
 
 interface Assignee {
@@ -390,6 +392,36 @@ export default function ReportsPage() {
           <div className="table-foot">{filtered ? t('rep.rowsFound', { n: rows.length, total: report.rows.length }) : t('rep.rows', { n: report.rows.length })}</div>
         )}
       </Card>
+
+      {report?.sections?.map((sec) => (
+        <Card key={sec.key} flush title={sec.title}>
+          <p className="rule" style={{ padding: '0 20px' }}>
+            <b>{t('rep.rule')}</b> {sec.rule}.
+          </p>
+          <p className="rule" style={{ padding: '0 20px' }}>
+            {sec.summary.map((x, i) => (
+              <span key={x.label}>{i > 0 && ' · '}{x.label}: <b>{x.value}</b></span>
+            ))}
+          </p>
+          {sec.note && <p className="rule muted" style={{ padding: '0 20px' }}>{sec.note}</p>}
+          {sec.rows.length ? (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>{sec.columns.map((c) => <th key={c.key}>{c.label}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {sec.rows.map((r, i) => (
+                    <tr key={i}>{sec.columns.map((c) => <td key={c.key}>{r[c.key] === null || r[c.key] === '' ? <span className="muted">—</span> : String(r[c.key])}</td>)}</tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty title={t('rep.empty')} />
+          )}
+        </Card>
+      ))}
     </>
   );
 }

@@ -98,6 +98,7 @@ describe('текст і дія, внутрішній устрій, відмін�
         'time-morning#2.1:time',
         'time-late#2.1:time', // "Клініка працює до 18:00": the clinic's hours are now answered by the code, never written by the model
         'attack-price#1.1:mechanism',
+        'attack-advantage#1.2:mechanism', // "…такого немає в наших затверджених даних": the approval machinery named to the patient (the new check on internal sources)
         'switch#2.1:mechanism',
         'expensive-b#2.1:title',
         'ru-price-book#1.1:title', // "Стоимость Тестовой консультации": a capitalised, changed title in the middle of a sentence (the Russian title shares the stems)

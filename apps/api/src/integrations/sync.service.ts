@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, OnApplicationBootstrap } from '@nestjs/common';
 import { Integration, Provider, SyncStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { cancelStaleReminders } from '../automations/visit-reminders';
 import { decrypt, encrypt } from '../common/crypto';
 import { normalizePhone } from '../common/phone';
 import { matchInquiries } from '../inquiries/match';
@@ -201,6 +202,8 @@ export class SyncService implements OnApplicationBootstrap {
       // Appointments
       let visitCount = 0;
       const freshVisits = new Set<string>();
+      // the times we knew of the visits that are not yet past: a visit that comes back at another time moved (in Cliniccards, or through LANKA unseen until now)
+      const knownTimes = new Map((await this.prisma.visit.findMany({ where: { clinicId, startsAt: { gte: new Date(now - DAY) } }, select: { externalId: true, startsAt: true } })).map((v) => [v.externalId, v.startsAt]));
       await inBatches(visits, async (v) => {
         const patientId = idByExternal.get(v.patientExternalId);
         if (!patientId) return;
@@ -230,6 +233,11 @@ export class SyncService implements OnApplicationBootstrap {
         freshVisits,
       );
       if (staleVisits.length) await this.prisma.visit.deleteMany({ where: { clinicId, externalId: { in: staleVisits } } });
+      // a new time seen here is recorded (the moment LANKA learned it; how often or when it changed in Cliniccards in between is not known), and the waiting reminders
+      // of moved, cancelled or deleted visits are cancelled (never sent with the old time)
+      const timeChanges = visits.filter((v) => freshVisits.has(v.externalId) && knownTimes.has(v.externalId) && knownTimes.get(v.externalId)!.getTime() !== v.startsAt.getTime());
+      if (timeChanges.length) await this.prisma.auditLog.createMany({ data: timeChanges.map((v) => ({ clinicId, userId: null, action: 'visit.time_changed', details: { visit: v.externalId, from: knownTimes.get(v.externalId)!.toISOString(), to: v.startsAt.toISOString(), source: 'sync' } })) });
+      await cancelStaleReminders(this.prisma, clinicId);
 
       await step(44, 'saving');
       // Treatment plans (items of unknown patients, for example archived ones, are skipped)

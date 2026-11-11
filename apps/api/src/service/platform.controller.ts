@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, Patch, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsDateString, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
+import { MAX_AUTO_SERVICES, configuredAutoServiceIds } from '../automations/agent-auto-gate';
 import { AuthGuard, AuthUser, CurrentUser } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLAN_KEYS, PLANS, effectiveLimits, monthStart } from './plans';
@@ -27,8 +28,10 @@ class ClinicPatchDto {
   // Foundation of the AI administrator-agent: collection of funnel events (the only switch of it) and the reserved agent switch; both off by default
   @IsOptional() @IsBoolean() funnelEventsEnabled?: boolean;
   @IsOptional() @IsBoolean() aiAgentMode?: boolean;
-  // The agent's limited AUTONOMOUS mode (off by default, also needs the server list AGENT_AUTO_DIALOGS) and the one service it may offer
+  // The agent's limited AUTONOMOUS mode (off by default, also needs the server list AGENT_AUTO_DIALOGS) and the explicit set of services it may book (at most
+  // five; [] disables autonomy). agentAutoServiceId (one service) is the older form of the same setting: it sets the set to that one service, or clears it.
   @IsOptional() @IsBoolean() aiAgentAuto?: boolean;
+  @IsOptional() @IsArray() @IsString({ each: true }) agentAutoServiceIds?: string[];
   @IsOptional() @IsString() agentAutoServiceId?: string | null;
 }
 
@@ -96,8 +99,18 @@ export class PlatformController {
     const limits: Record<string, number> | undefined = dto.limits
       ? Object.fromEntries(['users', 'messagesPerMonth', 'aiRepliesPerMonth'].filter((k) => Number.isInteger(dto.limits![k]) && (dto.limits![k] as number) >= 0).map((k) => [k, dto.limits![k] as number]))
       : undefined;
-    // the one test service must be an approved service of THIS clinic
-    if (dto.agentAutoServiceId && !(await this.prisma.kbItem.findFirst({ where: { id: dto.agentAutoServiceId, clinicId: id, kind: 'SERVICE', active: true, approvedAt: { not: null } }, select: { id: true } }))) throw new BadRequestException('service_not_found');
+    // The autonomous set of services: every id an approved, active service of THIS clinic, no repeats, at most five; anything wrong rejects the whole change
+    // (nothing is dropped silently). The older single field is the same setting for one service.
+    if (dto.agentAutoServiceIds !== undefined && dto.agentAutoServiceId !== undefined) throw new BadRequestException('auto_services_ambiguous');
+    const autoSet = dto.agentAutoServiceIds ?? (dto.agentAutoServiceId !== undefined ? (dto.agentAutoServiceId ? [dto.agentAutoServiceId] : []) : undefined);
+    let autoBefore: string[] | null = null;
+    if (autoSet) {
+      if (autoSet.length > MAX_AUTO_SERVICES) throw new BadRequestException('auto_services_too_many');
+      if (new Set(autoSet).size !== autoSet.length) throw new BadRequestException('auto_services_duplicate');
+      const valid = await this.prisma.kbItem.count({ where: { id: { in: autoSet }, clinicId: id, kind: 'SERVICE', active: true, approvedAt: { not: null } } });
+      if (valid !== autoSet.length) throw new BadRequestException('service_not_found');
+      autoBefore = configuredAutoServiceIds(await this.prisma.clinic.findUniqueOrThrow({ where: { id }, select: { agentAutoServiceIds: true, agentAutoServicesSet: true, agentAutoServiceId: true } }));
+    }
     const data = {
       ...(dto.plan ? { plan: dto.plan, aiMonthlyLimit: dto.aiMonthlyLimit ?? PLANS[dto.plan].limits.aiRepliesPerMonth } : dto.aiMonthlyLimit !== undefined ? { aiMonthlyLimit: dto.aiMonthlyLimit } : {}),
       ...(limits ? { limitOverrides: limits } : {}),
@@ -108,12 +121,13 @@ export class PlatformController {
       ...(dto.funnelEventsEnabled !== undefined ? { funnelEventsEnabled: dto.funnelEventsEnabled } : {}),
       ...(dto.aiAgentMode !== undefined ? { aiAgentMode: dto.aiAgentMode } : {}),
       ...(dto.aiAgentAuto !== undefined ? { aiAgentAuto: dto.aiAgentAuto } : {}),
-      ...(dto.agentAutoServiceId !== undefined ? { agentAutoServiceId: dto.agentAutoServiceId || null } : {}),
+      // once set, the set is authoritative (an empty one disables autonomy; the older single value is cleared with it and never comes back)
+      ...(autoSet ? { agentAutoServiceIds: autoSet, agentAutoServicesSet: true, agentAutoServiceId: autoSet[0] ?? null } : {}),
       ...(dto.suspended !== undefined ? { suspendedAt: dto.suspended ? new Date() : null } : {}),
     };
     await this.prisma.clinic.update({ where: { id }, data });
     // The change is written to the clinic's own audit log, with the platform admin as the actor
-    await this.prisma.auditLog.create({ data: { clinicId: id, userId: u.userId, action: 'platform.clinic_changed', details: JSON.parse(JSON.stringify({ plan: dto.plan, suspended: dto.suspended, limits, billingStatus: dto.billingStatus, paidUntil: dto.paidUntil, aiPurchased: dto.aiPurchased, bookingWriteEnabled: dto.bookingWriteEnabled, funnelEventsEnabled: dto.funnelEventsEnabled, aiAgentMode: dto.aiAgentMode, aiAgentAuto: dto.aiAgentAuto, agentAutoServiceId: dto.agentAutoServiceId })) } });
+    await this.prisma.auditLog.create({ data: { clinicId: id, userId: u.userId, action: 'platform.clinic_changed', details: JSON.parse(JSON.stringify({ plan: dto.plan, suspended: dto.suspended, limits, billingStatus: dto.billingStatus, paidUntil: dto.paidUntil, aiPurchased: dto.aiPurchased, bookingWriteEnabled: dto.bookingWriteEnabled, funnelEventsEnabled: dto.funnelEventsEnabled, aiAgentMode: dto.aiAgentMode, aiAgentAuto: dto.aiAgentAuto, ...(autoSet ? { agentAutoServices: { before: autoBefore, after: autoSet } } : {}) })) } });
     return { ok: true };
   }
 }

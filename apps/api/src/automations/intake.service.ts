@@ -72,7 +72,9 @@ export class IntakeService {
         const time = parseTypedTime(text);
         if (time) {
           const d = /(?<!\d)(\d{1,2})[.\-](\d{2})(?!\d)/.exec(text);
-          const fits = valid.filter((b) => b.payload.split('|')[2] === time && (!d || time === `${d[1].padStart(2, '0')}:${d[2]}` || b.label.includes(`${d[1].padStart(2, '0')}.${d[2]}`)));
+          // (a time of a move offer: moveslot|offer|date|time)
+          const timeOf = (b: { payload: string }) => b.payload.split('|')[b.payload.startsWith('moveslot|') ? 3 : 2];
+          const fits = valid.filter((b) => timeOf(b) === time && (!d || time === `${d[1].padStart(2, '0')}:${d[2]}` || b.label.includes(`${d[1].padStart(2, '0')}.${d[2]}`)));
           if (new Set(fits.map((b) => b.payload)).size === 1) hit = fits[0];
         }
       }
@@ -86,7 +88,11 @@ export class IntakeService {
     const answer = payload ? /^book(yes|no)\|([A-Za-z0-9]{10,40})(?:\|([A-Za-z0-9]{6,24}))?$/.exec(payload) : null;
     // the doctor: one of several named, or the answer to a proposed doctor
     const doc = payload ? /^doc(pick|yes|no|any|wish)\|([A-Za-z0-9]{1,40})$/.exec(payload) : null;
-    if (!text && !slot && !answer && !doc) return; // photos, stickers and the like are not handled yet
+    // "yes, cancel" / "no, keep it" under the agent's question about cancelling a visit: saved WITH the tapped button (the agent checks it belongs to the pending
+    // question); nothing else (the booking flow, the old bot) reads it
+    // (the same for moving a visit: a new time of the offer, and the answer to the confirmation)
+    const cancelTap = payload ? /^cancel(yes|no)\|([A-Za-z0-9]{10,40})$/.exec(payload) ?? /^move(yes|no)\|([A-Za-z0-9]{10,40})$/.exec(payload) ?? /^moveslot\|([A-Za-z0-9]{10,40})\|\d{4}-\d{2}-\d{2}\|\d{2}:\d{2}$/.exec(payload) : null;
+    if (!text && !slot && !answer && !doc && !cancelTap) return; // photos, stickers and the like are not handled yet
 
     let ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel, externalId: chatId }, select: { patientId: true, optedOutAt: true } });
     if (!ch && m.verifiedPhone) {
@@ -102,9 +108,12 @@ export class IntakeService {
     if (!contactName && m.profileName) contactName = await m.profileName().catch(() => null);
 
     const label = slot ? `${slot[3]}.${slot[2]} ${slot[4]}${slot[5] ? `, лікар ${slot[5]}` : ''}` : null;
-    const stored = label ? `Обрав час: ${label}` : doc ? text.slice(0, 200) || (doc[1] === 'yes' ? 'Так' : doc[1] === 'no' ? 'Ні' : 'Обрав лікаря') : answer ? text.slice(0, 200) || (answer[1] === 'yes' ? 'Так, підтверджую' : 'Ні, інший час') : text.slice(0, 4000);
+    // a doctor button that came without its text keeps the button's own label (the agent reads the answer by it; the old words only when the button is not found)
+    const docLabel = doc && !text ? await this.buttonLabel(clinicId, channel, chatId, payload!) : null;
+    const cancelLabel = cancelTap && !text ? await this.buttonLabel(clinicId, channel, chatId, payload!) : null;
+    const stored = cancelTap ? text.slice(0, 200) || cancelLabel || (payload!.startsWith('moveslot|') ? 'Обрано новий час' : cancelTap[1] === 'yes' ? 'Так' : 'Ні') : label ? `Обрав час: ${label}` : doc ? text.slice(0, 200) || docLabel || (doc[1] === 'yes' ? 'Так' : doc[1] === 'no' ? 'Ні' : 'Обрав лікаря') : answer ? text.slice(0, 200) || (answer[1] === 'yes' ? 'Так, підтверджую' : 'Ні, інший час') : text.slice(0, 4000);
     try {
-      await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, contactName, direction: 'IN', text: stored, externalId: m.mid } });
+      await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel, chatId, contactName, direction: 'IN', text: stored, externalId: m.mid, ...(cancelTap ? { buttons: [{ label: stored, payload: payload! }] } : {}) } });
     } catch (e) {
       // On a retry the message may be saved already (a repeated delivery never gets here: the durable inbox ignores it)
       if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')) throw e;
@@ -121,6 +130,8 @@ export class IntakeService {
     // messages are kept for staff, nothing is answered automatically
     if (ch?.optedOutAt) return;
     if (!ch && (await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'IN', OR: ['stop', '/stop', 'зупинити', 'остановить'].map((t) => ({ text: { equals: t, mode: 'insensitive' as const } })) }, select: { id: true } }))) return;
+
+    if (cancelTap) return;
 
     if (doc) {
       await this.flow.onDoctorAnswer({ clinicId, channel, chatId, patientId: ch?.patientId ?? null, contactName }, doc[1] as 'pick' | 'yes' | 'no' | 'any' | 'wish', doc[2]);
@@ -146,6 +157,15 @@ export class IntakeService {
     if (!clinic.sendingEnabled || clinic.aiAgentMode) return;
     const recent = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'OUT', authorUserId: null, createdAt: { gt: new Date(Date.now() - 86_400_000) } }, select: { id: true } });
     if (!recent) await this.reply(clinicId, channel, ch?.patientId ?? null, chatId, RECEIVED);
+  }
+
+  private async buttonLabel(clinicId: string, channel: string, chatId: string, payload: string): Promise<string | null> {
+    const outs = await this.prisma.chatMessage.findMany({ where: { clinicId, channel, chatId, direction: 'OUT' }, orderBy: { createdAt: 'desc' }, take: 5, select: { buttons: true } });
+    for (const m of outs) {
+      const b = (Array.isArray(m.buttons) ? (m.buttons as { label?: unknown; payload?: unknown }[]) : []).find((x) => x.payload === payload && typeof x.label === 'string');
+      if (b) return (b.label as string).slice(0, 200);
+    }
+    return null;
   }
 
   private async reply(clinicId: string, channel: string, patientId: string | null, chatId: string, text: string, byAi = false) {

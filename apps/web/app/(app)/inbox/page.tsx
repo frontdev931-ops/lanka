@@ -413,10 +413,12 @@ export default function InboxPage() {
                     {r.noticeError && <span className="muted"> {r.noticeError === 'window_closed' ? t('confirm.err.window_closed') : r.noticeError === 'not_connected' ? t('confirm.err.not_connected') : r.noticeError === 'sending_off' ? t('confirm.err.sending_off') : r.noticeError === 'opted_out' ? t('confirm.err.opted_out') : t('confirm.err.failed')}</span>}
                   </span>
                 )}
+                {r.status === 'NEW' && r.kind === 'RESCHEDULE' && <span className="muted">{t('inbox.rescheduleHint')}</span>}
                 <span className="muted chat-time">{fmtDateTime(r.createdAt)}</span>
                 <div className="toolbar">
                   <button className="btn btn-sm" onClick={() => { setOpen({ channel: r.channel, chatId: r.chatId }); setTab('chats'); }}>{t('inbox.openChat')}</button>
-                  {r.status === 'NEW' && bookingOn && r.patient && (r.kind === 'BOOKING' || r.kind === 'RESCHEDULE') && (
+                  {/* a reschedule is not a new booking: the form here would create a second visit and leave the old one */}
+                  {r.status === 'NEW' && bookingOn && r.patient && r.kind === 'BOOKING' && (
                     <button className="btn btn-sm" onClick={() => setBookingFor(bookingFor === r.id ? null : r.id)}>{t('book.open')}</button>
                   )}
                   {r.status === 'NEW' ? (

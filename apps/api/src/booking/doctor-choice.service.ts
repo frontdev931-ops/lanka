@@ -49,6 +49,8 @@ export interface ChoiceContext {
   // The dialogue will be booked by the bot itself after the patient's "yes" (see BookingService.autoModeFor): the text before the choice of a time says so
   // instead of "the administrator confirms". Unset means a request for the administrator.
   auto?: boolean;
+  // The agent's draft: nothing may be written, so the list of doctors is never refreshed from Cliniccards here (only what is stored is read)
+  readOnly?: boolean;
 }
 
 const name = (d: Pick<Doctor, 'lastName' | 'firstName'>) => `${d.lastName} ${d.firstName}`.trim();
@@ -77,6 +79,34 @@ export function matchDoctors(text: string, doctors: Pick<Doctor, 'externalId' | 
 }
 
 export const serves = (d: Pick<Doctor, 'serviceIds'>, service: Pick<KbItem, 'id'>): 'yes' | 'no' | 'unknown' => (!d.serviceIds.length ? 'unknown' : d.serviceIds.includes(service.id) ? 'yes' : 'no');
+
+// The patient's answer to the question "a doctor the clinic assigns, or the wish to the administrator?" (the words of the old bot's buttons included); null: not clear
+const WISH_ANY = /(будь-?як\p{L}*|любой|любого|любому|все\s+одно|всё\s+равно|без\s+різниці|без\s+разницы|не\s+важливо|не\s+важно|признач\p{L}*\s+клінік\p{L}*|клінік\p{L}*\s+признач\p{L}*|назнач\p{L}*\s+клиник\p{L}*|клиник\p{L}*\s+назнач\p{L}*)/iu;
+const WISH_ADMIN = /(адміністратор\p{L}*|администратор\p{L}*|побажання|пожелани\p{L}*|саме\s+до\s+(?:нього|неї|цього|цієї)|именно\s+к\s+(?:нему|ней|этому|этой)|тільки\s+до\s+(?:нього|неї)|только\s+к\s+(?:нему|ней)|хочу\s+саме|хочу\s+именно)/iu;
+export function wishAnswer(text: string): 'any' | 'admin' | null {
+  const any = WISH_ANY.test(text);
+  const admin = WISH_ADMIN.test(text);
+  return any && !admin ? 'any' : admin && !any ? 'admin' : null;
+}
+// A message that speaks about a doctor at all: only such a message is read for a wished doctor (a bare surname may be the patient's own name in a contact answer)
+const DOCTOR_CUE = /(?<![\p{L}])(?:лікар\p{L}*|врач\p{L}*|доктор\p{L}*|стоматолог\p{L}*)(?![\p{L}])/iu;
+const TO_SURNAME = /(?:^|[^\p{L}])(?:до|к)\s+\p{Lu}[\p{L}'’-]{2,}/u;
+export const speaksOfDoctor = (t: string) => DOCTOR_CUE.test(t) || TO_SURNAME.test(t);
+
+// The state of a wished doctor in ONE dialogue in the cabinets mode, read from its own messages (no new state): the newest patient message that names a doctor of the
+// clinic's approved reference (or "до лікаря Прізвище"), the agent's question about it (the old bot's own text) and the patient's answer after the question.
+// NEW: named, not asked yet; ASKED: asked, no clear answer yet; ANY: a doctor the clinic assigns; ADMIN: the wish goes to the administrator.
+export interface CabinetWish {
+  wish: string | null;
+  // several doctors of the reference fit the words: who is meant is asked first (the old bot's own question)
+  ambiguous: string[];
+  state: 'NEW' | 'ASKED' | 'ANY' | 'ADMIN';
+  // how many times the question about THIS wish (or this ambiguity) was asked
+  asked: number;
+  // the newest patient message is the one that names the doctor / is the answer that decided it
+  lastNames: boolean;
+  lastIsAnswer: boolean;
+}
 
 const T = {
   uk: {
@@ -153,9 +183,9 @@ export class DoctorChoiceService {
   }
 
   // The doctors of the clinic; read from Cliniccards when nothing is stored yet (at most once per ten minutes per clinic)
-  async known(clinicId: string): Promise<Doctor[]> {
+  async known(clinicId: string, refresh = true): Promise<Doctor[]> {
     let rows = await this.doctors.activeDoctors(clinicId);
-    if (!rows.length && Date.now() - (this.tried.get(clinicId) ?? 0) > 10 * 60_000) {
+    if (refresh && !rows.length && Date.now() - (this.tried.get(clinicId) ?? 0) > 10 * 60_000) {
       this.tried.set(clinicId, Date.now());
       await this.doctors.refresh(clinicId);
       rows = await this.doctors.activeDoctors(clinicId);
@@ -248,7 +278,7 @@ export class DoctorChoiceService {
 
   // An alternative to a doctor who cannot be booked: the first doctor who provides the service and has time; null when there is none
   private async alternative(c: ChoiceContext, exclude: string | null): Promise<Doctor | null> {
-    const docs = (await this.known(c.clinicId)).filter((d) => d.externalId !== exclude && serves(d, c.service) === 'yes');
+    const docs = (await this.known(c.clinicId, !c.readOnly)).filter((d) => d.externalId !== exclude && serves(d, c.service) === 'yes');
     return (await this.withTime(c.clinicId, docs, this.minutes(c.service)))[0]?.doctor ?? null;
   }
 
@@ -259,7 +289,7 @@ export class DoctorChoiceService {
     if (c.service.missingInSourceAt) return this.handoff(c, {}, 'послугу прибрано з прайсу Cliniccards: запис призупинено до рішення адміністратора');
     const mode = await this.mode(c.clinicId);
     if (mode.scheduleMode === 'CABINETS') return this.decideCabinets(c, mode.sharedDoctorId);
-    const docs = await this.known(c.clinicId);
+    const docs = await this.known(c.clinicId, !c.readOnly);
     if (!docs.length) return { kind: 'NONE' };
     const x = T[c.lang];
     const minutes = this.minutes(c.service);
@@ -357,7 +387,7 @@ export class DoctorChoiceService {
     // booking by cabinets: "any doctor" goes on with the ordinary booking by cabinets, "a wish" is passed to an administrator
     if (kind === 'any') return this.cabinetOffer(c, { doctorState: 'ANY_DOCTOR' });
     if (kind === 'wish') return this.cabinetHandoff(c, { doctorState: 'WISH_ADMIN' }, 'wish_admin', x0.wishHanded(c.request?.wishedDoctor ?? ''));
-    const docs = await this.known(c.clinicId);
+    const docs = await this.known(c.clinicId, !c.readOnly);
     const req = c.request;
     const x = T[c.lang];
     const minutes = this.minutes(c.service);
@@ -398,6 +428,125 @@ export class DoctorChoiceService {
 
   private async mode(clinicId: string) {
     return this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { scheduleMode: true, sharedDoctorId: true } });
+  }
+
+  // ---- the agent's path in the doctors mode: the same decisions (decide / answer, with readOnly), plus the pieces they leave to the old generic flow ----
+
+  // The nearest times of the given doctors, without the times already offered in this dialogue for the same doctor (date|time|doctorId), the same labels as the
+  // decisions above. Read only.
+  // The patient's wish (the agent's own reading, see ai/time-preference) narrows the times: one day, not before / not after a time of day; a time is never moved outside it.
+  // Without a day wish one time per doctor and day (the first free half hour that fits), with one up to three times of that day; an excluded time moves to the next
+  // half hour of the same free window. `days`: the searched range (the agent's own horizon).
+  async timesFor(clinicId: string, doctorIds: string[], minutes: number, lang: Lang, exclude: Set<string> = new Set(), pref: { date?: string; afterMin?: number; beforeMin?: number } | null = null, days?: number): Promise<ChoiceButton[]> {
+    const docs = (await this.doctors.activeDoctors(clinicId)).filter((d) => doctorIds.includes(d.externalId));
+    if (!docs.length) return [];
+    const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    const all: { doctorId: string; date: string; startMin: number }[] = [];
+    for (const d of docs) {
+      const perDay = new Map<string, number>();
+      for (const w of await this.availability.windows(clinicId, d.externalId, { minutes, ...(days ? { days } : {}) })) {
+        if (pref?.date && w.date !== pref.date) continue;
+        if ((perDay.get(w.date) ?? 0) >= (pref?.date ? 3 : 1)) continue;
+        let from = Math.ceil(w.startMin / 30) * 30;
+        if (pref?.afterMin !== undefined) from = Math.max(from, Math.ceil(pref.afterMin / 30) * 30);
+        const to = pref?.beforeMin !== undefined ? Math.min(w.endMin, pref.beforeMin) : w.endMin;
+        while (from + minutes <= to && (perDay.get(w.date) ?? 0) < (pref?.date ? 3 : 1)) {
+          if (!exclude.has(`${w.date}|${hm(from)}|${d.externalId}`)) {
+            all.push({ doctorId: d.externalId, date: w.date, startMin: from });
+            perDay.set(w.date, (perDay.get(w.date) ?? 0) + 1);
+          }
+          from += 30;
+        }
+      }
+    }
+    all.sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin);
+    return all.slice(0, 3).map((o) => ({ label: this.label(o.date, hm(o.startMin), lang, docs.length > 1 ? docs.find((x) => x.externalId === o.doctorId) : undefined), date: o.date, time: hm(o.startMin), doctorId: o.doctorId }));
+  }
+
+  // No preference and no doctor for a first booking in the settings (decide says NONE): "any doctor" is a doctor who provides the service AND has free time; the times of
+  // those doctors only, each time carrying its doctor. Nobody fits (the services of the doctors are not configured, or nobody has time): a person, never a guess.
+  async eligibleOffer(c: ChoiceContext): Promise<Decision> {
+    const x = T[c.lang];
+    const docs = (await this.known(c.clinicId, !c.readOnly)).filter((d) => serves(d, c.service) === 'yes');
+    const options = docs.length ? await this.offerOptions(c.clinicId, docs, this.minutes(c.service), c.lang) : [];
+    if (!options.length) return this.handoff(c, {}, docs.length ? 'жоден лікар, що надає цю послугу, не має вільного часу' : 'не налаштовано, які лікарі надають цю послугу');
+    return { kind: 'OFFER', reply: x.offerMany(c.auto === true), options, patch: { doctorReason: 'SERVICE_MATCH', doctorState: null, pendingDoctorId: null } };
+  }
+
+  // The question after "no" to the continuation of treatment ("write which doctor, or that it does not matter"): the next message answers it
+  isAskWho(text: string): boolean {
+    return text === T.uk.askWho || text === T.ru.askWho;
+  }
+
+  // ---- the agent's path in the cabinets mode: the same wish and the same texts, read without any write (no refresh of the doctors, no request) ----
+
+  wishQuestion(lang: Lang, name: string): string {
+    return T[lang].wishAsk(name);
+  }
+  ambiguousQuestion(lang: Lang, names: string[]): string {
+    return T[lang].ambiguous(names);
+  }
+  // the line above the times after the patient chose a doctor the clinic assigns (the old bot's own text of the cabinets mode)
+  cabinetOfferText(lang: Lang, auto: boolean): string {
+    return T[lang].offerCabinets(auto);
+  }
+
+  async cabinetWishState(clinicId: string, channel: string, chatId: string): Promise<CabinetWish | null> {
+    const kb = await this.prisma.kbItem.findMany({ where: { clinicId, kind: 'DOCTOR', active: true, approvedAt: { not: null } }, select: { id: true, title: true } });
+    const fake = kb.map((k) => ({ externalId: k.id, lastName: k.title.split(/\s+/)[0] ?? k.title, firstName: k.title.split(/\s+/).slice(1).join(' ') }));
+    const titleOf = (id: string) => kb.find((k) => k.id === id)!.title;
+    const rows = await this.prisma.chatMessage.findMany({ where: { clinicId, channel, chatId, NOT: { direction: 'OUT', error: { not: null } } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 40, select: { direction: true, text: true } });
+    const msgs = rows.reverse();
+    const isAmbiguityQuestion = (t: string) => t.startsWith('Уточніть, будь ласка, до якого лікаря:') || t.startsWith('Уточните, пожалуйста, к какому врачу:');
+    const lastIn = msgs.map((m, i) => (m.direction === 'IN' ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
+    // 1. the newest patient message that names a doctor
+    let at = -1;
+    let wish: string | null = null;
+    let ambiguous: string[] = [];
+    for (let i = msgs.length - 1; i >= 0 && at < 0; i--) {
+      const m = msgs[i];
+      if (m.direction !== 'IN' || m.text.startsWith('Обрав час:')) continue;
+      const before = msgs.slice(0, i).reverse().find((x) => x.direction === 'OUT');
+      if (before && isAmbiguityQuestion(before.text)) {
+        // the answer to "which of them": only the doctors listed in that question count, and no word about a doctor is needed
+        const listed = fake.filter((d) => before.text.includes(titleOf(d.externalId)));
+        const hit = matchDoctors(m.text, listed);
+        if (hit.length === 1) {
+          at = i;
+          wish = titleOf(hit[0]);
+          continue;
+        }
+      }
+      if (!DOCTOR_CUE.test(m.text) && !TO_SURNAME.test(m.text)) continue;
+      const hits = matchDoctors(m.text, fake);
+      if (hits.length > 1) {
+        at = i;
+        ambiguous = hits.map(titleOf);
+      } else if (hits.length === 1) {
+        at = i;
+        wish = titleOf(hits[0]);
+      } else {
+        const named = /(?:^|[^\p{L}])(?:до|к)\s+(?:лікар(?:я|ю|і)|доктор(?:а|у)?|врач(?:а|у)?)\s+([\p{Lu}][\p{L}'’-]{2,})/u.exec(m.text);
+        if (named) {
+          at = i;
+          wish = named[1];
+        }
+      }
+    }
+    if (at < 0) return null;
+    const after = msgs.slice(at + 1);
+    const asks = (t: string) => (wish ? t.includes(T.uk.wishAsk(wish)) || t.includes(T.ru.wishAsk(wish)) : isAmbiguityQuestion(t));
+    const questions = after.map((m, k) => (m.direction === 'OUT' && asks(m.text) ? k : -1)).filter((k) => k >= 0);
+    const base = { wish, ambiguous, asked: questions.length, lastNames: at === lastIn, lastIsAnswer: false };
+    if (!questions.length || !wish) return { ...base, state: questions.length ? 'ASKED' : 'NEW' };
+    // 2. the patient's answer after the last question: the newest clear one decides
+    const lastQ = questions[questions.length - 1];
+    for (let k = after.length - 1; k > lastQ; k--) {
+      if (after[k].direction !== 'IN') continue;
+      const a = wishAnswer(after[k].text);
+      if (a) return { ...base, state: a === 'any' ? 'ANY' : 'ADMIN', lastIsAnswer: at + 1 + k === lastIn };
+    }
+    return { ...base, state: 'ASKED' };
   }
 
   // A real doctor the patient named: first among the doctors of the reference (surname in any case), then "до лікаря Прізвище"

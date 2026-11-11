@@ -11,6 +11,7 @@ import { CliniccardsError } from '../integrations/cliniccards.client';
 import { VISIT_STATUS } from '../integrations/cliniccards.connector';
 import { SyncService } from '../integrations/sync.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { cancelStaleReminders } from '../automations/visit-reminders';
 
 const MIN = 60_000;
 // A visit in these statuses does not occupy its place
@@ -54,8 +55,8 @@ type Spec = {
   // Looks at the clinic's system: id of the visit/patient if the effect is already there, null if it is not, 'unknown' if we cannot tell
   reconcile: () => Promise<string | null | 'unknown'>;
   act: () => Promise<string | undefined>;
-  // Updates our own copy; safe to repeat
-  after: (externalId: string | undefined) => Promise<void>;
+  // Updates our own copy; called once per attempt that reached DONE (`attemptId`: the identity of that operation)
+  after: (externalId: string | undefined, attemptId: string) => Promise<void>;
 };
 
 // Writes to the clinic's system (Cliniccards) on an explicit staff action. Every write has one unique key, so a repeated click,
@@ -150,8 +151,9 @@ export class BookingService {
         throw new ConflictException('booking_unknown');
       }
       if (found) {
-        await this.prisma.bookingAttempt.update({ where: { id: attempt.id }, data: { status: 'DONE', externalVisitId: s.kind === 'PATIENT' ? null : found, externalPatientId: s.kind === 'PATIENT' ? found : null, error: null } });
-        await s.after(found);
+        // one reconciliation closes the attempt (a compare-and-set): two at the same time record the result once, the other only reports it
+        const won = await this.prisma.bookingAttempt.updateMany({ where: { id: attempt.id, status: attempt.status, updatedAt: attempt.updatedAt }, data: { status: 'DONE', externalVisitId: s.kind === 'PATIENT' ? null : found, externalPatientId: s.kind === 'PATIENT' ? found : null, error: null } });
+        if (won.count) await s.after(found, attempt.id);
         return { externalVisitId: found, duplicate: true, verified: true };
       }
     }
@@ -190,7 +192,7 @@ export class BookingService {
       throw new BadRequestException('booking_failed');
     }
     await this.prisma.bookingAttempt.update({ where: { id }, data: { status: 'DONE', externalVisitId: s.kind === 'PATIENT' ? null : (externalId ?? null), externalPatientId: s.kind === 'PATIENT' ? (externalId ?? null) : null, error: null } });
-    await s.after(externalId);
+    await s.after(externalId, id);
     // Read it back: the record must be visible in the clinic's system
     const seen = await s.reconcile().catch(() => 'unknown' as const);
     return { externalVisitId: externalId ?? null, duplicate: false, verified: seen !== null && seen !== 'unknown' };
@@ -246,34 +248,61 @@ export class BookingService {
     return v;
   }
 
-  async reschedule(clinicId: string, userId: string, visitId: string, d: { startsAt: Date; durationMin?: number; cabinetId?: string; doctorId?: string }): Promise<BookingResult> {
+  // A move of the SAME visit to another time (one PUT of the existing visit: the same external id, patient, doctor and length; Cliniccards gets the status the
+  // code has always sent for it, PLANNED, see cliniccards-api.md). Before the write: the visit as Cliniccards has it now must still be the one we know (the same
+  // patient, time, doctor, a status that can change), `verify` (the caller's schedule rules: the doctor's hours, the service, the cabinet) and the place must be
+  // free with only this visit left out. `expect`: what the patient was asked about.
+  // `operationId`: the identity of THIS move, persisted by the caller (the agent: the id of the patient's confirmation). Without it (the staff action) the
+  // operation is the next move of the visit: the number of moves of it already done. Retries and parallel calls of one operation share its attempt (its key);
+  // a later move to a time used before is a new attempt, never answered by an old DONE.
+  async reschedule(clinicId: string, userId: string | null, visitId: string, d: { startsAt: Date; durationMin?: number; cabinetId?: string; doctorId?: string; origin?: DialogOrigin; expect?: { externalId: string; startsAt: Date; doctorId: string | null }; verify?: () => Promise<void>; operationId?: string }): Promise<BookingResult> {
+    this.gate.assert(clinicId, userId, d.origin);
     const connector = await this.connector(clinicId);
     const v = await this.movable(clinicId, visitId);
+    if (d.expect && (v.externalId !== d.expect.externalId || v.startsAt.getTime() !== d.expect.startsAt.getTime() || (v.doctorId ?? null) !== (d.expect.doctorId ?? null))) throw new ConflictException('visit_changed');
     const dur = d.durationMin ?? Math.max(5, Math.round(((v.endsAt ?? new Date(v.startsAt.getTime() + 30 * MIN)).getTime() - v.startsAt.getTime()) / MIN));
     const startsAt = d.startsAt;
     const endsAt = new Date(startsAt.getTime() + dur * MIN);
     if (Number.isNaN(startsAt.getTime()) || startsAt.getTime() < Date.now() || startsAt.getUTCMinutes() % 5 || dur > 240 || clinicDate(startsAt) !== clinicDate(endsAt)) throw new BadRequestException('booking_bad_time');
     const cabinetId = d.cabinetId ?? v.cabinetId ?? '';
     const doctorId = d.doctorId ?? v.doctorId ?? undefined;
+    const from = v.startsAt;
+    // an unfinished move of this patient to this time (started, or its answer lost) is the SAME operation: it is reconciled first, not written again
+    const pending = await this.prisma.bookingAttempt.findFirst({ where: { clinicId, kind: 'RESCHEDULE', patientId: v.patientId, startsAt, status: { in: ['STARTED', 'UNKNOWN'] } }, orderBy: { createdAt: 'desc' }, select: { key: true } });
+    // nothing open and the visit already at that time and cabinet: nothing to move (a repeated click after the move)
+    if (!pending && v.startsAt.getTime() === startsAt.getTime() && (v.cabinetId ?? '') === cabinetId) return { externalVisitId: v.externalId, duplicate: true, verified: false };
+    const done = await this.prisma.bookingAttempt.count({ where: { clinicId, kind: 'RESCHEDULE', externalVisitId: v.externalId, status: 'DONE' } });
     return this.run(clinicId, userId, {
-      key: this.key(clinicId, 'RESCHEDULE', v.externalId, startsAt.toISOString(), cabinetId),
+      key: pending?.key ?? this.key(clinicId, 'RESCHEDULE', v.externalId, d.operationId ? `op:${d.operationId}` : `move:${done}`, startsAt.toISOString(), cabinetId),
       kind: 'RESCHEDULE',
       patientId: v.patientId,
       startsAt,
-      check: () => this.assertFree(connector, { patientExternalId: v.patient.externalId, startsAt, endsAt, cabinetId, doctorId, ignoreVisitId: v.externalId }),
+      origin: d.origin,
+      check: async () => {
+        const now = await this.freshState(connector, v);
+        if (now === 'unknown') throw new BadRequestException('booking_check_failed');
+        if (now !== 'ok') throw new ConflictException('visit_changed');
+        await d.verify?.();
+        await this.assertFree(connector, { patientExternalId: v.patient.externalId, startsAt, endsAt, cabinetId, doctorId, ignoreVisitId: v.externalId });
+      },
       reconcile: async () => ((await this.dayVisits(connector, startsAt)).find((x) => x.externalId === v.externalId && x.startsAt.getTime() === startsAt.getTime()) ? v.externalId : null),
       act: async () => {
         await connector.updateVisit!(v.externalId, { currentStartsAt: v.startsAt, status: VISIT_STATUS.created, startsAt, endsAt, cabinetId, doctorId });
         return v.externalId;
       },
-      after: async () => {
+      after: async (_ext, attemptId) => {
         await this.prisma.visit.update({ where: { id: v.id }, data: { startsAt, endsAt, cabinetId, doctorId: doctorId ?? null, status: VISIT_STATUS.created } });
-        await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'booking.rescheduled', details: { visit: v.externalId, to: startsAt.toISOString() } } });
+        // the booking request that created this visit now tells its new time (what the agent and the confirmation screen read)
+        await this.prisma.bookingRequest.updateMany({ where: { clinicId, kind: 'BOOKING', status: 'DONE', externalVisitId: v.externalId }, data: { confirmedStartsAt: startsAt } });
+        // `attempt`: the BookingAttempt of this operation, one per move (what a report counts)
+        await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'booking.rescheduled', details: { visit: v.externalId, from: from.toISOString(), to: startsAt.toISOString(), attempt: attemptId, ...(d.operationId ? { operation: d.operationId } : {}), ...(d.origin ? { by: 'agent' } : {}) } } });
+        // the reminders made for the old time are not sent; the scheduler makes the one for the new time
+        await cancelStaleReminders(this.prisma, clinicId, [v.id]);
       },
     });
   }
 
-  private async setStatus(clinicId: string, userId: string, visitId: string, kind: 'CANCEL' | 'CONFIRM'): Promise<BookingResult> {
+  private async setStatus(clinicId: string, userId: string | null, visitId: string, kind: 'CANCEL' | 'CONFIRM', o: { origin?: DialogOrigin; check?: (connector: ClinicConnector, v: Awaited<ReturnType<BookingService['movable']>>) => Promise<void> } = {}): Promise<BookingResult> {
     const connector = await this.connector(clinicId);
     const v = await this.movable(clinicId, visitId);
     const target = kind === 'CANCEL' ? VISIT_STATUS.cancelled : VISIT_STATUS.confirmed;
@@ -282,6 +311,8 @@ export class BookingService {
       kind,
       patientId: v.patientId,
       startsAt: v.startsAt,
+      origin: o.origin,
+      ...(o.check ? { check: () => o.check!(connector, v) } : {}),
       reconcile: async () => ((await this.dayVisits(connector, v.startsAt)).find((x) => x.externalId === v.externalId && x.status === target) ? v.externalId : null),
       act: async () => {
         await connector.updateVisit!(v.externalId, { currentStartsAt: v.startsAt, status: target });
@@ -289,13 +320,59 @@ export class BookingService {
       },
       after: async () => {
         await this.prisma.visit.update({ where: { id: v.id }, data: { status: target } });
-        await this.prisma.auditLog.create({ data: { clinicId, userId, action: kind === 'CANCEL' ? 'booking.cancelled' : 'booking.confirmed', details: { visit: v.externalId } } });
+        if (kind === 'CANCEL') await cancelStaleReminders(this.prisma, clinicId, [v.id]);
+        await this.prisma.auditLog.create({ data: { clinicId, userId, action: kind === 'CANCEL' ? 'booking.cancelled' : 'booking.confirmed', details: { visit: v.externalId, ...(o.origin ? { by: 'agent' } : {}) } } });
       },
     });
   }
 
-  cancel(clinicId: string, userId: string, visitId: string) {
-    return this.setStatus(clinicId, userId, visitId, 'CANCEL');
+  // The visit as Cliniccards has it NOW, against what we expect: the same id, the same patient, the same time and doctor, still ahead and in a status that can be
+  // cancelled. 'cancelled': it already is (nothing has to be written). Cliniccards has no conditional update, so a change made by staff between this read and
+  // the PUT is not excluded; the read narrows that window to a moment, it does not close it.
+  private async freshState(connector: ClinicConnector, v: { externalId: string; startsAt: Date; doctorId: string | null; patient: { externalId: string } }): Promise<'ok' | 'cancelled' | 'changed' | 'unknown'> {
+    let rows: ExternalVisit[];
+    try {
+      rows = await this.dayVisits(connector, v.startsAt);
+    } catch {
+      return 'unknown';
+    }
+    const f = rows.find((x) => x.externalId === v.externalId);
+    if (!f || f.patientExternalId !== v.patient.externalId || f.startsAt.getTime() !== v.startsAt.getTime()) return 'changed';
+    if (v.doctorId && f.doctorId && f.doctorId !== v.doctorId) return 'changed';
+    if (f.status === VISIT_STATUS.cancelled) return 'cancelled';
+    if (!MOVABLE.includes(f.status) || f.startsAt.getTime() <= Date.now()) return 'changed';
+    return 'ok';
+  }
+
+  // A cancellation (by a staff member, or by the agent after the patient's explicit yes: userId null and the dialog as the origin, under the same write gates).
+  // Fresh data first: a visit that changed, is gone or cannot be read is NOT written (visit_changed / booking_check_failed); one that is already cancelled in
+  // Cliniccards is recorded as such without a PUT. `expect`: what the patient was asked about (the visit must still be exactly that).
+  async cancel(clinicId: string, userId: string | null, visitId: string, o: { origin?: DialogOrigin; expect?: { externalId: string; startsAt: Date; doctorId: string | null } } = {}): Promise<BookingResult> {
+    this.gate.assert(clinicId, userId, o.origin);
+    const connector = await this.connector(clinicId);
+    const v = await this.movable(clinicId, visitId);
+    if (o.expect && (v.externalId !== o.expect.externalId || v.startsAt.getTime() !== o.expect.startsAt.getTime() || (v.doctorId ?? null) !== (o.expect.doctorId ?? null))) throw new ConflictException('visit_changed');
+    const prior = await this.prisma.bookingAttempt.findUnique({ where: { clinicId_key: { clinicId, key: this.key(clinicId, 'CANCEL', v.externalId) } } });
+    // (an earlier attempt that was started or whose answer was lost is settled by the reconciliation of run(), not by a new reading here)
+    if (!prior || prior.status === 'FAILED') {
+      const now = await this.freshState(connector, v);
+      if (now === 'unknown') throw new BadRequestException('booking_check_failed');
+      if (now === 'changed') throw new ConflictException('visit_changed');
+      if (now === 'cancelled') {
+        await this.prisma.visit.update({ where: { id: v.id }, data: { status: VISIT_STATUS.cancelled } });
+        await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'booking.cancel_seen', details: { visit: v.externalId, ...(o.origin ? { by: 'agent' } : {}) } } });
+        return { externalVisitId: v.externalId, duplicate: true, verified: true };
+      }
+    }
+    return this.setStatus(clinicId, userId, visitId, 'CANCEL', {
+      origin: o.origin,
+      // the same reading right before the write (retries included)
+      check: async (k, cur) => {
+        const s = await this.freshState(k, cur);
+        if (s === 'unknown') throw new BadRequestException('booking_check_failed');
+        if (s !== 'ok') throw new ConflictException('visit_changed');
+      },
+    });
   }
 
   confirm(clinicId: string, userId: string, visitId: string) {

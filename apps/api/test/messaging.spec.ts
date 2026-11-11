@@ -7,9 +7,12 @@ import { OutboxService } from '../src/automations/outbox.service';
 import { PlannerService } from '../src/automations/planner.service';
 import { TelegramApi, TelegramError } from '../src/automations/telegram.api';
 import { TelegramService } from '../src/automations/telegram.service';
-import { clinicDate, localToUtc } from '../src/common/clinic-time';
+import { clinicDate, clinicHm, localToUtc } from '../src/common/clinic-time';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { InstagramAdapter } from '../src/automations/instagram.adapter';
+import { SendError } from '../src/automations/channels';
+import { encrypt } from '../src/common/crypto';
 
 jest.setTimeout(60_000);
 
@@ -1024,7 +1027,7 @@ describe('подтверждение записи кнопками и сообщ
     const v = await prisma.visit.create({ data: { clinicId: q.clinicId, patientId: q.p.id, externalId: `v${rnd()}`, startsAt: new Date(Date.now() + 20 * 3_600_000), endsAt: new Date(Date.now() + 21 * 3_600_000), status: 'PLANNED', bookedAt: new Date(Date.now() - 4 * DAYMS) } });
     const send = async () => {
       await prisma.outboundMessage.deleteMany({ where: { clinicId: q.clinicId } });
-      await prisma.outboundMessage.create({ data: { clinicId: q.clinicId, patientId: q.p.id, ruleKey: 'visit-reminder', channel: 'TELEGRAM', text: 'Нагадуємо', status: 'APPROVED', scheduledFor: new Date(0), expiresAt: new Date(Date.now() + DAYMS), dedupeKey: `c${rnd()}`, visitId: v.id } });
+      await prisma.outboundMessage.create({ data: { clinicId: q.clinicId, patientId: q.p.id, ruleKey: 'visit-reminder', channel: 'TELEGRAM', text: 'Нагадуємо', status: 'APPROVED', scheduledFor: new Date(0), expiresAt: new Date(Date.now() + DAYMS), dedupeKey: `visit-reminder:${v.id}:24:${v.startsAt.toISOString()}`, visitId: v.id } }); // (made for this time of the visit)
       tg.sent.length = 0;
       await outbox.process(localToUtc(`${clinicDate(new Date())} 12:00:00`), { clinicId: q.clinicId });
       return tg.sent.at(-1)!;
@@ -1072,5 +1075,234 @@ describe('подтверждение записи кнопками и сообщ
     expect(rows).toHaveLength(1);
     expect(rows[0].patientId).toBe(q.p.id);
     expect(rows[0].text).toContain('скасовано чи перенесено');
+  });
+});
+
+describe('напоминания после смены времени записи', () => {
+  // an approved, due reminder of a visit in `h` hours (made by the scheduler: its key holds the visit's start)
+  async function reminded(h = 20) {
+    const c = await clinic();
+    await http().post('/automations/telegram').set(auth(c.token)).send({ token: TOKEN }).expect(201);
+    await http().patch('/automations/rules/visit-reminder').set(auth(c.token)).send({ enabled: true }).expect(200);
+    const x = await patientWithVisit(c.clinicId, h);
+    await planner.plan(c.clinicId, { dryRun: false });
+    const msg = await prisma.outboundMessage.findFirstOrThrow({ where: { clinicId: c.clinicId } });
+    expect(msg.dedupeKey).toBe(`visit-reminder:${x.v.id}:24:${x.v.startsAt.toISOString()}`);
+    await http().post('/messages/approve').set(auth(c.token)).send({ all: true }).expect(200);
+    await prisma.outboundMessage.update({ where: { id: msg.id }, data: { scheduledFor: new Date(0) } });
+    return { ...c, ...x, msg };
+  }
+  const changed = (clinicId: string, externalId: string, from: Date, to: Date, at = new Date()) =>
+    prisma.auditLog.create({ data: { clinicId, action: 'visit.time_changed', details: { visit: externalId, from: from.toISOString(), to: to.toISOString(), source: 'sync' }, createdAt: at } });
+
+  it('старое напоминание после переноса не уходит со старым временем: оно снимается через очередь', async () => {
+    const q = await reminded(20);
+    await prisma.visit.update({ where: { id: q.v.id }, data: { startsAt: hours(30), endsAt: hours(30.5) } });
+    const r = await outbox.process(new Date(), { clinicId: q.clinicId });
+    expect(r.sent).toBe(0);
+    expect(tg.sent).toHaveLength(0);
+    expect(await prisma.outboundMessage.findUniqueOrThrow({ where: { id: q.msg.id } })).toMatchObject({ status: 'CANCELLED' });
+  });
+
+  it('напоминание к новому времени ставится в обычный момент, один раз; не сразу лишь потому, что запись перенесли', async () => {
+    const q = await reminded(20);
+    const old = q.v.startsAt;
+    // moved to 40 hours from now, learned now: the 24-hour reminder of the new time is due in 16 hours, not now
+    await prisma.visit.update({ where: { id: q.v.id }, data: { startsAt: hours(40), endsAt: hours(40.5) } });
+    await changed(q.clinicId, q.v.externalId, old, hours(40));
+    await planner.plan(q.clinicId, { dryRun: false });
+    expect(await prisma.outboundMessage.count({ where: { clinicId: q.clinicId } })).toBe(1); // only the old (stale) one
+    const later = hours(17);
+    await planner.plan(q.clinicId, { dryRun: false, now: later });
+    await planner.plan(q.clinicId, { dryRun: false, now: later });
+    const rows = await prisma.outboundMessage.findMany({ where: { clinicId: q.clinicId, ruleKey: 'visit-reminder' }, orderBy: { createdAt: 'asc' } });
+    expect(rows).toHaveLength(2);
+    const v = await prisma.visit.findUniqueOrThrow({ where: { id: q.v.id } });
+    expect(rows[1].dedupeKey).toBe(`visit-reminder:${q.v.id}:24:${v.startsAt.toISOString()}`);
+    expect(rows[1].text).toContain(clinicHm(v.startsAt));
+    // moved into the window of the reminder, after its moment: no reminder only because of the move
+    const q2 = await reminded(20);
+    await prisma.visit.update({ where: { id: q2.v.id }, data: { startsAt: hours(22), endsAt: hours(22.5) } });
+    await changed(q2.clinicId, q2.v.externalId, q2.v.startsAt, hours(22));
+    await planner.plan(q2.clinicId, { dryRun: false });
+    expect(await prisma.outboundMessage.count({ where: { clinicId: q2.clinicId } })).toBe(1);
+  });
+
+  it('отменённая запись не получает напоминание', async () => {
+    const q = await reminded(20);
+    await prisma.visit.update({ where: { id: q.v.id }, data: { status: 'CANCELLED' } });
+    expect((await outbox.process(new Date(), { clinicId: q.clinicId })).sent).toBe(0);
+    expect(tg.sent).toHaveLength(0);
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { id: q.msg.id } })).status).toBe('CANCELLED');
+    await planner.plan(q.clinicId, { dryRun: false });
+    expect(await prisma.outboundMessage.count({ where: { clinicId: q.clinicId } })).toBe(1);
+  });
+});
+
+describe('напоминания о записи в привязанный диалог Instagram', () => {
+  // the Instagram channel adapter is replaced: nothing leaves the server; the window rule of MessengerService runs for real
+  const ig = { calls: [] as { clinicId: string; chatId: string; text: string; options: unknown[] }[], mode: 'ok' as 'ok' | 'ambiguous' | 'refused' };
+  beforeAll(() => {
+    jest.spyOn(app.get(InstagramAdapter), 'send').mockImplementation(async (clinicId: string, chatId: string, text: string, options: unknown[]) => {
+      if (ig.mode === 'ambiguous') throw new SendError('no answer from the provider', false, 'failed', true);
+      if (ig.mode === 'refused') throw new SendError('provider refused', false, 'failed', false);
+      ig.calls.push({ clinicId, chatId, text, options });
+    });
+  });
+  beforeEach(() => {
+    ig.calls.length = 0;
+    ig.mode = 'ok';
+  });
+  const noon = () => localToUtc(`${clinicDate(new Date())} 12:00:00`);
+  async function igClinic(o: { connected?: boolean } = {}) {
+    const c = await clinic();
+    await http().patch('/automations/rules/visit-reminder').set(auth(c.token)).send({ enabled: true }).expect(200);
+    if (o.connected !== false) await prisma.integration.create({ data: { clinicId: c.clinicId, provider: 'INSTAGRAM', apiKeyEnc: encrypt('ig-test-token') } });
+    return c;
+  }
+  // a patient whose Instagram conversation (IGSID) is linked to the card, the last message `lastInH` hours ago, a visit in 20 hours booked long ago
+  async function igPatient(clinicId: string, lastInH = 2, over: Record<string, unknown> = {}) {
+    const p = await prisma.patient.create({ data: { clinicId, externalId: `p${rnd()}`, fullName: 'Мороз Олена', ...over } });
+    const igsid = `igsid${rnd()}`;
+    await prisma.patientChannel.create({ data: { clinicId, patientId: p.id, channel: 'INSTAGRAM', externalId: igsid } });
+    await prisma.chatMessage.create({ data: { clinicId, patientId: p.id, channel: 'INSTAGRAM', chatId: igsid, direction: 'IN', text: 'Дякую', createdAt: hours(-lastInH) } });
+    const v = await prisma.visit.create({ data: { clinicId, patientId: p.id, externalId: `v${rnd()}`, startsAt: hours(20), endsAt: hours(20.5), status: 'PLANNED', bookedAt: hours(-72) } });
+    return { p, v, igsid };
+  }
+  const approveAll = async (c: { clinicId: string; token: string }) => {
+    await http().post('/messages/approve').set(auth(c.token)).send({ all: true }).expect(200);
+    await prisma.outboundMessage.updateMany({ where: { clinicId: c.clinicId }, data: { scheduledFor: new Date(0) } });
+  };
+  const rem = (r: { key: string }[]) => r.find((x) => x.key === 'visit-reminder') as unknown as Record<string, number>;
+
+  it('немає Telegram, діалог Instagram прив’язано, вікно відкрите: одне напоминання в Instagram, лише текст, без кнопок і посилань Telegram; повторний запуск не дублює', async () => {
+    const c = await igClinic();
+    const x = await igPatient(c.clinicId, 2);
+    await http().patch('/automations/rules/visit-reminder').set(auth(c.token)).send({ params: { confirmButtons: true } }).expect(200);
+    const r = await planner.plan(c.clinicId, { dryRun: false });
+    expect(rem(r)).toMatchObject({ toQueue: 1, noChannel: 0, windowClosed: 0 });
+    await planner.plan(c.clinicId, { dryRun: false });
+    const rows = await prisma.outboundMessage.findMany({ where: { clinicId: c.clinicId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ channel: 'INSTAGRAM', visitId: x.v.id });
+    expect(rows[0].text).toContain(clinicHm(x.v.startsAt));
+    await approveAll(c);
+    expect(await outbox.process(noon(), { clinicId: c.clinicId })).toMatchObject({ sent: 1 });
+    expect(await outbox.process(noon(), { clinicId: c.clinicId })).toMatchObject({ sent: 0 });
+    expect(ig.calls).toEqual([{ clinicId: c.clinicId, chatId: x.igsid, text: rows[0].text, options: [] }]);
+    expect(ig.calls[0].text).not.toMatch(/t\.me|callback|Підтверджую/);
+    expect(tg.sent).toHaveLength(0);
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { id: rows[0].id } })).status).toBe('SENT');
+    expect(await prisma.chatMessage.count({ where: { clinicId: c.clinicId, chatId: x.igsid, direction: 'OUT', text: rows[0].text } })).toBe(1);
+  });
+
+  it('Telegram має пріоритет: пацієнт з Telegram і Instagram отримує напоминання лише в Telegram', async () => {
+    const c = await igClinic();
+    const x = await igPatient(c.clinicId, 2);
+    await prisma.patientChannel.create({ data: { clinicId: c.clinicId, patientId: x.p.id, channel: 'TELEGRAM', externalId: `chat-${rnd()}` } });
+    await planner.plan(c.clinicId, { dryRun: false });
+    expect((await prisma.outboundMessage.findFirstOrThrow({ where: { clinicId: c.clinicId } })).channel).toBe('TELEGRAM');
+  });
+
+  it('лише нік чи preferredContact = INSTAGRAM без прив’язаного діалогу — нічого; діалог іншої клініки — нічого; Instagram клініки не підключено — окрема причина', async () => {
+    const c = await igClinic();
+    const p = await prisma.patient.create({ data: { clinicId: c.clinicId, externalId: `p${rnd()}`, fullName: 'Нік Без Діалогу', preferredContact: 'INSTAGRAM' } });
+    await prisma.visit.create({ data: { clinicId: c.clinicId, patientId: p.id, externalId: `v${rnd()}`, startsAt: hours(20), endsAt: hours(20.5), status: 'PLANNED', bookedAt: hours(-72) } });
+    // a channel row that names another clinic: not this clinic's link
+    const other = await clinic();
+    const q = await prisma.patient.create({ data: { clinicId: c.clinicId, externalId: `p${rnd()}`, fullName: 'Чужий Звʼязок' } });
+    await prisma.patientChannel.create({ data: { clinicId: other.clinicId, patientId: q.id, channel: 'INSTAGRAM', externalId: `igsid${rnd()}` } });
+    await prisma.visit.create({ data: { clinicId: c.clinicId, patientId: q.id, externalId: `v${rnd()}`, startsAt: hours(20), endsAt: hours(20.5), status: 'PLANNED', bookedAt: hours(-72) } });
+    const r = await planner.plan(c.clinicId, { dryRun: false });
+    expect(rem(r)).toMatchObject({ toQueue: 0, noChannel: 2 });
+    expect(await prisma.outboundMessage.count({ where: { clinicId: c.clinicId } })).toBe(0);
+    const d = await igClinic({ connected: false });
+    await igPatient(d.clinicId, 2);
+    expect(rem(await planner.plan(d.clinicId, { dryRun: false }))).toMatchObject({ toQueue: 0, channelDisconnected: 1 });
+  });
+
+  it('вікно закрите вже при плануванні; вікно закрилося між плануванням і відправкою — скасовано з причиною, без повтору й без іншого каналу', async () => {
+    const c = await igClinic();
+    await igPatient(c.clinicId, 30);
+    expect(rem(await planner.plan(c.clinicId, { dryRun: false }))).toMatchObject({ toQueue: 0, windowClosed: 1 });
+    const d = await igClinic();
+    const x = await igPatient(d.clinicId, 2);
+    await planner.plan(d.clinicId, { dryRun: false });
+    await approveAll(d);
+    await prisma.chatMessage.updateMany({ where: { clinicId: d.clinicId, chatId: x.igsid, direction: 'IN' }, data: { createdAt: hours(-25) } });
+    await outbox.process(noon(), { clinicId: d.clinicId });
+    const m = await prisma.outboundMessage.findFirstOrThrow({ where: { clinicId: d.clinicId } });
+    expect(m).toMatchObject({ status: 'CANCELLED' });
+    expect(m.error).toContain('Вікно Instagram закрито');
+    expect(ig.calls).toHaveLength(0);
+    await outbox.process(noon(), { clinicId: d.clinicId });
+    expect(ig.calls).toHaveLength(0);
+    expect(tg.sent).toHaveLength(0);
+  });
+
+  it('відмова пацієнта на будь-якому каналі, відкликана згода, вимкнена відправка: напоминання в Instagram немає', async () => {
+    const c = await igClinic();
+    const a = await igPatient(c.clinicId, 2);
+    await prisma.patientChannel.create({ data: { clinicId: c.clinicId, patientId: a.p.id, channel: 'TELEGRAM', externalId: `chat-${rnd()}`, optedOutAt: new Date() } });
+    await igPatient(c.clinicId, 2, { consent: 'WITHDRAWN' });
+    expect(rem(await planner.plan(c.clinicId, { dryRun: false }))).toMatchObject({ toQueue: 0, optedOut: 1, paused: 1 });
+    // queued, then the patient says stop in Telegram: not sent in Instagram
+    const d = await igClinic();
+    const b = await igPatient(d.clinicId, 2);
+    await planner.plan(d.clinicId, { dryRun: false });
+    await approveAll(d);
+    await prisma.patientChannel.create({ data: { clinicId: d.clinicId, patientId: b.p.id, channel: 'TELEGRAM', externalId: `chat-${rnd()}`, optedOutAt: new Date() } });
+    await outbox.process(noon(), { clinicId: d.clinicId });
+    expect((await prisma.outboundMessage.findFirstOrThrow({ where: { clinicId: d.clinicId } })).status).toBe('CANCELLED');
+    // the main sending switch off: nothing goes out
+    const e = await igClinic();
+    await igPatient(e.clinicId, 2);
+    await planner.plan(e.clinicId, { dryRun: false });
+    await approveAll(e);
+    await prisma.clinic.update({ where: { id: e.clinicId }, data: { sendingEnabled: false } });
+    expect((await outbox.process(noon(), { clinicId: e.clinicId })).sent).toBe(0);
+    expect(ig.calls).toHaveLength(0);
+  });
+
+  it('перенесений або скасований візит не отримує старого тексту в Instagram', async () => {
+    const c = await igClinic();
+    const x = await igPatient(c.clinicId, 2);
+    const y = await igPatient(c.clinicId, 2);
+    await planner.plan(c.clinicId, { dryRun: false });
+    await approveAll(c);
+    await prisma.visit.update({ where: { id: x.v.id }, data: { startsAt: hours(30), endsAt: hours(30.5) } });
+    await prisma.visit.update({ where: { id: y.v.id }, data: { status: 'CANCELLED' } });
+    expect((await outbox.process(noon(), { clinicId: c.clinicId })).sent).toBe(0);
+    expect(ig.calls).toHaveLength(0);
+    expect((await prisma.outboundMessage.findMany({ where: { clinicId: c.clinicId } })).map((m) => m.status)).toEqual(['CANCELLED', 'CANCELLED']);
+  });
+
+  it('невідомий результат доставки: окремий статус, без повтору й без переходу в Telegram', async () => {
+    const c = await igClinic();
+    const x = await igPatient(c.clinicId, 2);
+    await planner.plan(c.clinicId, { dryRun: false });
+    await approveAll(c);
+    ig.mode = 'ambiguous';
+    await outbox.process(noon(), { clinicId: c.clinicId });
+    const m = await prisma.outboundMessage.findFirstOrThrow({ where: { clinicId: c.clinicId } });
+    expect(m).toMatchObject({ status: 'UNKNOWN' });
+    expect(m.error).toContain('Результат доставки невідомий');
+    // the patient connects Telegram later, the scheduler and the sender run again: nothing more is sent anywhere
+    ig.mode = 'ok';
+    await prisma.patientChannel.create({ data: { clinicId: c.clinicId, patientId: x.p.id, channel: 'TELEGRAM', externalId: `chat-${rnd()}` } });
+    await planner.plan(c.clinicId, { dryRun: false });
+    await outbox.process(noon(), { clinicId: c.clinicId });
+    expect(ig.calls).toHaveLength(0);
+    expect(tg.sent).toHaveLength(0);
+    expect(await prisma.outboundMessage.count({ where: { clinicId: c.clinicId } })).toBe(1);
+    // a clear refusal is a failure (not a stop): the patient's link stays as it was
+    const d = await igClinic();
+    const z = await igPatient(d.clinicId, 2);
+    await planner.plan(d.clinicId, { dryRun: false });
+    await approveAll(d);
+    ig.mode = 'refused';
+    await outbox.process(noon(), { clinicId: d.clinicId });
+    expect((await prisma.outboundMessage.findFirstOrThrow({ where: { clinicId: d.clinicId } })).status).toBe('FAILED');
+    expect((await prisma.patientChannel.findFirstOrThrow({ where: { patientId: z.p.id, channel: 'INSTAGRAM' } })).optedOutAt).toBeNull();
   });
 });

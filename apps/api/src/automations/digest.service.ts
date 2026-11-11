@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Provider } from '@prisma/client';
+import { lankaMoves } from '../reports/lanka-moves';
 import { clinicDate, clinicHm, startOfClinicDay } from '../common/clinic-time';
 import { decrypt } from '../common/crypto';
 import { hashToken, newToken } from '../auth/tokens';
@@ -18,6 +19,8 @@ export interface DigestNumbers {
   visited: number;
   noShow: number;
   cancelled: number;
+  // confirmed rescheduling OPERATIONS through LANKA by their date (not patients, not distinct visits; not the MOVED status: lanka-moves.ts)
+  lankaMoves: number;
   booked: number;
   newPatients: number;
   paid: number;
@@ -31,13 +34,13 @@ export interface DigestNumbers {
   unclosed: number;
   reviews: { count: number; avg: number | null; low: number };
   syncDaysAgo: number | null;
-  prev: { visited: number; noShow: number; cancelled: number; booked: number; newPatients: number; paid: number };
+  prev: { visited: number; noShow: number; cancelled: number; lankaMoves: number; booked: number; newPatients: number; paid: number };
 }
 
 const T: Record<Lang, Record<string, string>> = {
-  uk: { head: 'Дайджест клініки «{c}»', week: 'Тиждень {a}–{b}', day: 'День {a}', visits: 'Прийоми: проведено {v}{pv}, неявки {n}{pn}, скасування та перенесення {x}{px}', booked: 'Нових записів створено: {v}{p}', pats: 'Нових пацієнтів: {v}{p}', paid: 'Оплати: {v}{p}', upcoming: 'Записано на найближчі 7 днів: {v} (підтвердили пацієнти: {c})', bot: 'Бот і переписка', req: 'Заявок від пацієнтів: нових {n}, не опрацьовано {o}', msgs: 'Повідомлень надіслано: {s}, відповіли пацієнти: {r}', rev: 'Оцінки пацієнтів: середня {a} з 5 ({n}), низьких {l}', attention: 'Увага', unclosed: 'Записів минулих днів без підсумку: {v}', failed: 'Не вдалося надіслати повідомлень: {v}', stale: 'Дані з Cliniccards не оновлювались {d} дн.', openReq: 'Є заявки без відповіді: {o}', was: 'було', open: 'Відкрити', calm: 'Усе спокійно, нічого термінового.' },
-  ru: { head: 'Дайджест клиники «{c}»', week: 'Неделя {a}–{b}', day: 'День {a}', visits: 'Приёмы: проведено {v}{pv}, неявки {n}{pn}, отмены и переносы {x}{px}', booked: 'Новых записей создано: {v}{p}', pats: 'Новых пациентов: {v}{p}', paid: 'Оплаты: {v}{p}', upcoming: 'Записано на ближайшие 7 дней: {v} (подтвердили пациенты: {c})', bot: 'Бот и переписка', req: 'Заявок от пациентов: новых {n}, не обработано {o}', msgs: 'Сообщений отправлено: {s}, ответили пациенты: {r}', rev: 'Оценки пациентов: средняя {a} из 5 ({n}), низких {l}', attention: 'Внимание', unclosed: 'Записей прошлых дней без итога: {v}', failed: 'Не удалось отправить сообщений: {v}', stale: 'Данные из Cliniccards не обновлялись {d} дн.', openReq: 'Есть заявки без ответа: {o}', was: 'было', open: 'Открыть', calm: 'Всё спокойно, ничего срочного.' },
-  en: { head: 'Clinic digest “{c}”', week: 'Week {a}–{b}', day: 'Day {a}', visits: 'Appointments: completed {v}{pv}, no-shows {n}{pn}, cancelled and rescheduled {x}{px}', booked: 'New bookings created: {v}{p}', pats: 'New patients: {v}{p}', paid: 'Payments: {v}{p}', upcoming: 'Booked for the next 7 days: {v} (confirmed by patients: {c})', bot: 'Bot and chats', req: 'Patient requests: new {n}, open {o}', msgs: 'Messages sent: {s}, patients replied: {r}', rev: 'Patient ratings: average {a} of 5 ({n}), low {l}', attention: 'Attention', unclosed: 'Past appointments without an outcome: {v}', failed: 'Messages that failed to send: {v}', stale: 'Cliniccards data has not been updated for {d} days', openReq: 'Requests waiting for a reply: {o}', was: 'was', open: 'Open', calm: 'All quiet, nothing urgent.' },
+  uk: { moves: 'Перенесень через LANKA (операцій, не пацієнтів): {v}{p}', head: 'Дайджест клініки «{c}»', week: 'Тиждень {a}–{b}', day: 'День {a}', visits: 'Прийоми: проведено {v}{pv}, неявки {n}{pn}, скасування та перенесення {x}{px}', booked: 'Нових записів створено: {v}{p}', pats: 'Нових пацієнтів: {v}{p}', paid: 'Оплати: {v}{p}', upcoming: 'Записано на найближчі 7 днів: {v} (підтвердили пацієнти: {c})', bot: 'Бот і переписка', req: 'Заявок від пацієнтів: нових {n}, не опрацьовано {o}', msgs: 'Повідомлень надіслано: {s}, відповіли пацієнти: {r}', rev: 'Оцінки пацієнтів: середня {a} з 5 ({n}), низьких {l}', attention: 'Увага', unclosed: 'Записів минулих днів без підсумку: {v}', failed: 'Не вдалося надіслати повідомлень: {v}', stale: 'Дані з Cliniccards не оновлювались {d} дн.', openReq: 'Є заявки без відповіді: {o}', was: 'було', open: 'Відкрити', calm: 'Усе спокійно, нічого термінового.' },
+  ru: { moves: 'Переносов через LANKA (операций, не пациентов): {v}{p}', head: 'Дайджест клиники «{c}»', week: 'Неделя {a}–{b}', day: 'День {a}', visits: 'Приёмы: проведено {v}{pv}, неявки {n}{pn}, отмены и переносы {x}{px}', booked: 'Новых записей создано: {v}{p}', pats: 'Новых пациентов: {v}{p}', paid: 'Оплаты: {v}{p}', upcoming: 'Записано на ближайшие 7 дней: {v} (подтвердили пациенты: {c})', bot: 'Бот и переписка', req: 'Заявок от пациентов: новых {n}, не обработано {o}', msgs: 'Сообщений отправлено: {s}, ответили пациенты: {r}', rev: 'Оценки пациентов: средняя {a} из 5 ({n}), низких {l}', attention: 'Внимание', unclosed: 'Записей прошлых дней без итога: {v}', failed: 'Не удалось отправить сообщений: {v}', stale: 'Данные из Cliniccards не обновлялись {d} дн.', openReq: 'Есть заявки без ответа: {o}', was: 'было', open: 'Открыть', calm: 'Всё спокойно, ничего срочного.' },
+  en: { moves: 'Rescheduling operations through LANKA (operations, not patients): {v}{p}', head: 'Clinic digest “{c}”', week: 'Week {a}–{b}', day: 'Day {a}', visits: 'Appointments: completed {v}{pv}, no-shows {n}{pn}, cancelled and rescheduled {x}{px}', booked: 'New bookings created: {v}{p}', pats: 'New patients: {v}{p}', paid: 'Payments: {v}{p}', upcoming: 'Booked for the next 7 days: {v} (confirmed by patients: {c})', bot: 'Bot and chats', req: 'Patient requests: new {n}, open {o}', msgs: 'Messages sent: {s}, patients replied: {r}', rev: 'Patient ratings: average {a} of 5 ({n}), low {l}', attention: 'Attention', unclosed: 'Past appointments without an outcome: {v}', failed: 'Messages that failed to send: {v}', stale: 'Cliniccards data has not been updated for {d} days', openReq: 'Requests waiting for a reply: {o}', was: 'was', open: 'Open', calm: 'All quiet, nothing urgent.' },
 };
 
 const fmt = (n: number) => Math.round(n).toLocaleString('uk-UA').replace(/ /g, ' ');
@@ -112,14 +115,15 @@ export class DigestService {
     const from = new Date(to.getTime() - len);
     const prevFrom = new Date(from.getTime() - len);
     const count = async (a: Date, b: Date) => {
-      const [byStatus, booked, pats, pay] = await Promise.all([
+      const [byStatus, booked, pats, pay, moves] = await Promise.all([
         this.prisma.visit.groupBy({ by: ['status'], where: { clinicId, startsAt: { gte: a, lt: b } }, _count: true }),
         this.prisma.visit.count({ where: { clinicId, bookedAt: { gte: a, lt: b } } }),
         this.prisma.patient.count({ where: { clinicId, removedAt: null, createdAtExt: { gte: a, lt: b } } }),
         this.prisma.payment.aggregate({ where: { clinicId, paidAt: { gte: a, lt: b } }, _sum: { amount: true } }),
+        lankaMoves(this.prisma, clinicId, a, b),
       ]);
       const c = (...st: string[]) => byStatus.filter((x) => st.includes(x.status)).reduce((s, x) => s + x._count, 0);
-      return { visited: c('VISITED'), noShow: c('DID_NOT_COME'), cancelled: c('CANCELLED', 'MOVED'), booked, newPatients: pats, paid: Number(pay._sum.amount ?? 0) };
+      return { visited: c('VISITED'), noShow: c('DID_NOT_COME'), cancelled: c('CANCELLED', 'MOVED'), lankaMoves: moves.operations.length, booked, newPatients: pats, paid: Number(pay._sum.amount ?? 0) };
     };
     const [cur, prev, upcoming, upcomingConfirmed, reqNew, reqOpen, sent, failed, replies, unclosed, integ, revs] = await Promise.all([
       count(from, to),
@@ -160,6 +164,8 @@ export class DigestService {
     const f = (s: string, v: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_, k) => String(v[k] ?? ''));
     const lines: string[] = [f(t.head, { c: clinicName }), kind === 'WEEKLY' ? f(t.week, { a: dm(n.from), b: dm(n.to) }) : f(t.day, { a: dm(n.from) }), ''];
     lines.push(f(t.visits, { v: n.visited, pv: was(n.visited, n.prev.visited), n: n.noShow, pn: was(n.noShow, n.prev.noShow), x: n.cancelled, px: was(n.cancelled, n.prev.cancelled) }));
+    // a separate count: operations through LANKA, never added to the cancelled and moved appointments above
+    if (n.lankaMoves || n.prev.lankaMoves) lines.push(f(t.moves, { v: n.lankaMoves, p: was(n.lankaMoves, n.prev.lankaMoves) }));
     lines.push(f(t.booked, { v: n.booked, p: was(n.booked, n.prev.booked) }));
     lines.push(f(t.pats, { v: n.newPatients, p: was(n.newPatients, n.prev.newPatients) }));
     lines.push(f(t.paid, { v: fmt(n.paid), p: was(n.paid, n.prev.paid, true) }));

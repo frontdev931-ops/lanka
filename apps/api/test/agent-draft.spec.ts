@@ -160,7 +160,7 @@ describe('черновик агента: контракт рішення, без
 
   it('уточнення без одночасного нав’язування часу: питання лишається, дія знімається з причиною', async () => {
     const c = await agentClinic();
-    await incoming(c, 'Хочу до лікаря');
+    await incoming(c, 'Хочу на консультацію до лікаря');
     const s = await refOf(c, 'Тестова консультація');
     fake.script = () => decision({ kind: 'CLARIFY', reply: 'Підкажіть, будь ласка, яка послуга вам потрібна?' }, { action: 'OFFER_TIME', service: s });
     const d = (await draft(c).expect(200)).body;

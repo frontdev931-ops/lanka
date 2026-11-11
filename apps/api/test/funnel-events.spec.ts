@@ -327,4 +327,47 @@ describe('події воронки: лише з окремим прапором
     await http().patch(`/platform/clinics/${owner.clinicId}`).set(auth(admin)).send({ aiAgentAuto: true, agentAutoServiceId: mine.id }).expect(200);
     expect(await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId }, select: { aiAgentAuto: true, agentAutoServiceId: true } })).toEqual({ aiAgentAuto: true, agentAutoServiceId: mine.id });
   });
+
+  it('набір послуг автономного режиму: лише схвалені активні послуги цієї клініки, без повторів, не більше п’яти; хибне оновлення відхиляється цілком; зміна в аудиті; очищення вимикає й не повертає стару послугу', async () => {
+    const owner = await clinic();
+    const admin = (await http().post('/auth/login').send({ email: ADMIN_EMAIL, password: PASSWORD })).body.accessToken as string;
+    const svc = (title: string, o: { approved?: boolean; active?: boolean; clinicId?: string } = {}) =>
+      prisma.kbItem.create({ data: { clinicId: o.clinicId ?? owner.clinicId, kind: 'SERVICE', title, active: o.active !== false, ...(o.approved === false ? {} : { approvedAt: new Date() }) } });
+    const [a, b, c2, d, e, f] = await Promise.all(['А', 'Б', 'В', 'Г', 'Ґ', 'Д'].map((t) => svc(t)));
+    const other = await clinic();
+    const foreign = await svc('Чужа', { clinicId: other.clinicId });
+    const inactive = await svc('Неактивна', { active: false });
+    const draft = await svc('Не схвалена', { approved: false });
+    const patch = (body: object) => http().patch(`/platform/clinics/${owner.clinicId}`).set(auth(admin)).send(body);
+    const state = () => prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId }, select: { agentAutoServiceIds: true, agentAutoServicesSet: true, agentAutoServiceId: true } });
+    // the legacy single value of a never-configured clinic
+    await prisma.clinic.update({ where: { id: owner.clinicId }, data: { agentAutoServiceId: a.id } });
+    const before = await state();
+    for (const bad of [[a.id, foreign.id], [a.id, inactive.id], [a.id, draft.id], [a.id, a.id], [a.id, b.id, c2.id, d.id, e.id, f.id], [a.id, 'nope']]) await patch({ agentAutoServiceIds: bad }).expect(400);
+    await patch({ agentAutoServiceIds: [a.id], agentAutoServiceId: a.id }).expect(400);
+    expect(await state()).toEqual(before); // nothing changed by any rejected update
+    await patch({ agentAutoServiceIds: [b.id, a.id] }).expect(200);
+    expect(await state()).toEqual({ agentAutoServiceIds: [b.id, a.id], agentAutoServicesSet: true, agentAutoServiceId: b.id });
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { clinicId: owner.clinicId, action: 'platform.clinic_changed' }, orderBy: { createdAt: 'desc' } });
+    expect(audit.details).toMatchObject({ agentAutoServices: { before: [a.id], after: [b.id, a.id] } });
+    // cleared: autonomy has no service, and the old single value does not come back (even if an old writer puts it back)
+    await patch({ agentAutoServiceIds: [] }).expect(200);
+    expect(await state()).toEqual({ agentAutoServiceIds: [], agentAutoServicesSet: true, agentAutoServiceId: null });
+    await prisma.clinic.update({ where: { id: owner.clinicId }, data: { agentAutoServiceId: a.id } });
+    const { autoServices } = await import('../src/automations/agent-auto-gate');
+    expect(await autoServices(prisma, owner.clinicId)).toEqual([]);
+  });
+
+  it('міграція: стара одна послуга переходить у набір, і дійсний дозвіл не змінюється', async () => {
+    const owner = await clinic();
+    const s = await prisma.kbItem.create({ data: { clinicId: owner.clinicId, kind: 'SERVICE', title: 'Стара', active: true, approvedAt: new Date() } });
+    await prisma.clinic.update({ where: { id: owner.clinicId }, data: { agentAutoServiceId: s.id, agentAutoServiceIds: [], agentAutoServicesSet: false } });
+    const { autoServices } = await import('../src/automations/agent-auto-gate');
+    const effective = await autoServices(prisma, owner.clinicId);
+    // the data step of the migration (20261111120000_agent_auto_services), applied to this clinic only
+    await prisma.$executeRawUnsafe('UPDATE "Clinic" SET "agentAutoServiceIds" = ARRAY["agentAutoServiceId"] WHERE "agentAutoServiceId" IS NOT NULL AND id = $1', owner.clinicId);
+    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } })).agentAutoServiceIds).toEqual([s.id]);
+    expect(await autoServices(prisma, owner.clinicId)).toEqual(effective);
+    expect(effective).toEqual([{ id: s.id, title: 'Стара' }]);
+  });
 });

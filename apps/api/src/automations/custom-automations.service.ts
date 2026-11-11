@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { Prisma } from '@prisma/client';
 import { clinicDate, clinicHm } from '../common/clinic-time';
 import { PrismaService } from '../prisma/prisma.service';
+import { timeChangedAt } from './visit-reminders';
 import { accessBlocked, billingEnforced } from '../service/plans';
 import { marketingAllowed } from './consent';
 import { PlannerService } from './planner.service';
@@ -204,11 +205,14 @@ export class CustomAutomationsService {
     if (t.type === 'VISIT_BEFORE') {
       const visits = await this.prisma.visit.findMany({
         where: { clinicId, status: { in: ACTIVE_VISIT }, startsAt: { gt: new Date(now.getTime() + 30 * 60_000), lte: new Date(now.getTime() + 72 * HOUR) }, patient: { removedAt: null } },
-        select: { id: true, patientId: true, startsAt: true, bookedAt: true, doctorName: true, serviceName: true },
+        select: { id: true, externalId: true, patientId: true, startsAt: true, bookedAt: true, doctorName: true, serviceName: true },
       });
+      // (as the built-in reminder: one per revision of the visit, and none only because the time changed after the reminder's moment)
+      const changed = await timeChangedAt(this.prisma, clinicId, visits.map((v) => v.externalId), new Date(now.getTime() - 4 * 24 * HOUR));
+      const moment = (v: { startsAt: Date }) => v.startsAt.getTime() - t.hours * HOUR;
       return visits
-        .filter((v) => v.startsAt.getTime() - t.hours * HOUR <= now.getTime() && !(v.bookedAt && v.bookedAt.getTime() > v.startsAt.getTime() - t.hours * HOUR))
-        .map((v) => ({ patientId: v.patientId, visitId: v.id, doctorName: v.doctorName, serviceName: v.serviceName, dedupeKey: `auto:${id}:v:${v.id}`, vars: { date: dm(v.startsAt), time: clinicHm(v.startsAt) }, expiresAt: v.startsAt }));
+        .filter((v) => moment(v) <= now.getTime() && !(v.bookedAt && v.bookedAt.getTime() > moment(v)) && !((changed.get(v.externalId)?.getTime() ?? 0) > moment(v)))
+        .map((v) => ({ patientId: v.patientId, visitId: v.id, doctorName: v.doctorName, serviceName: v.serviceName, dedupeKey: `auto:${id}:v:${v.id}:${v.startsAt.toISOString()}`, vars: { date: dm(v.startsAt), time: clinicHm(v.startsAt) }, expiresAt: v.startsAt }));
     }
     if (t.type === 'VISIT_AFTER') {
       const at = t.delayHours * HOUR;
