@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, OnApplicationBootst
 import { Integration, Provider, SyncStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { cancelStaleReminders } from '../automations/visit-reminders';
+import { AUTO_SYNC_HOUR, autoSyncEnabled, autoSyncSlot, clinicTimeZone } from './auto-sync-schedule';
 import { decrypt, encrypt } from '../common/crypto';
 import { normalizePhone } from '../common/phone';
 import { matchInquiries } from '../inquiries/match';
@@ -35,6 +36,15 @@ async function inBatches<T>(items: T[], fn: (item: T) => Promise<void>, size = 2
 // Which IDs of the existing list are missing from the fresh export (they were deleted in Cliniccards)
 const missing = (existing: { externalId: string }[], fresh: Set<string>) =>
   existing.map((r) => r.externalId).filter((id) => !fresh.has(id));
+
+// What kind of failure the last load had, for a readable sentence on the card (the full message stays in the history)
+export function errorKind(error: string | null): 'network' | 'interrupted' | 'access' | 'other' {
+  const e = error ?? '';
+  if (/нет связи|ECONN|ETIMEDOUT|fetch failed|timeout/i.test(e)) return 'network';
+  if (/прервана|прерван|interrupted/i.test(e)) return 'interrupted';
+  if (/\b(401|403)\b|unauthori|forbidden|api.?key|ключ/i.test(e)) return 'access';
+  return 'other';
+}
 
 @Injectable()
 export class SyncService implements OnApplicationBootstrap {
@@ -92,12 +102,22 @@ export class SyncService implements OnApplicationBootstrap {
 
   async status(clinicId: string) {
     const i = await this.ensureIntegration(clinicId);
+    await this.failStale(30 * 60_000, clinicId);
     const lastRun = await this.prisma.syncRun.findFirst({
       where: { clinicId },
       orderBy: { startedAt: 'desc' },
-      select: { status: true, error: true, startedAt: true },
+      select: { status: true, error: true, startedAt: true, finishedAt: true },
     });
-    return { connected: !!i.apiKeyEnc, mode: i.apiKeyEnc ? 'cliniccards' : 'demo', lastSyncAt: i.lastSyncAt, lastRun };
+    const tz = clinicTimeZone(clinicId);
+    const on = autoSyncEnabled() && !!i.apiKeyEnc;
+    return {
+      connected: !!i.apiKeyEnc,
+      mode: i.apiKeyEnc ? 'cliniccards' : 'demo',
+      lastSyncAt: i.lastSyncAt,
+      lastRun: lastRun ? { ...lastRun, errorKind: lastRun.status === SyncStatus.FAILED ? errorKind(lastRun.error) : null } : null,
+      // shown as on only when the server runs it (AUTO_SYNC) and the clinic has a Cliniccards key
+      autoSync: { enabled: on, hour: AUTO_SYNC_HOUR, timeZone: tz, nextAt: on ? autoSyncSlot(new Date(), tz).nextAt : null },
+    };
   }
 
   // Checks the key with a request for the list of staff, then stores it encrypted

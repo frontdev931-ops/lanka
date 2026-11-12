@@ -50,7 +50,7 @@ Reports for the administrator and the owner (whom to call, no-shows, debts, free
 The AI features are off by default. Before using them on real patients: a data processing contract with the AI provider (and its terms on retention and use of data) must be concluded and the region recorded. The terms of service shown at registration name Telegram and the AI provider as subcontractors.
 
 ## 8. Patient rights and how to apply
-- Access and correction: the data comes from Cliniccards; it is corrected there and refreshed here at the next load (hourly).
+- Access and correction: the data comes from Cliniccards; it is corrected there and refreshed here at the next load (daily at 03:00 Kyiv time, or when staff press "Refresh now").
 - Deletion: the clinic deletes the patient in Cliniccards; the whole clinic's data is removed from LANKA with the button "Видалити дані клініки" in settings. Deleting a single patient from LANKA: __ (decide whether it is needed). A patient can stop messages at any time with "Зупинити".
 - Export: "Експорт даних клініки" in settings (JSON, without passwords and keys).
 - Response time to a patient's request: ______ days. Responsible person: ______________________.

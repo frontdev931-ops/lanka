@@ -3,7 +3,7 @@
 ## Stack
 - Web: Next.js 15 (App Router), React 19, TypeScript. Installable as a PWA (`app/manifest.ts`, `public/sw.js`, `public/offline.html`).
 - API: NestJS 11 (CommonJS), TypeScript. Prisma 6, PostgreSQL 16. Node 22.
-- Background work: in-process timers (`AutomationScheduler`, Telegram polling in development, hourly auto-sync) and counters in PostgreSQL (`RateLimit`). Redis and a queue are not needed yet and are deferred on purpose.
+- Background work: in-process timers (`AutomationScheduler`, Telegram polling in development, daily auto-sync at 03:00 clinic time, `AutoSyncService`) and counters in PostgreSQL (`RateLimit`). Redis and a queue are not needed yet and are deferred on purpose.
 - AI: Anthropic Messages API, only from the server, one service-wide key (`AI_API_KEY`), a monthly reply limit per clinic and a usage journal without message text.
 - Hosting: not decided yet (see `docs/02-hosting-and-security.md`).
 
@@ -90,3 +90,10 @@ App Router pages in `apps/web/app`. API client `apps/web/lib/api.ts` (cookie ses
 - Plans and limits exist but there is no billing; the platform-owner view is a simple table.
 - Instagram works only as an inbound/reply channel inside the 24-hour window (no mass mailings, no scenarios); SMS is not implemented and not planned.
 - No refresh tokens; the session lasts 12 hours.
+
+## Cliniccards refresh (2026-11-12)
+- `AutoSyncService` (`apps/api/src/integrations/auto-sync.service.ts`, time helpers in `auto-sync-schedule.ts`): every 5 minutes it checks which clinics with a Cliniccards key are due; a clinic is due once a clinic day after 03:00 in its time zone (one zone for now, `CLINIC_TZ`). The day is claimed by a compare-and-set on `Integration.autoSyncDay`/`autoSyncAttempts`/`autoSyncRetryAt`, so one server starts it. A failed attempt is retried after 30 minutes, at most 3 a day; an attempt cut off by a restart is retried when its 45-minute lease ends; a start of the server does not load unless today's 03:00 passed without a load. A manual load after 03:00 counts as the day's load. The load itself and its lock against a parallel manual load are unchanged (`SyncService.run`, advisory lock plus one RUNNING record per clinic).
+- Switch: `AUTO_SYNC=off` or `AUTO_SYNC_MINUTES=0`. The status (`GET /integrations/cliniccards`) returns `autoSync { enabled, hour, timeZone, nextAt }` and `lastRun.errorKind` for a readable sentence on the card.
+- Fresh checks do not use the daily copy: free times, booking, moving and cancelling (booking services) and every visit reminder right before it goes (`OutboxService.freshVisit`: one read of the visit's day per clinic and day within a pass; moved, cancelled or gone -> CANCELLED "Запис змінено або скасовано в Cliniccards"; Cliniccards did not answer -> FAILED, not sent, not retried; a clinic without a key uses its own copy). Tests: `test/auto-sync.spec.ts`.
+- Note for several API servers: `SyncService.onApplicationBootstrap` still marks every RUNNING load as cut off at start (written for one server); with several servers a start of one would mark a load of another as failed.
+

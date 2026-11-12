@@ -4,6 +4,7 @@ import { IsDateString, IsEnum, IsInt, IsOptional, IsString, Max, Min, MinLength 
 import { AuthGuard, AuthUser, CurrentUser, Roles } from '../common/auth.guard';
 import { Lang, ReqLang } from '../common/i18n';
 import { TasksService } from './tasks.service';
+import { parsePeriod } from '../reports/period';
 
 class CreateTaskDto {
   @IsString() @MinLength(2) title: string;
@@ -27,6 +28,9 @@ class FromReportDto {
   @IsString() reportId: string;
   @IsOptional() @IsInt() @Min(1) @Max(730) days?: number;
   @IsOptional() @IsInt() @Min(1) @Max(3650) maxDays?: number;
+  // a chosen period (YYYY-MM-DD, both included), the same as the report on screen
+  @IsOptional() @IsString() from?: string;
+  @IsOptional() @IsString() to?: string;
   @IsOptional() @IsString() assigneeId?: string;
 }
 
@@ -70,7 +74,7 @@ export class TasksController {
   @Post('from-report')
   @Roles(...WRITERS)
   fromReport(@CurrentUser() u: AuthUser, @ReqLang() lang: Lang, @Body() dto: FromReportDto) {
-    return this.tasks.fromReport(u.clinicId, u.userId, u.role, dto.reportId, dto.days, lang, dto.assigneeId, dto.maxDays);
+    return this.tasks.fromReport(u.clinicId, u.userId, u.role, dto.reportId, dto.days, lang, dto.assigneeId, dto.maxDays, parsePeriod(dto.from, dto.to));
   }
 
   @Patch(':id')

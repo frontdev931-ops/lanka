@@ -259,6 +259,14 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 /* a section's tabs are links to its pages */
 a.line-tab { display: inline-flex; align-items: center; text-decoration: none; }
 .dash-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 4px 0 12px; }
+.dash-range { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 14px 16px; margin: 0 0 14px; }
+.dash-range .input { min-height: 44px; font-size: 16px; width: auto; min-width: 150px; }
+@media (max-width: 700px) {
+  .dash-range .inline-label { flex: 1 1 100%; justify-content: space-between; }
+  .dash-range .inline-label .input { flex: 1; width: auto; }
+}
+/* a segmented choice (periods) keeps its buttons side by side, also in a page header on a phone */
+.page-head .toolbar.seg .btn { width: auto; flex: 1 1 0; }
 .section-title { margin: 26px 0 6px; font-size: 17px; }
 .line-tab:hover { color: var(--text); border-bottom-color: var(--border); }
 .line-tab:focus-visible { outline: 2px solid var(--primary-dark); outline-offset: -2px; }
@@ -345,6 +353,8 @@ a.line-tab { display: inline-flex; align-items: center; text-decoration: none; }
 .ask-ai:hover { text-decoration: none; transform: translateY(-1px); box-shadow: 0 8px 22px rgba(14, 154, 160, 0.45); }
 .ask-ai:focus-visible { outline: 2px solid var(--primary-dark); outline-offset: 3px; }
 @media (max-width: 880px) {
+  /* the round button sits above the bottom bar: the page gets room for it, so it never covers the last button of a page */
+  .content.with-ask { padding-bottom: calc(140px + env(safe-area-inset-bottom)); }
   .ask-ai { right: 16px; bottom: calc(72px + env(safe-area-inset-bottom)); width: 52px; height: 52px; padding: 0; justify-content: center; }
   .ask-ai span { display: none; }
 }
@@ -427,7 +437,7 @@ a.line-tab { display: inline-flex; align-items: center; text-decoration: none; }
   /* The report tabs scroll horizontally instead of taking half the screen */
   .tabs { flex-wrap: nowrap; overflow-x: auto; margin: 0 -16px 16px; padding: 0 16px 4px; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
-  .tab { flex: none; min-height: 40px; }
+  .tab { flex: none; min-height: 44px; }
 
   .stats { grid-template-columns: 1fr; }
   .auth-card { padding: 22px 18px; }

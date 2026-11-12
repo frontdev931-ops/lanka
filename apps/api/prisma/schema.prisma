@@ -619,6 +619,12 @@ model Integration {
   // The Cliniccards API key, encrypted (AES-256-GCM, see common/crypto.ts). Never returned outside and never logged.
   apiKeyEnc  String?
   lastSyncAt DateTime?
+  // The daily automatic load (AutoSyncService, 03:00 in the clinic's time zone), Cliniccards only. autoSyncDay: the clinic day (YYYY-MM-DD) whose run was
+  // claimed: the claim is an atomic update, so one server starts it. autoSyncAttempts: attempts of that day (at most 3). autoSyncRetryAt: when the next
+  // attempt may start; while a run goes it is the end of its lease, so a run cut off by a restart is tried again after it (never right at start).
+  autoSyncDay      String?
+  autoSyncAttempts Int       @default(0)
+  autoSyncRetryAt  DateTime?
   clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   syncRuns   SyncRun[]
 

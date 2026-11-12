@@ -8,7 +8,10 @@ import { scenario } from './scenarios';
 import { effectiveLimits, periodStart } from '../service/plans';
 import { WaitlistService } from './waitlist.service';
 import { CustomAutomationsService } from './custom-automations.service';
-import { reminderStale } from './visit-reminders';
+import { madeFor, reminderStale } from './visit-reminders';
+import { SyncService } from '../integrations/sync.service';
+import { ClinicConnector, ExternalVisit } from '../integrations/connector';
+import { clinicDate } from '../common/clinic-time';
 // Sending window in the clinic's time zone: we do not write to patients at night
 import { inSendWindow } from './send-window';
 import { MessengerService } from './messenger.service';
@@ -24,7 +27,31 @@ export class OutboxService {
     private waitlist: WaitlistService,
     private custom: CustomAutomationsService,
     private messenger: MessengerService,
+    private sync: SyncService,
   ) {}
+
+  // A reminder of a visit's time is checked against Cliniccards itself right before it goes: our copy is loaded once a day, and a visit moved or cancelled
+  // there since then must not get a reminder with the old time. One read of the visit's day per clinic and day within one pass of the queue (not a full
+  // load). A clinic without a Cliniccards key (the demo) has nothing to ask: its own copy is the truth.
+  //   'ok': the visit is there, active, at the time the reminder was made for; 'stale': moved, cancelled or gone; 'unverified': Cliniccards did not answer.
+  private async freshVisit(
+    cache: { connectors: Map<string, Promise<ClinicConnector | null>>; days: Map<string, Promise<ExternalVisit[] | null>> },
+    m: { clinicId: string; dedupeKey: string; expiresAt: Date | null },
+    v: { externalId: string; startsAt: Date },
+  ): Promise<'ok' | 'stale' | 'unverified' | 'local'> {
+    if (!cache.connectors.has(m.clinicId)) cache.connectors.set(m.clinicId, this.sync.connectorForClinic(m.clinicId).catch(() => null));
+    const connector = await cache.connectors.get(m.clinicId)!;
+    if (!connector) return 'local';
+    const at = madeFor(m) ?? v.startsAt;
+    const key = `${m.clinicId}|${clinicDate(at)}`;
+    // a day in the clinic's time zone fits inside this window in any case (the same window as the fresh checks of booking)
+    if (!cache.days.has(key)) cache.days.set(key, connector.fetchVisits({ from: new Date(at.getTime() - 14 * 3_600_000), to: new Date(at.getTime() + 38 * 3_600_000) }).catch(() => null));
+    const rows = await cache.days.get(key)!;
+    if (!rows) return 'unverified';
+    const now = rows.find((x) => x.externalId === v.externalId);
+    // not on that day any more: moved to another day or removed
+    return reminderStale(now ? { status: now.status, startsAt: now.startsAt } : null, m) ? 'stale' : 'ok';
+  }
 
   async list(clinicId: string, status: string, page: number) {
     const pageSize = 50;
@@ -83,6 +110,7 @@ export class OutboxService {
     const inWindow = inSendWindow(now);
     const tokens = new Map<string, string | null>();
     const confirmFor = new Map<string, boolean>();
+    const fresh = { connectors: new Map<string, Promise<ClinicConnector | null>>(), days: new Map<string, Promise<ExternalVisit[] | null>>() };
     const assume = new Map<string, boolean>((await this.prisma.clinic.findMany({ where: { id: { in: [...new Set(due.map((m) => m.clinicId))] } }, select: { id: true, assumeConsent: true } })).map((c) => [c.id, c.assumeConsent]));
 
     // Plan limit of messages per month: what is left for each clinic. Over the limit, messages wait (they are not lost).
@@ -128,10 +156,22 @@ export class OutboxService {
       const rule = m.ruleKey.startsWith('auto:') && m.visitId ? await this.prisma.automation.findFirst({ where: { id: m.ruleKey.slice(5), clinicId: m.clinicId }, select: { trigger: true } }) : null;
       const beforeVisit = m.ruleKey === 'visit-reminder' || (rule?.trigger as { type?: string } | null | undefined)?.type === 'VISIT_BEFORE';
       if (beforeVisit && m.visitId) {
-        const v = await this.prisma.visit.findFirst({ where: { id: m.visitId, clinicId: m.clinicId }, select: { status: true, startsAt: true } });
+        const v = await this.prisma.visit.findFirst({ where: { id: m.visitId, clinicId: m.clinicId }, select: { status: true, startsAt: true, externalId: true } });
         if (reminderStale(v, m) || !v || v.startsAt <= now) {
           await mark('CANCELLED', 'Запис змінено або скасовано');
           out.skipped++;
+          continue;
+        }
+        const check = await this.freshVisit(fresh, m, v);
+        if (check === 'stale') {
+          await mark('CANCELLED', 'Запис змінено або скасовано в Cliniccards');
+          out.skipped++;
+          continue;
+        }
+        // never a reminder that may carry a wrong time: it is not sent and the reason stays in the history (it is not tried again)
+        if (check === 'unverified') {
+          await mark('FAILED', 'Не вдалося перевірити запис у Cliniccards: нагадування не надіслано');
+          out.failed++;
           continue;
         }
       }

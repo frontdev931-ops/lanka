@@ -22,7 +22,7 @@ A document for whoever puts LANKA on a hosting provider. What is ready in the co
 | API | `RESEND_API_KEY`, `EMAIL_FROM` | the Resend key (a separate key for the server only) and the sender `LANKA <notifications@lankaclinic.app>` |
 | API | `SMTP_URL` | optional fallback, for example `smtps://user:password@smtp.example.com:465` |
 | API | `PORT` | set by the host |
-| API | `AUTO_SYNC_MINUTES` | 60 (0 turns auto-update off) |
+| API | `AUTO_SYNC` | on by default: the daily Cliniccards load at 03:00 Kyiv time; `off` turns it off (the older `AUTO_SYNC_MINUTES=0` also turns it off) |
 | API | `AI_API_KEY` | the service-wide AI key (create it in the provider console, set a monthly spend limit there too); without it the AI features are unavailable |
 | API | `AI_MODEL` | optional, default `claude-haiku-5-5` |
 | API | `PLATFORM_ADMIN_EMAILS` | the service owner's email(s), comma-separated; they see all clinics and can change plans and suspend a clinic at `/platform` |

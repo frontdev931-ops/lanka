@@ -10,6 +10,7 @@ import { ChatService } from './chat.service';
 import { StaffNotifierService } from './staff-notifier.service';
 import { CampaignsService } from './campaigns.service';
 import { ResultsService } from './results.service';
+import { parsePeriod } from '../reports/period';
 import { ReviewsService } from './reviews.service';
 import { DigestService } from './digest.service';
 import { BookingFlowService } from './booking-flow.service';
@@ -248,9 +249,9 @@ export class MessagesController {
   // The payback screen (what the messages and the AI brought next to the price of the plan); it carries money, so only the owner and the manager
   @Get('payback')
   @Roles(...MANAGERS)
-  payback(@CurrentUser() u: AuthUser, @Query('days') days?: string) {
-    const d = Math.min(365, Math.max(7, Number.parseInt(days ?? '30', 10) || 30));
-    return this.results.payback(u.clinicId, d);
+  payback(@CurrentUser() u: AuthUser, @Query('days') days?: string, @Query('from') from?: string, @Query('to') to?: string) {
+    const d = Math.min(365, Math.max(1, Number.parseInt(days ?? '30', 10) || 30));
+    return this.results.payback(u.clinicId, d, new Date(), parsePeriod(from, to));
   }
 
   @Get()

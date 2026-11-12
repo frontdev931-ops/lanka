@@ -61,6 +61,11 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Из этого отчёта задачи не создаются',
     en: 'Tasks cannot be created from this report',
   },
+  bad_period: {
+    uk: 'Неправильний період: вкажіть початок і кінець, початок не пізніше кінця й не в майбутньому, не довше 3 років',
+    ru: 'Неверный период: укажите начало и конец, начало не позже конца и не в будущем, не длиннее 3 лет',
+    en: 'Wrong period: give a start and an end, the start not after the end and not in the future, at most 3 years',
+  },
   report_not_found: {
     uk: 'Звіт не знайдено',
     ru: 'Отчёт не найден',
@@ -660,21 +665,22 @@ export const REPORT_TEXT: Record<ReportId, { title: Record<Lang, string>; daysLa
   },
 };
 
-export const REPORT_RULE: Record<ReportId, Record<Lang, (d: number, max?: number) => string>> = {
+// p: the chosen period ("з 01.11.2026 по 10.11.2026"), given only when one was chosen; otherwise the text says "the last d days"
+export const REPORT_RULE: Record<ReportId, Record<Lang, (d: number, max?: number, p?: string) => string>> = {
   'no-next-visit': {
-    uk: (d) => `Пацієнти з відбутим візитом (VISITED) за останні ${d} дн. і без майбутніх дійсних записів (CANCELLED, DID_NOT_COME, MOVED не враховуються). Пацієнти з активним нагадуванням (NEW) на сьогодні або пізніше не показуються: про них уже пам’ятають`,
-    ru: (d) => `Пациенты с состоявшимся посещением (VISITED) за последние ${d} дн. и без будущих действующих записей (CANCELLED, DID_NOT_COME, MOVED не считаются). Пациенты с активным напоминанием (NEW) на сегодня или позже не показываются: о них уже помнят`,
-    en: (d) => `Patients with a completed visit (VISITED) in the last ${d} days and no upcoming active appointment (CANCELLED, DID_NOT_COME and MOVED do not count). Patients with an active reminder (NEW) for today or later are not shown: someone is already following up`,
+    uk: (d, _max, p) => `Пацієнти з відбутим візитом (VISITED) ${p ?? `за останні ${d} дн.`} і без майбутніх дійсних записів (CANCELLED, DID_NOT_COME, MOVED не враховуються). Пацієнти з активним нагадуванням (NEW) на сьогодні або пізніше не показуються: про них уже пам’ятають`,
+    ru: (d, _max, p) => `Пациенты с состоявшимся посещением (VISITED) ${p ?? `за последние ${d} дн.`} и без будущих действующих записей (CANCELLED, DID_NOT_COME, MOVED не считаются). Пациенты с активным напоминанием (NEW) на сегодня или позже не показываются: о них уже помнят`,
+    en: (d, _max, p) => `Patients with a completed visit (VISITED) ${p ?? `in the last ${d} days`} and no upcoming active appointment (CANCELLED, DID_NOT_COME and MOVED do not count). Patients with an active reminder (NEW) for today or later are not shown: someone is already following up`,
   },
   'missed-visits': {
-    uk: (d) => `Записи зі статусом DID_NOT_COME, CANCELLED або MOVED за останні ${d} дн. Колонка «Записаний знову» показує, чи є в пацієнта майбутній дійсний запис`,
-    ru: (d) => `Записи со статусом DID_NOT_COME, CANCELLED или MOVED за последние ${d} дн. Колонка «Записан снова» показывает, есть ли у пациента будущая действующая запись`,
-    en: (d) => `Appointments with status DID_NOT_COME, CANCELLED or MOVED in the last ${d} days. The “Rebooked” column shows whether the patient has an upcoming active appointment`,
+    uk: (d, _max, p) => `Записи зі статусом DID_NOT_COME, CANCELLED або MOVED ${p ?? `за останні ${d} дн.`} Колонка «Записаний знову» показує, чи є в пацієнта майбутній дійсний запис`,
+    ru: (d, _max, p) => `Записи со статусом DID_NOT_COME, CANCELLED или MOVED ${p ?? `за последние ${d} дн.`} Колонка «Записан снова» показывает, есть ли у пациента будущая действующая запись`,
+    en: (d, _max, p) => `Appointments with status DID_NOT_COME, CANCELLED or MOVED ${p ?? `in the last ${d} days`}. The “Rebooked” column shows whether the patient has an upcoming active appointment`,
   },
   'unclosed-visits': {
-    uk: (d) => `Записи за останні ${d} дн., час яких минув понад 2 години тому, але статус не змінено на підсумок (залишились «Запланований», «Підтверджений», «Не підтверджений», «У клініці», «У кріслі»). Невідомо, чи прийшов пацієнт: закрийте запис у Cliniccards (статус «Був на прийомі», «Не прийшов», «Скасований» або «Перенесений»). Тут нічого не змінюється автоматично`,
-    ru: (d) => `Записи за последние ${d} дн., время которых прошло более 2 часов назад, но статус не заменён на итог (остались «Запланирован», «Подтверждён», «Не подтверждён», «В клинике», «В кресле»). Неизвестно, пришёл ли пациент: закройте запись в Cliniccards (статус «Был на приёме», «Не пришёл», «Отменён» или «Перенесён»). Здесь ничего не меняется автоматически`,
-    en: (d) => `Appointments from the last ${d} days whose time ended more than 2 hours ago but whose status was never changed to an outcome (still Scheduled, Confirmed, Not confirmed, In clinic, In chair). It is unknown whether the patient came: close the appointment in Cliniccards (Visited, No-show, Cancelled or Rescheduled). Nothing is changed here automatically`,
+    uk: (d, _max, p) => `Записи ${p ?? `за останні ${d} дн.`}, час яких минув понад 2 години тому, але статус не змінено на підсумок (залишились «Запланований», «Підтверджений», «Не підтверджений», «У клініці», «У кріслі»). Невідомо, чи прийшов пацієнт: закрийте запис у Cliniccards (статус «Був на прийомі», «Не прийшов», «Скасований» або «Перенесений»). Тут нічого не змінюється автоматично`,
+    ru: (d, _max, p) => `Записи ${p ?? `за последние ${d} дн.`}, время которых прошло более 2 часов назад, но статус не заменён на итог (остались «Запланирован», «Подтверждён», «Не подтверждён», «В клинике», «В кресле»). Неизвестно, пришёл ли пациент: закройте запись в Cliniccards (статус «Был на приёме», «Не пришёл», «Отменён» или «Перенесён»). Здесь ничего не меняется автоматически`,
+    en: (d, _max, p) => `Appointments ${p ?? `from the last ${d} days`} whose time ended more than 2 hours ago but whose status was never changed to an outcome (still Scheduled, Confirmed, Not confirmed, In clinic, In chair). It is unknown whether the patient came: close the appointment in Cliniccards (Visited, No-show, Cancelled or Rescheduled). Nothing is changed here automatically`,
   },
   'lapsed-patients': {
     uk: (d, max) => `Пацієнти, чий останній візит (за карткою Cliniccards) був від ${d} до ${max ?? 730} дн. тому і в яких немає майбутніх дійсних записів. Пацієнти без візитів не враховані. Пацієнти з активним нагадуванням (NEW) на сьогодні або пізніше не показуються: про них уже пам’ятають. Порядок: спершу ті, у кого є незавершене лікування (за сумою), потім за сумою оплат за весь час`,
@@ -741,10 +747,17 @@ export const COLUMN_LABEL: Record<Lang, Record<string, string>> = {
 
 // Подписи значений для CSV (в интерфейсе их показывает веб-клиент)
 // The section "Rescheduled through LANKA" of the report of no-shows, cancellations and reschedules (and its digest line)
-export const LANKA_MOVES_TEXT: Record<Lang, { title: string; rule: (d: number) => string; operations: string; visits: string; legacy: (n: number) => string; agent: string; staff: (name: string | null) => string; unknown: string; noVisit: string; notRecorded: string; mainNote: string }> = {
+// The phrase of a chosen period inside the rule texts
+export const PERIOD_PHRASE: Record<Lang, (from: string, to: string) => string> = {
+  uk: (f, t) => (f === t ? `за ${f}` : `з ${f} по ${t}`),
+  ru: (f, t) => (f === t ? `за ${f}` : `с ${f} по ${t}`),
+  en: (f, t) => (f === t ? `on ${f}` : `from ${f} to ${t}`),
+};
+
+export const LANKA_MOVES_TEXT: Record<Lang, { title: string; rule: (d: number, p?: string) => string; operations: string; visits: string; legacy: (n: number) => string; agent: string; staff: (name: string | null) => string; unknown: string; noVisit: string; notRecorded: string; mainNote: string }> = {
   uk: {
     title: 'Перенесено через LANKA',
-    rule: (d) => `Підтверджені перенесення візитів, зроблені через LANKA (дія персоналу або агент), за датою перенесення за останні ${d} дн. Одна операція — одна підтверджена спроба перенесення (повтори одного запису аудиту рахуються один раз, за найранішою датою); один візит може бути перенесений кілька разів. Це не статус MOVED у Cliniccards: перенесення через LANKA лишає той самий візит активним, тому ці числа не додаються до записів зі статусом MOVED вище`,
+    rule: (d, p) => `Підтверджені перенесення візитів, зроблені через LANKA (дія персоналу або агент), за датою перенесення ${p ?? `за останні ${d} дн.`} Одна операція — одна підтверджена спроба перенесення (повтори одного запису аудиту рахуються один раз, за найранішою датою); один візит може бути перенесений кілька разів. Це не статус MOVED у Cliniccards: перенесення через LANKA лишає той самий візит активним, тому ці числа не додаються до записів зі статусом MOVED вище`,
     operations: 'Операцій перенесення', visits: 'Різних візитів',
     legacy: (n) => `Ще ${n} старих записів аудиту без ідентифікатора операції: їх не включено до числа операцій`,
     agent: 'Агент LANKA', staff: (name) => (name ? `Співробітник: ${name}` : 'Співробітник'), unknown: 'Невідомо', noVisit: 'Візиту вже немає в копії LANKA', notRecorded: 'не записано',
@@ -752,7 +765,7 @@ export const LANKA_MOVES_TEXT: Record<Lang, { title: string; rule: (d: number) =
   },
   ru: {
     title: 'Перенесено через LANKA',
-    rule: (d) => `Подтверждённые переносы визитов, сделанные через LANKA (действие персонала или агент), по дате переноса за последние ${d} дн. Одна операция — одна подтверждённая попытка переноса (повторы одной записи аудита считаются один раз, по самой ранней дате); один визит может быть перенесён несколько раз. Это не статус MOVED в Cliniccards: перенос через LANKA оставляет тот же визит активным, поэтому эти числа не прибавляются к записям со статусом MOVED выше`,
+    rule: (d, p) => `Подтверждённые переносы визитов, сделанные через LANKA (действие персонала или агент), по дате переноса ${p ?? `за последние ${d} дн.`} Одна операция — одна подтверждённая попытка переноса (повторы одной записи аудита считаются один раз, по самой ранней дате); один визит может быть перенесён несколько раз. Это не статус MOVED в Cliniccards: перенос через LANKA оставляет тот же визит активным, поэтому эти числа не прибавляются к записям со статусом MOVED выше`,
     operations: 'Операций переноса', visits: 'Разных визитов',
     legacy: (n) => `Ещё ${n} старых записей аудита без идентификатора операции: в число операций не включены`,
     agent: 'Агент LANKA', staff: (name) => (name ? `Сотрудник: ${name}` : 'Сотрудник'), unknown: 'Неизвестно', noVisit: 'Визита уже нет в копии LANKA', notRecorded: 'не записано',
@@ -760,7 +773,7 @@ export const LANKA_MOVES_TEXT: Record<Lang, { title: string; rule: (d: number) =
   },
   en: {
     title: 'Rescheduled through LANKA',
-    rule: (d) => `Confirmed moves of visits made through LANKA (a staff action or the agent), by the date of the move, in the last ${d} days. One operation is one confirmed rescheduling attempt (repeated audit entries of it count once, at the earliest date); one visit can be moved several times. This is not the MOVED status of Cliniccards: a move through LANKA keeps the same visit active, so these numbers are not added to the MOVED appointments above`,
+    rule: (d, p) => `Confirmed moves of visits made through LANKA (a staff action or the agent), by the date of the move, ${p ?? `in the last ${d} days`}. One operation is one confirmed rescheduling attempt (repeated audit entries of it count once, at the earliest date); one visit can be moved several times. This is not the MOVED status of Cliniccards: a move through LANKA keeps the same visit active, so these numbers are not added to the MOVED appointments above`,
     operations: 'Rescheduling operations', visits: 'Distinct visits',
     legacy: (n) => `${n} more older audit entries without an operation id: not included in the number of operations`,
     agent: 'LANKA agent', staff: (name) => (name ? `Staff: ${name}` : 'Staff'), unknown: 'Unknown', noVisit: 'The visit is no longer in LANKA’s copy', notRecorded: 'not recorded',

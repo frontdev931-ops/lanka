@@ -3,7 +3,8 @@ import { Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { clinicDate, clinicHm, clinicMonth, localToUtc, startOfClinicDay } from '../common/clinic-time';
 import { readWorkHours } from '../clinic/work-hours';
-import { COLUMN_LABEL, LANKA_MOVES_TEXT, Lang, REPORT_RULE, REPORT_TEXT, ReportId, VALUE_LABEL } from '../common/i18n';
+import { COLUMN_LABEL, LANKA_MOVES_TEXT, Lang, PERIOD_PHRASE, REPORT_RULE, REPORT_TEXT, ReportId, VALUE_LABEL } from '../common/i18n';
+import { Period, periodDate } from './period';
 import { cellLabel } from './report-export';
 import { lankaMoves } from './lanka-moves';
 
@@ -28,6 +29,9 @@ export interface Report {
   title: string;
   rule: string;
   days: number;
+  // the chosen period, when there is one (YYYY-MM-DD, both included)
+  from?: string | null;
+  to?: string | null;
   maxDays: number | null;
   dataUpdatedAt: Date | null;
   generatedAt: string;
@@ -88,6 +92,11 @@ const activeReminder = () => ({ status: 'NEW', dueDate: { gte: new Date(clinicDa
 
 const date = (d: Date | null | undefined) => (d ? clinicDate(d) : null);
 
+// The visits of a report's period: since → until (until is never later than now)
+type Window = { since: Date; until: Date };
+// The reports that take a chosen period (?from=&to=): their rows are visits of the period
+const PERIOD_REPORTS = new Set<ReportId>(['no-next-visit', 'missed-visits', 'unclosed-visits']);
+
 @Injectable()
 export class ReportsService {
   constructor(private prisma: PrismaService) {}
@@ -104,22 +113,30 @@ export class ReportsService {
     }));
   }
 
-  async build(clinicId: string, id: string, days: number | undefined, lang: Lang, role?: Role, maxDays?: number): Promise<Report> {
+  // period: a chosen range of days (from the home page or a link); it is used by the reports whose rows are tied to a date of a visit
+  // (PERIOD_REPORTS), the others keep their "last N days"
+  async build(clinicId: string, id: string, days: number | undefined, lang: Lang, role?: Role, maxDays?: number, period?: Period | null): Promise<Report> {
     const meta = META.find((m) => m.id === id);
     if (!meta) throw new NotFoundException('report_not_found');
     if (!allowed(meta, role)) throw new ForbiddenException('report_forbidden');
-    const d = days ?? meta.defaultDays;
+    const range = period && PERIOD_REPORTS.has(meta.id) ? period : null;
+    const d = range ? range.days : (days ?? meta.defaultDays);
+    const now = new Date();
+    const win = range ? { since: range.since, until: range.until } : { since: new Date(now.getTime() - d * DAY), until: now };
+    const phrase = range ? PERIOD_PHRASE[lang](periodDate(range.from), periodDate(range.to)) : undefined;
     const integration = await this.prisma.integration.findFirst({
       where: { clinicId },
       select: { lastSyncAt: true },
     });
     const max = meta.defaultMaxDays ? Math.max(maxDays ?? meta.defaultMaxDays, d + 1) : undefined;
-    const rows = await this.rows(meta.id, clinicId, d, max);
+    const rows = await this.rows(meta.id, clinicId, d, max, win);
     return {
       id,
       title: REPORT_TEXT[meta.id].title[lang],
-      rule: REPORT_RULE[meta.id][lang](d, max),
+      rule: REPORT_RULE[meta.id][lang](d, max, phrase),
       days: d,
+      from: range?.from ?? null,
+      to: range?.to ?? null,
       maxDays: max ?? null,
       dataUpdatedAt: integration?.lastSyncAt ?? null,
       generatedAt: new Date().toISOString(),
@@ -129,15 +146,14 @@ export class ReportsService {
       // Free windows by cabinet hours are not tied to a doctor: the "Doctor" column is then not needed
       columns: meta.columns.filter((key) => !(id === 'free-slots' && key === 'doctor' && rows.every((r) => !r.doctor))).map((key) => ({ key, label: COLUMN_LABEL[lang][key] ?? key })),
       rows,
-      ...(meta.id === 'missed-visits' ? { rule: `${REPORT_RULE[meta.id][lang](d, max)}. ${LANKA_MOVES_TEXT[lang].mainNote}`, sections: [await this.lankaMovesSection(clinicId, d, lang)] } : {}),
+      ...(meta.id === 'missed-visits' ? { rule: `${REPORT_RULE[meta.id][lang](d, max, phrase)}. ${LANKA_MOVES_TEXT[lang].mainNote}`, sections: [await this.lankaMovesSection(clinicId, d, lang, win, phrase)] } : {}),
     };
   }
 
   // "Rescheduled through LANKA": the operations of the period by their date (the same counting as the digest, lanka-moves.ts), with what is recorded of each
-  private async lankaMovesSection(clinicId: string, days: number, lang: Lang): Promise<ReportSection> {
-    const now = new Date();
+  private async lankaMovesSection(clinicId: string, days: number, lang: Lang, win: Window, phrase?: string): Promise<ReportSection> {
     const t = LANKA_MOVES_TEXT[lang];
-    const m = await lankaMoves(this.prisma, clinicId, new Date(now.getTime() - days * DAY), new Date(now.getTime() + 1));
+    const m = await lankaMoves(this.prisma, clinicId, win.since, new Date(win.until.getTime() + 1));
     const ops = [...m.operations].sort((a, b) => b.at.getTime() - a.at.getTime());
     const visits = await this.prisma.visit.findMany({ where: { clinicId, externalId: { in: ops.map((o) => o.visit).filter((v): v is string => !!v) } }, select: { externalId: true, patient: { select: { fullName: true } } } });
     const patientOf = new Map(visits.map((v) => [v.externalId, v.patient.fullName]));
@@ -149,7 +165,7 @@ export class ReportsService {
     return {
       key: 'lanka-moves',
       title: t.title,
-      rule: t.rule(days),
+      rule: t.rule(days, phrase),
       summary: [
         { label: t.operations, value: ops.length },
         { label: t.visits, value: m.visits },
@@ -167,14 +183,14 @@ export class ReportsService {
     };
   }
 
-  private rows(id: ReportId, clinicId: string, days: number, maxDays?: number): Promise<Row[]> {
+  private rows(id: ReportId, clinicId: string, days: number, maxDays: number | undefined, win: Window): Promise<Row[]> {
     switch (id) {
       case 'no-next-visit':
-        return this.noNextVisit(clinicId, days);
+        return this.noNextVisit(clinicId, win);
       case 'missed-visits':
-        return this.missedVisits(clinicId, days);
+        return this.missedVisits(clinicId, win);
       case 'unclosed-visits':
-        return this.unclosedVisits(clinicId, days);
+        return this.unclosedVisits(clinicId, win);
       case 'lapsed-patients':
         return this.lapsed(clinicId, days, maxDays ?? 730);
       case 'unfinished-treatment':
@@ -403,22 +419,23 @@ export class ReportsService {
   }
 
   // A patient with a visit that took place in the period and with no future valid appointments.
-  private async noNextVisit(clinicId: string, days: number): Promise<Row[]> {
+  // win: the visits of the period (by default the last N days up to now); "no upcoming appointment" is always counted from now
+  private async noNextVisit(clinicId: string, win: Window): Promise<Row[]> {
     const now = new Date();
-    const since = new Date(now.getTime() - days * DAY);
+    const { since, until } = win;
     const patients = await this.prisma.patient.findMany({
       where: {
         clinicId,
         removedAt: null,
         visits: {
-          some: { status: DONE, startsAt: { gte: since, lte: now } },
+          some: { status: DONE, startsAt: { gte: since, lte: until } },
           none: { status: { notIn: INACTIVE }, startsAt: { gt: now } },
         },
         reminders: { none: activeReminder() },
       },
       include: {
         visits: {
-          where: { status: DONE, startsAt: { gte: since, lte: now } },
+          where: { status: DONE, startsAt: { gte: since, lte: until } },
           orderBy: { startsAt: 'desc' },
           take: 1,
         },
@@ -441,11 +458,11 @@ export class ReportsService {
   }
 
   // Appointments with the statuses DID_NOT_COME, CANCELLED, MOVED in the period; we mark whether the patient booked again.
-  private async missedVisits(clinicId: string, days: number): Promise<Row[]> {
+  private async missedVisits(clinicId: string, win: Window): Promise<Row[]> {
     const now = new Date();
-    const since = new Date(now.getTime() - days * DAY);
+    const { since, until } = win;
     const visits = await this.prisma.visit.findMany({
-      where: { clinicId, status: { in: INACTIVE }, startsAt: { gte: since, lte: now }, patient: { removedAt: null } },
+      where: { clinicId, status: { in: INACTIVE }, startsAt: { gte: since, lte: until }, patient: { removedAt: null } },
       include: {
         patient: {
           include: {
@@ -474,15 +491,15 @@ export class ReportsService {
   // The date of the last visit is taken from the Cliniccards card (patient.lastVisitAt), not from the sync window.
   // Appointments whose time has passed but whose outcome was never set ("Planned", "Confirmed", "In the clinic"…): it is unknown whether
   // the person came. Because of them the funnel and the no-show reports understate attendance. The appointment has to be closed in Cliniccards (we change nothing there).
-  private async unclosedVisits(clinicId: string, days: number): Promise<Row[]> {
+  private async unclosedVisits(clinicId: string, win: Window): Promise<Row[]> {
     const now = new Date();
-    const since = new Date(now.getTime() - days * DAY);
+    const { since, until } = win;
     const [visits, cabinets] = await Promise.all([
       this.prisma.visit.findMany({
         where: {
           clinicId,
           status: { in: UNCLOSED },
-          startsAt: { gte: since, lte: now },
+          startsAt: { gte: since, lte: until },
           patient: { removedAt: null },
         },
         include: { patient: { select: { id: true, fullName: true, phone: true } } },

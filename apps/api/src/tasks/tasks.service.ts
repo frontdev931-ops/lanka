@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma, Role, TaskResult, TaskStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportsService } from '../reports/reports.service';
+import { Period } from '../reports/period';
 import { Lang, TASK_TITLE } from '../common/i18n';
 
 const startOfToday = () => {
@@ -119,11 +120,11 @@ export class TasksService {
 
   // Creates tasks from the report rows. For a patient who already has an open task
   // from the same report, a new one is not created. Rows with actionable = 0 are skipped.
-  async fromReport(clinicId: string, userId: string, role: Role, reportId: string, days: number | undefined, lang: Lang, assigneeId?: string, maxDays?: number) {
+  async fromReport(clinicId: string, userId: string, role: Role, reportId: string, days: number | undefined, lang: Lang, assigneeId?: string, maxDays?: number, period?: Period | null) {
     const title = TASK_TITLE[reportId]?.[lang];
     if (!title) throw new BadRequestException('report_no_tasks');
     await this.assertMember(clinicId, assigneeId);
-    const report = await this.reports.build(clinicId, reportId, days, lang, role, maxDays);
+    const report = await this.reports.build(clinicId, reportId, days, lang, role, maxDays, period);
     const source = `report:${reportId}`;
 
     const patientIds = [

@@ -6,6 +6,7 @@ import { api } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { fmtDateTime } from '../../lib/ui';
 import { Alert, Icon, PageHeader } from '../../components/ui';
+import { Period, PRESET_DAYS, dayLabel, localDay, periodQuery, rangeProblem, readPeriod, today } from '../../lib/period';
 
 interface Report {
   dataUpdatedAt: string | null;
@@ -21,9 +22,9 @@ interface Integration {
   lastSyncAt: string | null;
 }
 
-// The period of the three report cards (one choice for all of them, remembered in the browser). The other cards show what waits now and have no period.
-const PERIODS = [7, 30, 90] as const;
-const PERIOD_KEY = 'stomat_dash_days';
+// The period of the report cards (one choice for all of them, remembered in the browser): yesterday, 7, 30, 90 days, or any range picked in the
+// calendar. The cards of "needs action now" show what waits today and have no period.
+const PERIOD_KEY = 'stomat_dash_period';
 
 export default function Dashboard() {
   const t = useT();
@@ -32,10 +33,13 @@ export default function Dashboard() {
   const [unclosed, setUnclosed] = useState<Report | null>(null);
   const [tasks, setTasks] = useState<Summary | null>(null);
   const [integration, setIntegration] = useState<Integration | null>(null);
-  const [days, setDays] = useState<number>(30);
+  const [period, setPeriod] = useState<Period>({ kind: 'days', n: 30 });
+  // the range form: open, and its two dates
+  const [custom, setCustom] = useState<{ from: string; to: string } | null>(null);
   // appointments that followed our messages in the period (owner and manager; another role gets no card)
   const [payback, setPayback] = useState<{ booked: number; attended: number } | null>(null);
   const [ready, setReady] = useState(false);
+  const q = periodQuery(period);
   // what waits for a person in the messaging: new requests from conversations and messages to approve (a role without access gets no card)
   const [requests, setRequests] = useState<number | null>(null);
   const [toApprove, setToApprove] = useState<number | null>(null);
@@ -49,8 +53,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     try {
-      const saved = Number(window.localStorage.getItem(PERIOD_KEY));
-      if ((PERIODS as readonly number[]).includes(saved)) setDays(saved);
+      const saved = readPeriod(window.localStorage.getItem(PERIOD_KEY) ?? window.localStorage.getItem('stomat_dash_days'));
+      if (saved) setPeriod(saved);
     } catch {
       // the browser forbids storage: the default period stays
     }
@@ -61,20 +65,25 @@ export default function Dashboard() {
     setNoNext(null);
     setMissed(null);
     setUnclosed(null);
-    api<Report>(`/reports/no-next-visit?days=${days}`).then(setNoNext).catch(() => {});
-    api<Report>(`/reports/missed-visits?days=${days}`).then(setMissed).catch(() => {});
-    api<Report>(`/reports/unclosed-visits?days=${days}`).then(setUnclosed).catch(() => {});
+    api<Report>(`/reports/no-next-visit?${q}`).then(setNoNext).catch(() => {});
+    api<Report>(`/reports/missed-visits?${q}`).then(setMissed).catch(() => {});
+    api<Report>(`/reports/unclosed-visits?${q}`).then(setUnclosed).catch(() => {});
     setPayback(null);
-    api<{ booked: number; attended: number }>(`/messages/payback?days=${days}`).then(setPayback).catch(() => {});
-  }, [days, ready]);
-  const pickDays = (d: number) => {
-    setDays(d);
+    api<{ booked: number; attended: number }>(`/messages/payback?${q}`).then(setPayback).catch(() => {});
+  }, [q, ready]);
+  const pick = (p: Period) => {
+    setPeriod(p);
+    setCustom(null);
     try {
-      window.localStorage.setItem(PERIOD_KEY, String(d));
+      window.localStorage.setItem(PERIOD_KEY, JSON.stringify(p));
     } catch {
       // not remembered, the choice still works for this visit
     }
   };
+  const problem = custom ? rangeProblem(custom.from, custom.to) : null;
+  // how the period reads under a figure: "останні 30 днів", "вчора", "01.11.2026 — 10.11.2026"
+  const periodText =
+    period.kind === 'days' ? t('dash.pLast', { n: period.n }) : period.kind === 'yesterday' ? t('dash.pYesterday') : period.from === period.to ? dayLabel(period.from) : `${dayLabel(period.from)} — ${dayLabel(period.to)}`;
 
   const updated = noNext?.dataUpdatedAt ? fmtDateTime(noNext.dataUpdatedAt) : t('common.neverSynced');
 
@@ -107,11 +116,39 @@ export default function Dashboard() {
       <div className="dash-head">
         <h2 className="section-title" style={{ margin: 0 }}>{t('dash.periodTitle')}</h2>
         <div className="toolbar" role="group" aria-label={t('dash.periodLabel')}>
-          {PERIODS.map((d) => (
-            <button key={d} type="button" className={days === d ? 'btn btn-sm btn-primary' : 'btn btn-sm'} aria-pressed={days === d} onClick={() => pickDays(d)}>{t('dash.days', { n: d })}</button>
-          ))}
+          <button type="button" className={period.kind === 'yesterday' ? 'btn btn-sm btn-primary' : 'btn btn-sm'} aria-pressed={period.kind === 'yesterday'} onClick={() => pick({ kind: 'yesterday' })}>{t('dash.yesterday')}</button>
+          {PRESET_DAYS.map((d) => {
+            const on = period.kind === 'days' && period.n === d;
+            return <button key={d} type="button" className={on ? 'btn btn-sm btn-primary' : 'btn btn-sm'} aria-pressed={on} onClick={() => pick({ kind: 'days', n: d })}>{t('dash.days', { n: d })}</button>;
+          })}
+          <button
+            type="button"
+            className={period.kind === 'range' || custom ? 'btn btn-sm btn-primary' : 'btn btn-sm'}
+            aria-pressed={period.kind === 'range'}
+            aria-expanded={!!custom}
+            onClick={() => setCustom(custom ? null : period.kind === 'range' ? { from: period.from, to: period.to } : { from: localDay(new Date(Date.now() - 6 * 86_400_000)), to: today() })}
+          >
+            <Icon name="calendar" size={15} /> {period.kind === 'range' ? periodText : t('dash.custom')}
+          </button>
         </div>
       </div>
+      {custom && (
+        <div className="card dash-range">
+          <label className="inline-label">
+            {t('dash.from')}
+            <input className="input" type="date" value={custom.from} max={custom.to || today()} onChange={(e) => setCustom({ ...custom, from: e.target.value })} />
+          </label>
+          <label className="inline-label">
+            {t('dash.to')}
+            <input className="input" type="date" value={custom.to} min={custom.from || undefined} max={today()} onChange={(e) => setCustom({ ...custom, to: e.target.value })} />
+          </label>
+          <div className="toolbar">
+            <button type="button" className="btn btn-primary" disabled={!!problem} onClick={() => pick({ kind: 'range', from: custom.from, to: custom.to })}>{t('dash.apply')}</button>
+            <button type="button" className="btn" onClick={() => setCustom(null)}>{t('common.cancel')}</button>
+          </div>
+          {problem && problem !== 'empty' && <p className="muted" style={{ margin: 0, fontSize: 13, flexBasis: '100%' }}>{t(`dash.bad.${problem}`)}</p>}
+        </div>
+      )}
       <div className="stats">
         <section className="card stat">
           <div className="stat-top">
@@ -120,8 +157,8 @@ export default function Dashboard() {
           </div>
           <div className="stat-value">{noNext ? noNext.rows.length : '—'}</div>
           <div className="stat-foot">
-            {t('dash.noNextPeriod', { n: days })}
-            <Link href={`/reports?report=no-next-visit&days=${days}`}>{t('common.open')} →</Link>
+            {t('dash.noNextP', { p: periodText })}
+            <Link href={`/reports?report=no-next-visit&${q}`}>{t('common.open')} →</Link>
           </div>
         </section>
 
@@ -132,8 +169,8 @@ export default function Dashboard() {
           </div>
           <div className="stat-value">{missed ? missed.rows.length : '—'}</div>
           <div className="stat-foot">
-            {t('dash.lastDays', { n: days })}
-            <Link href={`/reports?report=missed-visits&days=${days}`}>{t('common.open')} →</Link>
+            {t('dash.periodP', { p: periodText })}
+            <Link href={`/reports?report=missed-visits&${q}`}>{t('common.open')} →</Link>
           </div>
         </section>
 
@@ -144,8 +181,8 @@ export default function Dashboard() {
           </div>
           <div className="stat-value">{unclosed ? unclosed.rows.length : '—'}</div>
           <div className="stat-foot">
-            {t('dash.unclosedPeriod', { n: days })}
-            <Link href={`/reports?report=unclosed-visits&days=${days}`}>{t('common.open')} →</Link>
+            {t('dash.unclosedP', { p: periodText })}
+            <Link href={`/reports?report=unclosed-visits&${q}`}>{t('common.open')} →</Link>
           </div>
         </section>
 
@@ -157,7 +194,7 @@ export default function Dashboard() {
             </div>
             <div className="stat-value">{payback.booked}</div>
             <div className="stat-foot">
-              <span>{t('pb.bookedSub', { n: payback.attended })}</span>
+              <span>{t('pb.bookedSub', { n: payback.attended })} · {periodText}</span>
               <Link href="/payback">{t('common.open')} →</Link>
             </div>
           </section>

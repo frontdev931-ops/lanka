@@ -1,4 +1,5 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { clinicDate, localToUtc } from '../src/common/clinic-time';
 import { Test } from '@nestjs/testing';
 import * as ExcelJS from 'exceljs';
 import request from 'supertest';
@@ -206,6 +207,51 @@ describe('логика отчётов', () => {
 
     const missed = await http().get('/reports/missed-visits?days=30').set(auth(a.token)).expect(200);
     expect(missed.body.rows.map((r: { fullName: string }) => r.fullName)).toContain('Не приходил');
+  });
+
+  it('выбранный период (?from=&to=): только визиты этих дней, вчера, правило с датами; неверный период отклоняется', async () => {
+    const a = await register();
+    const clinicId = await clinicOf(a.email);
+    const day = 86_400_000;
+    // a clinic day N days ago at noon (Kyiv), and its date YYYY-MM-DD
+    const noon = (ago: number) => localToUtc(`${clinicDate(new Date(Date.now() - ago * day))} 12:00:00`);
+    const iso = (ago: number) => clinicDate(new Date(Date.now() - ago * day));
+    const mk = (externalId: string, name: string) => prisma.patient.create({ data: { clinicId, externalId, fullName: name } });
+    const visit = (patientId: string, externalId: string, status: string, at: Date) => prisma.visit.create({ data: { clinicId, patientId, externalId, status, startsAt: at } });
+
+    const yesterday = await mk('r1', 'Вчора');
+    await visit(yesterday.id, 'rv1', 'VISITED', noon(1));
+    const tenDays = await mk('r2', 'Десять днів');
+    await visit(tenDays.id, 'rv2', 'VISITED', noon(10));
+    const missedY = await mk('r3', 'Не прийшов учора');
+    await visit(missedY.id, 'rv3', 'DID_NOT_COME', noon(1));
+    const unclosedOld = await mk('r4', 'Без підсумку');
+    await visit(unclosedOld.id, 'rv4', 'PLANNED', noon(10));
+
+    const names = (r: { body: { rows: { fullName: string }[] } }) => r.body.rows.map((x) => x.fullName);
+    const y = await http().get(`/reports/no-next-visit?from=${iso(1)}&to=${iso(1)}`).set(auth(a.token)).expect(200);
+    expect(names(y)).toEqual(['Вчора']);
+    expect(y.body).toMatchObject({ from: iso(1), to: iso(1), days: 1 });
+    expect(y.body.rule).toContain(`за ${iso(1).split('-').reverse().join('.')}`);
+    const range = await http().get(`/reports/no-next-visit?from=${iso(12)}&to=${iso(5)}`).set(auth(a.token)).expect(200);
+    expect(names(range)).toEqual(['Десять днів']);
+    expect(range.body.days).toBe(8);
+    expect(names(await http().get(`/reports/missed-visits?from=${iso(1)}&to=${iso(1)}`).set(auth(a.token)).expect(200))).toEqual(['Не прийшов учора']);
+    expect(names(await http().get(`/reports/missed-visits?from=${iso(12)}&to=${iso(5)}`).set(auth(a.token)).expect(200))).toEqual([]);
+    expect(names(await http().get(`/reports/unclosed-visits?from=${iso(12)}&to=${iso(5)}`).set(auth(a.token)).expect(200))).toEqual(['Без підсумку']);
+    // without a period the report keeps its last N days
+    expect(names(await http().get('/reports/no-next-visit?days=30').set(auth(a.token)).expect(200)).sort()).toEqual(['Вчора', 'Десять днів']);
+    // the export follows the same period
+    const csv = await http().get(`/reports/no-next-visit/csv?from=${iso(1)}&to=${iso(1)}`).set(auth(a.token)).expect(200);
+    expect(csv.text).toContain('Вчора');
+    expect(csv.text).not.toContain('Десять днів');
+
+    for (const q of [`from=${iso(1)}`, `from=${iso(1)}&to=${iso(5)}`, 'from=2026-02-30&to=2026-03-01', `from=${iso(-3)}&to=${iso(-3)}`, `from=2020-01-01&to=${iso(0)}`]) {
+      await http().get(`/reports/no-next-visit?${q}`).set(auth(a.token)).expect(400);
+    }
+    // another clinic sees none of these patients for the same period
+    const b = await register();
+    expect(names(await http().get(`/reports/no-next-visit?from=${iso(12)}&to=${iso(0)}`).set(auth(b.token)).expect(200))).toEqual([]);
   });
 
   it('CSV открывается в Excel: BOM, точка с запятой, заголовки', async () => {

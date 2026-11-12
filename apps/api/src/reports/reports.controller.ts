@@ -5,6 +5,7 @@ import { Lang, ReqLang } from '../common/i18n';
 import { PrismaService } from '../prisma/prisma.service';
 import { toPdf, toXlsx } from './report-export';
 import { ReportsService } from './reports.service';
+import { parsePeriod } from './period';
 
 @Controller('reports')
 @UseGuards(AuthGuard)
@@ -26,8 +27,10 @@ export class ReportsController {
     @Param('id') id: string,
     @Query('days', new ParseIntPipe({ optional: true })) days: number | undefined,
     @Query('maxDays', new ParseIntPipe({ optional: true })) maxDays: number | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
   ) {
-    return this.reports.build(u.clinicId, id, days, lang, u.role, maxDays);
+    return this.reports.build(u.clinicId, id, days, lang, u.role, maxDays, parsePeriod(from, to));
   }
 
   // Excel and PDF: the same data as on screen and in CSV; the export is written to the action history
@@ -38,9 +41,11 @@ export class ReportsController {
     @Param('id') id: string,
     @Query('days', new ParseIntPipe({ optional: true })) days: number | undefined,
     @Query('maxDays', new ParseIntPipe({ optional: true })) maxDays: number | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
     @Res() res: Response,
   ) {
-    const report = await this.reports.build(u.clinicId, id, days, lang, u.role, maxDays);
+    const report = await this.reports.build(u.clinicId, id, days, lang, u.role, maxDays, parsePeriod(from, to));
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'report.exported', details: { report: id, rows: report.rows.length, format: 'xlsx' } } });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${id}.xlsx"`);
@@ -54,9 +59,11 @@ export class ReportsController {
     @Param('id') id: string,
     @Query('days', new ParseIntPipe({ optional: true })) days: number | undefined,
     @Query('maxDays', new ParseIntPipe({ optional: true })) maxDays: number | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
     @Res() res: Response,
   ) {
-    const report = await this.reports.build(u.clinicId, id, days, lang, u.role, maxDays);
+    const report = await this.reports.build(u.clinicId, id, days, lang, u.role, maxDays, parsePeriod(from, to));
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'report.exported', details: { report: id, rows: report.rows.length, format: 'pdf' } } });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${id}.pdf"`);
@@ -70,9 +77,11 @@ export class ReportsController {
     @Param('id') id: string,
     @Query('days', new ParseIntPipe({ optional: true })) days: number | undefined,
     @Query('maxDays', new ParseIntPipe({ optional: true })) maxDays: number | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
     @Res() res: Response,
   ) {
-    const report = await this.reports.build(u.clinicId, id, days, lang, u.role, maxDays);
+    const report = await this.reports.build(u.clinicId, id, days, lang, u.role, maxDays, parsePeriod(from, to));
     // An export of personal data to a file: who downloaded it and when stays in the action history
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'report.exported', details: { report: id, rows: report.rows.length } } });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

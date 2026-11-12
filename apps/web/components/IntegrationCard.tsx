@@ -22,7 +22,9 @@ interface Run {
 interface Status {
   mode: 'demo' | 'cliniccards';
   lastSyncAt: string | null;
-  lastRun: { status: string; error: string | null } | null;
+  lastRun: { status: string; error: string | null; errorKind?: 'network' | 'interrupted' | 'access' | 'other' | null } | null;
+  // the daily automatic load: enabled only when the server runs it and the clinic has a key
+  autoSync?: { enabled: boolean; hour: number; timeZone: string; nextAt: string | null };
 }
 
 // Settings → General: the clinic's data source (the Cliniccards key, loading the data and the history of loads); it was the separate "Integrations" page
@@ -107,9 +109,8 @@ export function IntegrationCard() {
   return (
     <>
       {error && <Alert tone="error">{error}</Alert>}
-      {status?.lastRun?.status === 'FAILED' && (
-        <Alert tone="warn">{t('int.lastFailed', { error: status.lastRun.error ?? t('int.unknownError') })}</Alert>
-      )}
+      {/* a readable sentence; the exact message of the clinic's system stays in the history below */}
+      {status?.lastRun?.status === 'FAILED' && !running && <Alert tone="warn">{t(`int.err.${status.lastRun.errorKind ?? 'other'}`)}</Alert>}
 
       <Card
         title="Cliniccards"
@@ -128,6 +129,18 @@ export function IntegrationCard() {
         <p className="rule">
           {!connected ? t('int.textDemo') : running ? t('int.runningHint') : !loaded ? t('int.notLoadedHint') : t('int.textConnected')}
         </p>
+        {connected && (
+          <ul className="terms-list" aria-label={t('int.autoTitle')}>
+            <li>
+              {status?.autoSync?.enabled
+                ? t('int.autoOn', { time: `${String(status.autoSync.hour).padStart(2, '0')}:00`, zone: status.autoSync.timeZone === 'Europe/Kyiv' ? t('int.tzKyiv') : status.autoSync.timeZone })
+                : t('int.autoOff')}
+              {status?.autoSync?.enabled && status.autoSync.nextAt ? ` ${t('int.autoNext', { date: fmtDateTime(status.autoSync.nextAt) })}` : ''}
+            </li>
+            <li>{status?.lastSyncAt ? t('int.lastOkLine', { date: fmtDateTime(status.lastSyncAt) }) : t('int.neverOk')}</li>
+            <li>{t('int.freshChecks')}</li>
+          </ul>
+        )}
         <SyncBar run={runs[0] ?? null} />
         {showKeyField ? (
           <div className="toolbar">
@@ -155,7 +168,6 @@ export function IntegrationCard() {
         )}
         <p className="rule" style={{ margin: '10px 0 0' }}>
           {t('int.keyHint')}
-          {status?.lastSyncAt && t('int.lastOk', { date: fmtDateTime(status.lastSyncAt) })}
         </p>
         <details className="more-details" style={{ marginTop: 12 }}>
           <summary>{t('int.history')}</summary>

@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { api, downloadCsv, isUnauthorized } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
 import { fmtDate, fmtDateTime, fmtNumber } from '../../../lib/ui';
+import { dayLabel } from '../../../lib/period';
 import { Alert, Badge, Card, Empty, Icon, Loading, PageHeader, statusTone } from '../../../components/ui';
 import { SyncBar } from '../../../components/SyncBar';
 import { ColumnChart, ChartDatum } from '../../../components/ColumnChart';
@@ -57,6 +58,8 @@ export default function ReportsPage() {
   const [days, setDays] = useState(90);
   // The upper bound of the period (only for the "long absent" report)
   const [maxDays, setMaxDays] = useState<number | null>(null);
+  // a range of days that came with the link (?from=&to=, from the home page); the days field replaces it again
+  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
   const [sourceFilter, setSourceFilter] = useState('');
   const [onlyTreatment, setOnlyTreatment] = useState(false);
   // How old an appointment without an outcome is: recent ones are easy to remember, old ones are closed in a batch on the doctor's schedule
@@ -142,6 +145,10 @@ export default function ReportsPage() {
           // ...and &days=30 opens it for the period chosen on the home page
           const wantedDays = typeof window === 'undefined' ? 0 : Number(new URLSearchParams(window.location.search).get('days'));
           setDays(first.id === wanted && Number.isInteger(wantedDays) && wantedDays > 0 && wantedDays <= 3650 ? wantedDays : first.defaultDays);
+          const qs = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search);
+          const from = qs?.get('from');
+          const to = qs?.get('to');
+          if (first.id === wanted && from && to && /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) setRange({ from, to });
           setMaxDays(first.defaultMaxDays);
           return first.id;
         });
@@ -150,19 +157,21 @@ export default function ReportsPage() {
     api<Assignee[]>('/tasks/assignees').then(setAssignees).catch(() => {});
   }, [fail, locale]);
 
+  // the same period for the screen, the exports and the tasks; a range wins over the days field
+  const periodQs = range ? `from=${range.from}&to=${range.to}` : `days=${days}${maxDays ? `&maxDays=${maxDays}` : ''}`;
   const load = useCallback(async () => {
     if (!currentId) return;
     setError('');
     setLoading(true);
     setShown(100);
     try {
-      setReport(await api<Report>(`/reports/${currentId}?days=${days}${maxDays ? `&maxDays=${maxDays}` : ''}`));
+      setReport(await api<Report>(`/reports/${currentId}?${periodQs}`));
     } catch (e) {
       fail(e);
     } finally {
       setLoading(false);
     }
-  }, [currentId, days, maxDays, fail, locale]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentId, periodQs, fail, locale]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     load();
@@ -175,6 +184,7 @@ export default function ReportsPage() {
     setCurrentId(c.id);
     setDays(c.defaultDays);
     setMaxDays(c.defaultMaxDays);
+    setRange(null);
     setInfo('');
     setQuery('');
     setSourceFilter('');
@@ -191,7 +201,7 @@ export default function ReportsPage() {
     try {
       const r = await api<{ created: number; skippedExisting: number }>('/tasks/from-report', {
         method: 'POST',
-        body: JSON.stringify({ reportId: currentId, days, maxDays: maxDays || undefined, assigneeId: assignee || undefined }),
+        body: JSON.stringify({ reportId: currentId, days, maxDays: maxDays || undefined, ...(range ?? {}), assigneeId: assignee || undefined }),
       });
       setInfo(t('rep.created', { created: r.created, skipped: r.skippedExisting }));
     } catch (e) {
@@ -246,7 +256,13 @@ export default function ReportsPage() {
         title={report?.title ?? current?.title}
         actions={
           <>
-            {current?.usesDays && (
+            {current?.usesDays && range && (
+              <span className="inline-label">
+                {range.from === range.to ? dayLabel(range.from) : `${dayLabel(range.from)} — ${dayLabel(range.to)}`}
+                <button type="button" className="btn btn-sm" onClick={() => setRange(null)}>{t('rep.rangeReset')}</button>
+              </span>
+            )}
+            {current?.usesDays && !range && (
               <label className="inline-label">
                 {current.daysLabel}
                 <input
@@ -276,7 +292,7 @@ export default function ReportsPage() {
               <button
                 key={fmt}
                 className="btn"
-                onClick={() => currentId && downloadCsv(`/reports/${currentId}/${fmt}?days=${days}${maxDays ? `&maxDays=${maxDays}` : ''}`, `${currentId}.${fmt}`).catch((e) => setError(e.message))}
+                onClick={() => currentId && downloadCsv(`/reports/${currentId}/${fmt}?${periodQs}`, `${currentId}.${fmt}`).catch((e) => setError(e.message))}
               >
                 <Icon name="download" size={16} /> {fmt === 'xlsx' ? 'Excel' : fmt.toUpperCase()}
               </button>
@@ -367,7 +383,7 @@ export default function ReportsPage() {
               <thead>
                 <tr>
                   {report.columns.map((c) => (
-                    <th key={c.key} className={NUMERIC.has(c.key) ? 'num' : ''}>{c.label}</th>
+                    <th key={c.key} className={NUMERIC.has(c.key) ? 'num' : ''}>{c.label}{MONEY.has(c.key) ? `, ${t('billing.uah')}` : ''}</th>
                   ))}
                 </tr>
               </thead>

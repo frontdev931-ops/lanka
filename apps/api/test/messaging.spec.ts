@@ -708,6 +708,10 @@ describe('результат сообщений для воронки', () => {
     await prisma.payment.create({ data: { clinicId, patientId: b.id, externalId: `p${rnd()}`, paidAt: ago(5), amount: 700 } }); // did not book after a message
     const pay = (await http().get('/messages/payback?days=30').set(auth(token)).expect(200)).body;
     expect(pay).toMatchObject({ days: 30, attributionDays: 14, sent: 7, booked: 2, attended: 1, remindedVisits: 1, paid: 1500 });
+    // a chosen range of days: only the messages sent in it (four campaign messages 20 days ago); the booking after them counts also after the range
+    const dayIso = (n: number) => clinicDate(new Date(Date.now() - n * DAYMS));
+    expect((await http().get(`/messages/payback?from=${dayIso(21)}&to=${dayIso(19)}`).set(auth(token)).expect(200)).body).toMatchObject({ from: dayIso(21), to: dayIso(19), days: 3, sent: 4, booked: 1, paid: 1500 });
+    await http().get(`/messages/payback?from=${dayIso(1)}`).set(auth(token)).expect(400);
     // a shorter period leaves only the fresh message and its appointment, and no payment
     expect((await http().get('/messages/payback?days=7').set(auth(token)).expect(200)).body).toMatchObject({ sent: 3, booked: 1, attended: 0, paid: 0 });
     // money: only the owner and the manager; another clinic sees none of it

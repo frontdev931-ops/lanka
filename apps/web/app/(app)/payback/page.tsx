@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api } from '../../../lib/api';
-import { fmtNumber } from '../../../lib/ui';
+import { fmtMoney, fmtNumber } from '../../../lib/ui';
 import { useI18n } from '../../../lib/i18n';
 import { Alert, Card, Icon, Loading, PageHeader } from '../../../components/ui';
 
@@ -63,7 +63,7 @@ export default function PaybackPage() {
         title={t('pb.title')}
         subtitle={t('pb.subtitle')}
         actions={
-          <div className="toolbar" role="group" aria-label={t('dash.periodLabel')}>
+          <div className="toolbar seg" role="group" aria-label={t('dash.periodLabel')}>
             {PERIODS.map((d) => (
               <button key={d} type="button" className={days === d ? 'btn btn-sm btn-primary' : 'btn btn-sm'} aria-pressed={days === d} onClick={() => setDays(d)}>{t('dash.days', { n: d })}</button>
             ))}
@@ -77,7 +77,7 @@ export default function PaybackPage() {
         <>
           <div className="stats">
             {stat(t('pb.booked'), fmtNumber(data.booked), t('pb.bookedSub', { n: data.attended }), 'calendar')}
-            {stat(t('pb.paid'), fmtNumber(data.paid), t('pb.paidSub'), 'trend')}
+            {stat(t('pb.paid'), fmtMoney(data.paid, t('billing.uah')), t('pb.paidSub'), 'trend')}
             {stat(t('pb.reminded'), fmtNumber(data.remindedVisits), t('pb.remindedSub'), 'check')}
             {stat(t('pb.requests'), fmtNumber(data.bookingRequestsDone), t('pb.requestsSub'), 'message')}
             {stat(t('pb.ai'), fmtNumber(data.aiReplies), t('pb.aiSub'), 'sparkles')}
@@ -86,9 +86,9 @@ export default function PaybackPage() {
 
           <Card title={t('pb.costTitle')}>
             {data.planPriceUah > 0 ? (
-              <p className="rule" style={{ marginTop: 0 }}>{t('pb.cost', { sum: fmtNumber(data.planPriceUah), paid: fmtNumber(data.paid), n: data.days })}</p>
+              <p className="rule" style={{ marginTop: 0 }}>{t('pb.cost', { sum: fmtNumber(data.planPriceUah), paid: fmtMoney(data.paid, t('billing.uah')), n: data.days })}</p>
             ) : (
-              <p className="rule" style={{ marginTop: 0 }}>{t('pb.costCustom', { paid: fmtNumber(data.paid), n: data.days })}</p>
+              <p className="rule" style={{ marginTop: 0 }}>{t('pb.costCustom', { paid: fmtMoney(data.paid, t('billing.uah')), n: data.days })}</p>
             )}
             <p className="muted" style={{ fontSize: 13 }}>{t('pb.rule', { n: data.attributionDays })}</p>
             <p className="muted" style={{ fontSize: 13 }}>

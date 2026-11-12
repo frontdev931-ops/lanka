@@ -235,7 +235,7 @@ export default function Shell({ children }: { children: ReactNode }) {
       </aside>
       {profile && <ProfileDialog onClose={closeProfile} />}
 
-      <main className="content">
+      <main className={`content${askAi ? ' with-ask' : ''}`}>
         {me && me.role === 'OWNER' && me.termsAccepted === false && <AcceptTermsGate onAccepted={() => setMe({ ...me, termsAccepted: true })} />}
         {me && me.emailVerified === false && <VerifyBanner />}
         {me?.billing?.demo && <Alert tone="info">{t('demo.banner')} <Link href="/login?register=1">{t('demo.connect')}</Link></Alert>}

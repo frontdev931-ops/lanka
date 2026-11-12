@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
-import { fmtNumber } from '../../../lib/ui';
+import { fmtNumber, fmtMoney } from '../../../lib/ui';
 import { Alert, Badge, Card, Empty, Loading, PageHeader, statusTone } from '../../../components/ui';
 import { FunnelBars, FunnelRow } from '../../../components/FunnelBars';
 import { MessagingResults } from '../../../components/MessagingResults';
@@ -94,6 +94,7 @@ export default function AnalyticsPage() {
 
   const stage = (k: string) => t(`fn.st.${k}` as never);
   const fmt = (n: number) => fmtNumber(n);
+  const money = (n: number) => fmtMoney(n, t('billing.uah'));
 
   const c = data?.counts;
   const pathRows: FunnelRow[] = c ? PATH_STAGES.map((k) => ({ key: k, label: stage(k), value: c[k], hint: t(`fn.hint.${k}` as never) })) : [];
@@ -114,7 +115,7 @@ export default function AnalyticsPage() {
             <th className="num">{t('fn.st.started')}</th>
             <th className="num">{t('fn.st.paid')}</th>
             <th className="num">{t('fn.st.repeat')}</th>
-            <th className="num">{t('fn.paidSum')}</th>
+            <th className="num">{t('fn.paidSum')}, {t('billing.uah')}</th>
           </tr>
         </thead>
         <tbody>
@@ -195,17 +196,17 @@ export default function AnalyticsPage() {
             <div className="stats" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
               <section className="card stat">
                 <div className="stat-top">{t('fn.moneyPaid')}</div>
-                <div className="stat-value">{fmt(data.money.paid)}</div>
+                <div className="stat-value">{money(data.money.paid)}</div>
                 <div className="stat-foot">{t('fn.moneyPayers', { n: data.money.payers })}</div>
               </section>
               <section className="card stat">
                 <div className="stat-top">{t('fn.moneyOpenStarted')}</div>
-                <div className="stat-value">{fmt(data.money.openPlanStarted)}</div>
+                <div className="stat-value">{money(data.money.openPlanStarted)}</div>
                 <div className="stat-foot">{t('fn.moneyOpenStartedHint')}</div>
               </section>
               <section className="card stat">
                 <div className="stat-top">{t('fn.moneyOpenStuck')}</div>
-                <div className="stat-value">{fmt(data.money.openPlanNotStarted)}</div>
+                <div className="stat-value">{money(data.money.openPlanNotStarted)}</div>
                 <div className="stat-foot">{t('fn.moneyOpenStuckHint')}</div>
               </section>
             </div>

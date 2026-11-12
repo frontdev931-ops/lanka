@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLANS } from '../service/plans';
+import { Period } from '../reports/period';
 
 const DAY = 86_400_000;
 const ATTRIBUTION_DAYS = 14;
@@ -88,14 +89,18 @@ export class ResultsService {
   // data, with the same rule as the results above (a new appointment within 14 days after a message that is not a visit reminder). It is a coincidence
   // in time, not proof of a cause, and the screen says so. Money: the payments of the patients who booked after a message, made after that message
   // (Payment rows as they come from the clinic's system, in the clinic's currency). Only the owner and the manager see it (the controller).
-  async payback(clinicId: string, days: number, now = new Date()) {
-    const since = new Date(now.getTime() - days * DAY);
+  // period: a chosen range of days instead of the last `days` days. The messages, requests and AI replies are those of the period; what followed a
+  // message (a booking within 14 days, payments) is counted also after the period ends.
+  async payback(clinicId: string, days: number, now = new Date(), period?: Period | null) {
+    const since = period ? period.since : new Date(now.getTime() - days * DAY);
+    const end = period ? period.end : new Date(now.getTime() + 1);
+    const inPeriod = { gte: since, lt: end };
     const [clinic, msgs, requests, aiReplies] = await Promise.all([
       this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } }),
-      this.prisma.outboundMessage.findMany({ where: { clinicId, status: 'SENT', sentAt: { gte: since } }, select: { ruleKey: true, patientId: true, visitId: true, sentAt: true } }),
-      this.prisma.bookingRequest.count({ where: { clinicId, kind: 'BOOKING', status: 'DONE', createdAt: { gte: since } } }),
+      this.prisma.outboundMessage.findMany({ where: { clinicId, status: 'SENT', sentAt: inPeriod }, select: { ruleKey: true, patientId: true, visitId: true, sentAt: true } }),
+      this.prisma.bookingRequest.count({ where: { clinicId, kind: 'BOOKING', status: 'DONE', createdAt: inPeriod } }),
       // replies and drafts for patients; the manager's assistant (owner_report) is not a patient reply
-      this.prisma.aiUsage.count({ where: { clinicId, ok: true, billable: true, kind: { not: 'owner_report' }, createdAt: { gte: since } } }),
+      this.prisma.aiUsage.count({ where: { clinicId, ok: true, billable: true, kind: { not: 'owner_report' }, createdAt: inPeriod } }),
     ]);
     const patientIds = [...new Set(msgs.map((m) => m.patientId))];
     const reminderVisitIds = msgs.filter((m) => m.ruleKey === 'visit-reminder' && m.visitId).map((m) => m.visitId as string);
@@ -126,7 +131,9 @@ export class ResultsService {
       for (const p of payments) if (p.patientId && p.paidAt.getTime() >= paidFrom.get(p.patientId)!.getTime()) paid += Number(p.amount);
     }
     return {
-      days,
+      days: period ? period.days : days,
+      from: period?.from ?? null,
+      to: period?.to ?? null,
       attributionDays: ATTRIBUTION_DAYS,
       sent: msgs.length,
       booked: booked.size,
