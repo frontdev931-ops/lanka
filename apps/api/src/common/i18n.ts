@@ -527,6 +527,11 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Текущий пароль введён неверно',
     en: 'The current password is incorrect',
   },
+  bad_avatar: {
+    uk: 'Фото не підходить: потрібен JPEG, PNG або WebP до 60 КБ',
+    ru: 'Фото не подходит: нужен JPEG, PNG или WebP до 60 КБ',
+    en: 'This photo cannot be used: a JPEG, PNG or WebP of up to 60 KB is needed',
+  },
   same_password: {
     uk: 'Новий пароль збігається з поточним',
     ru: 'Новый пароль совпадает с текущим',

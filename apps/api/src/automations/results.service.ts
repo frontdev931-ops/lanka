@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PLANS } from '../service/plans';
 
 const DAY = 86_400_000;
 const ATTRIBUTION_DAYS = 14;
@@ -81,5 +82,62 @@ export class ResultsService {
       else requestStats.open += r._count;
     }
     return { months, attributionDays: ATTRIBUTION_DAYS, rows: [...rows.values()].sort((a, b) => b.sent - a.sent), requests: requestStats };
+  }
+
+  // The payback screen: what the clinic got in the last `days` days next to what the subscription costs. All of it is counted by code from our copy of the
+  // data, with the same rule as the results above (a new appointment within 14 days after a message that is not a visit reminder). It is a coincidence
+  // in time, not proof of a cause, and the screen says so. Money: the payments of the patients who booked after a message, made after that message
+  // (Payment rows as they come from the clinic's system, in the clinic's currency). Only the owner and the manager see it (the controller).
+  async payback(clinicId: string, days: number, now = new Date()) {
+    const since = new Date(now.getTime() - days * DAY);
+    const [clinic, msgs, requests, aiReplies] = await Promise.all([
+      this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } }),
+      this.prisma.outboundMessage.findMany({ where: { clinicId, status: 'SENT', sentAt: { gte: since } }, select: { ruleKey: true, patientId: true, visitId: true, sentAt: true } }),
+      this.prisma.bookingRequest.count({ where: { clinicId, kind: 'BOOKING', status: 'DONE', createdAt: { gte: since } } }),
+      // replies and drafts for patients; the manager's assistant (owner_report) is not a patient reply
+      this.prisma.aiUsage.count({ where: { clinicId, ok: true, billable: true, kind: { not: 'owner_report' }, createdAt: { gte: since } } }),
+    ]);
+    const patientIds = [...new Set(msgs.map((m) => m.patientId))];
+    const reminderVisitIds = msgs.filter((m) => m.ruleKey === 'visit-reminder' && m.visitId).map((m) => m.visitId as string);
+    const [visits, reminded] = await Promise.all([
+      this.prisma.visit.findMany({ where: { clinicId, patientId: { in: patientIds }, bookedAt: { gte: since } }, select: { id: true, patientId: true, bookedAt: true, status: true } }),
+      this.prisma.visit.count({ where: { clinicId, id: { in: reminderVisitIds }, status: 'VISITED' } }),
+    ]);
+    // every appointment is counted once, for the earliest message it follows; the patient's payments count from that message on
+    const booked = new Set<string>();
+    const attended = new Set<string>();
+    const paidFrom = new Map<string, Date>();
+    for (const m of msgs) {
+      if (m.ruleKey === 'visit-reminder') continue;
+      const at = m.sentAt!.getTime();
+      for (const v of visits) {
+        if (v.patientId !== m.patientId || !v.bookedAt || BAD.includes(v.status)) continue;
+        const t = v.bookedAt.getTime();
+        if (t < at || t > at + ATTRIBUTION_DAYS * DAY) continue;
+        booked.add(v.id);
+        if (v.status === 'VISITED') attended.add(v.id);
+        const cur = paidFrom.get(m.patientId);
+        if (!cur || cur.getTime() > at) paidFrom.set(m.patientId, m.sentAt!);
+      }
+    }
+    let paid = 0;
+    if (paidFrom.size) {
+      const payments = await this.prisma.payment.findMany({ where: { clinicId, patientId: { in: [...paidFrom.keys()] }, paidAt: { gte: since } }, select: { patientId: true, paidAt: true, amount: true } });
+      for (const p of payments) if (p.patientId && p.paidAt.getTime() >= paidFrom.get(p.patientId)!.getTime()) paid += Number(p.amount);
+    }
+    return {
+      days,
+      attributionDays: ATTRIBUTION_DAYS,
+      sent: msgs.length,
+      booked: booked.size,
+      attended: attended.size,
+      remindedVisits: reminded,
+      bookingRequestsDone: requests,
+      aiReplies,
+      paid: Math.round(paid * 100) / 100,
+      plan: clinic.plan,
+      // what one month of the plan costs (0 for individual terms: no comparison is shown then)
+      planPriceUah: PLANS[clinic.plan]?.priceUah ?? 0,
+    };
   }
 }

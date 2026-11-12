@@ -14,7 +14,8 @@ interface Settings {
 }
 
 // The chat widget for the clinic's own website: switch, allowed site addresses, greeting and the code to paste into the site
-export function WebChatCard() {
+// onlyIfEnabled: the website chat is not offered to clinics yet; a chat that is already on stays visible (to manage or turn it off)
+export function WebChatCard({ onlyIfEnabled = false }: { onlyIfEnabled?: boolean } = {}) {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();
   const [s, setS] = useState<Settings | null>(null);
@@ -53,7 +54,7 @@ export function WebChatCard() {
       setBusy(false);
     }
   }
-  if (!s) return null;
+  if (!s || (onlyIfEnabled && !s.enabled)) return null;
   const list = () => origins.split(/[\s,]+/).filter(Boolean);
 
   return (

@@ -78,7 +78,15 @@ async function clinic() {
 describe('ИИ-помощник: включение, лимит, расход', () => {
   it('по умолчанию выключен; без ключа на сервере включить нельзя; включает только владелец и управляющий', async () => {
     const c = await clinic();
-    expect((await http().get('/ai').set(auth(c.token)).expect(200)).body).toMatchObject({ available: true, enabled: false, monthlyLimit: 500, used: 0 });
+    expect((await http().get('/ai').set(auth(c.token)).expect(200)).body).toMatchObject({ available: true, enabled: false, monthlyLimit: 500, used: 0, agentMode: false, agentAuto: false });
+    // the agent's modes are shown read-only (the service owner sets them); the server's dialog list never appears in the answer
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiAgentAuto: true } });
+    expect((await http().get('/ai').set(auth(c.token)).expect(200)).body.agentAuto).toBe(false);
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiAgentMode: true } });
+    const withAgent = (await http().get('/ai').set(auth(c.token)).expect(200)).body;
+    expect(withAgent).toMatchObject({ agentMode: true, agentAuto: true });
+    expect(JSON.stringify(withAgent)).not.toContain(c.clinicId); // the list entries are clinicId|CHANNEL|chatId
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiAgentMode: false, aiAgentAuto: false } });
     fake.configured = false;
     await http().patch('/ai').set(auth(c.token)).send({ enabled: true }).expect(400);
     fake.configured = true;

@@ -1,19 +1,51 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { ChangeEvent, FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { useI18n } from '../lib/i18n';
-import { Alert, Card } from './ui';
+import { initials } from '../lib/ui';
+import { Alert, Card, Icon } from './ui';
 
 interface Profile {
   name: string;
   email: string;
   pendingEmail: string | null;
+  avatar: string | null;
+}
+
+// The photo is cut to a centred square and shrunk in the browser; the server takes at most 60 KB (its own check is the one that counts)
+const AVATAR_PX = 256;
+const AVATAR_MAX_CHARS = 80_000;
+async function squareJpeg(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('bad_image'));
+      i.src = url;
+    });
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = AVATAR_PX;
+    const ctx = canvas.getContext('2d');
+    if (!ctx || !side) throw new Error('bad_image');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, AVATAR_PX, AVATAR_PX);
+    ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, AVATAR_PX, AVATAR_PX);
+    for (const q of [0.85, 0.7, 0.55, 0.4]) {
+      const data = canvas.toDataURL('image/jpeg', q);
+      if (data.length <= AVATAR_MAX_CHARS) return data;
+    }
+    throw new Error('bad_image');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 // The person's own data: name, sign-in email and password. The email changes only after the link sent to the new address is
-// opened; the password change closes the sessions on other devices.
-export function ProfileCard() {
+// opened; the password change closes the sessions on other devices. `bare` renders it without its card, for the profile dialog of the side panel.
+export function ProfileCard({ bare }: { bare?: boolean }) {
   const { t } = useI18n();
   const [me, setMe] = useState<Profile | null>(null);
   const [name, setName] = useState('');
@@ -24,6 +56,7 @@ export function ProfileCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(
     () =>
@@ -59,6 +92,29 @@ export function ProfileCard() {
     setNext('');
   };
 
+  const pickPhoto = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    return run(async () => {
+      let image: string;
+      try {
+        image = await squareJpeg(file);
+      } catch {
+        throw new Error(t('prof.photoBad'));
+      }
+      await api('/auth/avatar', { method: 'PUT', body: JSON.stringify({ image }) });
+      await load();
+      window.dispatchEvent(new Event('stomat:me-changed'));
+    }, t('prof.photoSaved'));
+  };
+  const removePhoto = () =>
+    run(async () => {
+      await api('/auth/avatar', { method: 'DELETE' });
+      await load();
+      window.dispatchEvent(new Event('stomat:me-changed'));
+    }, t('prof.photoRemoved'));
+
   const saveName = (e: FormEvent) => {
     e.preventDefault();
     return run(async () => {
@@ -90,10 +146,22 @@ export function ProfileCard() {
 
   if (!me) return error ? <Alert tone="error">{error}</Alert> : null;
 
-  return (
-    <Card title={t('prof.title')}>
+  const wrap = (body: ReactNode) => (bare ? <>{body}</> : <Card title={t('prof.title')}>{body}</Card>);
+  return wrap(
+    <>
       {error && <Alert tone="error">{error}</Alert>}
       {info && <Alert tone="success">{info}</Alert>}
+
+      <div className="profile-photo">
+        {me.avatar ? <img className="avatar lg avatar-logo" src={me.avatar} alt={t('prof.photo')} /> : <span className="avatar lg" aria-hidden="true">{initials(me.name)}</span>}
+        <div className="toolbar">
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={pickPhoto} />
+          <button className="btn" type="button" disabled={busy} onClick={() => fileRef.current?.click()}>
+            <Icon name="upload" size={16} /> {me.avatar ? t('prof.photoChange') : t('prof.photoUpload')}
+          </button>
+          {me.avatar && <button className="btn" type="button" disabled={busy} onClick={removePhoto}>{t('prof.photoRemove')}</button>}
+        </div>
+      </div>
 
       <form onSubmit={saveName} style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <label className="field" style={{ margin: 0, flex: '1 1 240px' }}>
@@ -151,6 +219,6 @@ export function ProfileCard() {
           <p className="rule" style={{ flexBasis: '100%', margin: 0 }}>{t('prof.newPasswordHint')}</p>
         </form>
       )}
-    </Card>
+    </>,
   );
 }

@@ -31,16 +31,18 @@ export class TeamController {
     private usage: UsageService,
   ) {}
 
-  // Names and emails of colleagues are not for every role: the doctor and the analyst do not need them
+  // Names and emails of colleagues are not for every role: the doctor and the analyst do not need them. Whether each member has set up two-factor sign-in is
+  // given to the owner only (the one who requires it and resets it); the others get no such field
   @Get()
   @Roles(Role.OWNER, Role.MANAGER, Role.ADMIN)
   async list(@CurrentUser() u: AuthUser) {
     const rows = await this.prisma.membership.findMany({
       where: { clinicId: u.clinicId },
-      include: { user: { select: { id: true, name: true, email: true } } },
+      include: { user: { select: { id: true, name: true, email: true, totpEnabledAt: true } } },
       orderBy: { user: { name: 'asc' } },
     });
-    return rows.map((m) => ({ id: m.user.id, name: m.user.name, email: m.user.email, role: m.role }));
+    const owner = u.role === Role.OWNER;
+    return rows.map((m) => ({ id: m.user.id, name: m.user.name, email: m.user.email, role: m.role, ...(owner ? { twoFactor: !!m.user.totpEnabledAt } : {}) }));
   }
 
   @Get('invitations')

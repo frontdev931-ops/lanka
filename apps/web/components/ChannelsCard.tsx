@@ -19,6 +19,7 @@ interface All {
 }
 
 // Facebook Messenger, WhatsApp and Viber of the clinic. The accounts belong to the clinic; we only keep their access keys, encrypted.
+// WhatsApp and Viber are not offered to clinics yet: their cards appear only when one is already connected (to see and disconnect it), never as a setup prompt.
 export function ChannelsCard() {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();
@@ -83,6 +84,7 @@ export function ChannelsCard() {
         )}
       </Card>
 
+      {data.whatsapp.connected && (
       <Card title="WhatsApp">
         {data.whatsapp.connected ? (
           <>
@@ -101,7 +103,9 @@ export function ChannelsCard() {
           </>
         )}
       </Card>
+      )}
 
+      {data.viber.connected && (
       <Card title="Viber">
         {data.viber.connected ? (
           <>
@@ -112,6 +116,7 @@ export function ChannelsCard() {
           <p className="rule">{data.viber.serverReady ? t('ch.viberReady') : t('ch.viberSoon')}</p>
         )}
       </Card>
+      )}
     </>
   );
 }

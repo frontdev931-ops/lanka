@@ -1,9 +1,9 @@
-import { Body, Controller, Get, HttpCode, Patch, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Patch, Post, Put, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Equals, IsBoolean, IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { AuthGuard, AuthUser, CurrentUser, SESSION_COOKIE, SESSION_MAX_AGE_MS } from '../common/auth.guard';
 import { langFromHeader } from '../common/i18n';
-import { AuthService, MIN_PASSWORD } from './auth.service';
+import { AuthService, MAX_AVATAR_CHARS, MIN_PASSWORD } from './auth.service';
 import { TwoFactorService } from './two-factor.service';
 
 class RegisterDto {
@@ -33,6 +33,10 @@ class DisableDto extends CodeDto {
 
 class ProfileDto {
   @IsString() @MinLength(2) @MaxLength(120) name: string;
+}
+
+class AvatarDto {
+  @IsString() @MaxLength(MAX_AVATAR_CHARS) image: string;
 }
 
 class ChangePasswordDto {
@@ -129,6 +133,19 @@ export class AuthController {
   @UseGuards(AuthGuard)
   updateProfile(@CurrentUser() u: AuthUser, @Body() dto: ProfileDto) {
     return this.auth.updateProfile(u.userId, dto.name);
+  }
+
+  // The person's own photo: the browser sends it already cut to a small square
+  @Put('avatar')
+  @UseGuards(AuthGuard)
+  setAvatar(@CurrentUser() u: AuthUser, @Body() dto: AvatarDto) {
+    return this.auth.setAvatar(u.userId, dto.image);
+  }
+
+  @Delete('avatar')
+  @UseGuards(AuthGuard)
+  removeAvatar(@CurrentUser() u: AuthUser) {
+    return this.auth.setAvatar(u.userId, null);
   }
 
   @Post('change-password')

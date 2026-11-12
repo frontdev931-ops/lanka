@@ -92,7 +92,7 @@ export default function AssistantPage() {
       {!status.assistant ? (
         <Card>
           <Alert tone="warn">{status.available ? t('as.off') : t('ai.notConfigured')}</Alert>
-          <Link className="btn btn-primary" href="/automations">{t('as.goSettings')}</Link>
+          <Link className="btn btn-primary" href="/settings">{t('as.goSettings')}</Link>
         </Card>
       ) : (
         <>

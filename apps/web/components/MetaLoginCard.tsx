@@ -12,6 +12,8 @@ interface Props {
   account: string | null;
   tokenProblem: string | null;
   onChanged: () => void;
+  // inside the channels settings: one compact shared control above the Instagram and Messenger cards (the same Facebook login for both), not a channel of its own
+  compact?: boolean;
 }
 interface Pending {
   id: string;
@@ -20,7 +22,7 @@ interface Pending {
 
 // Connecting the clinic's Facebook page (Messenger) and the Instagram account attached to it with one Facebook login.
 // Facebook's own dialog lets the owner pick exactly which page and account to share.
-export function MetaLoginCard({ ready, connected, via, account, tokenProblem, onChanged }: Props) {
+export function MetaLoginCard({ ready, connected, via, account, tokenProblem, onChanged, compact }: Props) {
   const { t } = useI18n();
   const [info, setInfo] = useState('');
   const [error, setError] = useState('');
@@ -33,7 +35,10 @@ export function MetaLoginCard({ ready, connected, via, account, tokenProblem, on
     const code = q.get('meta');
     if (!code) return;
     const session = q.get('session');
-    window.history.replaceState(null, '', window.location.pathname);
+    // only the parameters of the return are removed (the settings tab stays in the address)
+    q.delete('meta');
+    q.delete('session');
+    window.history.replaceState(null, '', `${window.location.pathname}${q.toString() ? `?${q}` : ''}`);
     if (code === 'ok' || code === 'ok_instagram') {
       setInfo(code === 'ok' ? t('ml.done') : t('ml.doneIg'));
       onChanged();
@@ -62,8 +67,8 @@ export function MetaLoginCard({ ready, connected, via, account, tokenProblem, on
     }
   }
 
-  return (
-    <Card title={t('ml.title')} actions={connected && via === 'facebook' ? <Badge tone={tokenProblem ? 'amber' : 'green'}>{tokenProblem ? t('ml.problem') : t('au.igConnected')}</Badge> : undefined}>
+  const body = (
+    <>
       {error && <Alert tone="error">{error}</Alert>}
       {info && <Alert tone="success">{info}</Alert>}
       {tokenProblem && <Alert tone="warn">{tokenProblem === 'expiring' ? t('ml.expiring') : t('ml.invalid')}</Alert>}
@@ -88,6 +93,22 @@ export function MetaLoginCard({ ready, connected, via, account, tokenProblem, on
           <Alert tone="warn">{t('ml.err.off')}</Alert>
         ))}
       <p className="muted" style={{ fontSize: 13 }}>{t('ml.rules')}</p>
+    </>
+  );
+  const badge = connected && via === 'facebook' ? <Badge tone={tokenProblem ? 'amber' : 'green'}>{tokenProblem ? t('ml.problem') : t('au.igConnected')}</Badge> : null;
+  if (compact)
+    return (
+      <section className="rule-card" style={{ marginBottom: 16 }}>
+        <div className="rule-head">
+          <b>{t('ml.sharedTitle')}</b>
+          {badge}
+        </div>
+        {body}
+      </section>
+    );
+  return (
+    <Card title={t('ml.title')} actions={badge ?? undefined}>
+      {body}
     </Card>
   );
 }

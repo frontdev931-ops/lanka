@@ -39,7 +39,7 @@ export default function PatientsPage() {
 
   return (
     <>
-      <PageHeader title={t('pat.title')} subtitle={data ? t('pat.total', { n: data.total }) : undefined} />
+      <PageHeader title={t('pat.title')} subtitle={data ? t('pat.total', { n: data.total }) : undefined} actions={<Link className="btn" href="/imports"><Icon name="upload" size={16} /> {t('pat.import')}</Link>} />
       {error && <Alert tone="error">{error}</Alert>}
 
       <Card flush>

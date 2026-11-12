@@ -3,10 +3,15 @@ import { Provider } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { hashToken } from '../auth/tokens';
 import { decrypt } from '../common/crypto';
+import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { TelegramApi } from './telegram.api';
+import { TelegramApi, TelegramError } from './telegram.api';
 
 const CODE_TTL = 15 * 60_000;
+// What happened to a message to the staff chat. sent: Telegram confirmed it. none: no bot or no staff chat, nothing was sent. rejected: nothing was sent
+// (Telegram refused it with a 4xx answer, or the failure happened before the request). unknown: the request left but no usable answer came back
+// (a timeout, a network failure, a 5xx or unreadable answer), so Telegram may or may not have delivered it.
+export type StaffNotifyOutcome = 'sent' | 'none' | 'rejected' | 'unknown';
 type Cfg = { staffChat?: { id: string; title: string }; staffCode?: { hash: string; expiresAt: number } } & Record<string, unknown>;
 
 // The clinic's staff chat in Telegram: the bot writes to the staff there (new requests). The chat is linked with a command carrying a one-time code:
@@ -18,7 +23,11 @@ export class StaffNotifierService {
   constructor(
     private prisma: PrismaService,
     private telegram: TelegramApi,
-  ) {}
+    ai: AiService,
+  ) {
+    // the "AI allowance is used up" alert goes to the same staff chat (the AI module cannot import this one)
+    ai.setStaffNotifier((clinicId, text) => this.deliver(clinicId, text));
+  }
 
   private async integration(clinicId: string) {
     return this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.TELEGRAM } } });
@@ -56,15 +65,31 @@ export class StaffNotifierService {
 
   // A message to the staff. A sending failure must not break the main work, so errors go only to the log.
   async notify(clinicId: string, text: string): Promise<boolean> {
+    return (await this.deliver(clinicId, text)) === 'sent';
+  }
+
+  // The same sending with the exact outcome, for the one caller that must not repeat a message Telegram may already have delivered (the AI limit alert)
+  async deliver(clinicId: string, text: string): Promise<StaffNotifyOutcome> {
+    let token: string;
+    let chatId: string;
     try {
       const i = await this.integration(clinicId);
       const chat = (i?.config as Cfg | undefined)?.staffChat;
-      if (!i?.apiKeyEnc || !chat) return false;
-      await this.telegram.sendMessage(decrypt(i.apiKeyEnc), chat.id, text);
-      return true;
+      if (!i?.apiKeyEnc || !chat) return 'none';
+      token = decrypt(i.apiKeyEnc);
+      chatId = chat.id;
     } catch (e) {
       this.log.warn(`Служебный чат: ${(e as Error).message}`);
-      return false;
+      return 'rejected';
+    }
+    try {
+      await this.telegram.sendMessage(token, chatId, text);
+      return 'sent';
+    } catch (e) {
+      this.log.warn(`Служебный чат: ${(e as Error).message}`);
+      // only an explicit refusal of Telegram (4xx) proves that nothing was delivered
+      const code = e instanceof TelegramError ? e.code : undefined;
+      return code !== undefined && code >= 400 && code < 500 ? 'rejected' : 'unknown';
     }
   }
 }

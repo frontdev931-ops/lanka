@@ -34,6 +34,15 @@ export function assertPasswordOk(password: string, email?: string) {
 // A valid bcrypt hash of a random string (cost 12) used only to spend the same time when the email is unknown
 export const DUMMY_HASH = '$2a$12$hqaZLoFEtVJz.MpwPN4UJeLQNSnzw5hLdwjqHqFZ0tGo1aA6vfUmG';
 
+// The person's photo: at most 60 KB as a file, so the request stays under the default 100 KB body limit
+export const MAX_AVATAR_BYTES = 60_000;
+export const MAX_AVATAR_CHARS = 30 + Math.ceil(MAX_AVATAR_BYTES / 3) * 4;
+const imageKind = (b: Buffer): string | null =>
+  b.length > 12 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? 'jpeg'
+  : b.length > 12 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? 'png'
+  : b.length > 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP' ? 'webp'
+  : null;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -146,13 +155,14 @@ export class AuthService {
   async me(userId: string, clinicId: string) {
     const m = await this.prisma.membership.findUnique({
       where: { userId_clinicId: { userId, clinicId } },
-      include: { user: { select: { name: true, email: true, pendingEmail: true, emailVerifiedAt: true, totpEnabledAt: true } }, clinic: { select: { name: true, logo: true, termsVersion: true, suspendedAt: true, require2fa: true, billingStatus: true, paidUntil: true, isDemo: true, plan: true } } },
+      include: { user: { select: { name: true, email: true, pendingEmail: true, emailVerifiedAt: true, totpEnabledAt: true, avatar: true } }, clinic: { select: { name: true, logo: true, termsVersion: true, suspendedAt: true, require2fa: true, billingStatus: true, paidUntil: true, isDemo: true, plan: true } } },
     });
     if (!m) throw new UnauthorizedException();
     return {
       name: m.user.name,
       email: m.user.email,
       pendingEmail: m.user.pendingEmail,
+      avatar: m.user.avatar,
       emailVerified: !!m.user.emailVerifiedAt,
       twoFactorEnabled: !!m.user.totpEnabledAt,
       // The clinic owner requires two-factor and this user has not set it up yet: the app sends them to settings
@@ -229,6 +239,18 @@ export class AuthService {
   }
 
   // The person's own profile: the name shown in the team list and in the audit log
+  // The photo is kept only as a small raster image: the format is checked by the data URI prefix AND by the file's own first bytes (so a renamed SVG or HTML
+  // file is refused), and the size is limited (the browser shrinks it to a 256 px square before sending)
+  async setAvatar(userId: string, image: string | null) {
+    if (image !== null) {
+      const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(image);
+      const bytes = m ? Buffer.from(m[2], 'base64') : null;
+      if (!m || !bytes || bytes.length > MAX_AVATAR_BYTES || imageKind(bytes) !== m[1]) throw new BadRequestException('bad_avatar');
+    }
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { avatar: image }, select: { avatar: true } });
+    return { avatar: user.avatar };
+  }
+
   async updateProfile(userId: string, name: string) {
     const user = await this.prisma.user.update({ where: { id: userId }, data: { name: name.trim() }, select: { name: true } });
     return user;

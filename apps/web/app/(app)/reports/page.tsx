@@ -139,7 +139,9 @@ export default function ReportsPage() {
           // A link like /reports?report=unclosed-visits opens the needed report at once
           const wanted = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('report');
           const first = c.find((x) => x.id === wanted) ?? c[0];
-          setDays(first.defaultDays);
+          // ...and &days=30 opens it for the period chosen on the home page
+          const wantedDays = typeof window === 'undefined' ? 0 : Number(new URLSearchParams(window.location.search).get('days'));
+          setDays(first.id === wanted && Number.isInteger(wantedDays) && wantedDays > 0 && wantedDays <= 3650 ? wantedDays : first.defaultDays);
           setMaxDays(first.defaultMaxDays);
           return first.id;
         });

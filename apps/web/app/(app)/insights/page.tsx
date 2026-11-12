@@ -5,6 +5,8 @@ import { api } from '../../../lib/api';
 import { fmtDateTime } from '../../../lib/ui';
 import { useI18n } from '../../../lib/i18n';
 import { Alert, Badge, Card, Empty, Loading, PageHeader } from '../../../components/ui';
+import { DigestCard } from '../../../components/DigestCard';
+import { ProHint } from '../../../components/ProHint';
 import { useConfirm } from '../../../components/ConfirmDialog';
 
 interface Schedule {
@@ -95,6 +97,9 @@ export default function InsightsPage() {
       {error && <Alert tone="error">{error}</Alert>}
       {info && <Alert tone="success">{info}</Alert>}
 
+      {/* the manager's daily digest in Telegram: one more thing sent on a schedule (it was in the Telegram channel settings) */}
+      <DigestCard />
+
       <Card title={t('ins.reports')}>
         <p className="rule" style={{ marginTop: 0 }}>{t('ins.reportsHint')}</p>
         {data.schedules.length === 0 ? (
@@ -181,6 +186,7 @@ export default function InsightsPage() {
       </Card>
 
       <Card title={t('ins.alerts')}>
+        <ProHint feature="advanced_analytics" />
         <p className="rule" style={{ marginTop: 0 }}>{t('ins.alertsHint')}</p>
         {alerts.map((a) => {
           const e = edits[a.kind] ?? {};

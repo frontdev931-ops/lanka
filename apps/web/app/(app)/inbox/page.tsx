@@ -91,6 +91,12 @@ export default function InboxPage() {
   // the request whose confirmation message was not delivered (the visit exists): the existing safe retry
   const [noticeRetry, setNoticeRetry] = useState<string | null>(null);
   const [tab, setTab] = useState<'chats' | 'requests'>('chats');
+  // the channel filter of the list of dialogues ('' = all); offered only when the clinic has dialogues in more than one channel
+  const [chFilter, setChFilter] = useState('');
+  // the home page's "new requests" card opens the requests tab (/inbox?tab=requests)
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('tab') === 'requests') setTab('requests');
+  }, []);
   const [reqStatus, setReqStatus] = useState<'NEW' | 'DONE'>('NEW');
   const [reqs, setReqs] = useState<{ newCount: number; rows: Req[] } | null>(null);
   const [bookingOn, setBookingOn] = useState(false);
@@ -358,6 +364,7 @@ export default function InboxPage() {
   };
 
   if (!list) return error ? <Alert tone="error">{error}</Alert> : <Loading />;
+  const channels = [...new Set(list.map((c) => c.channel))];
   const name = (c: { patient: { fullName: string } | null; contactName: string | null }) => c.patient?.fullName ?? c.contactName ?? t('inbox.unknown');
 
   return (
@@ -462,13 +469,22 @@ export default function InboxPage() {
           {list.length === 0 ? (
             <Empty title={t('inbox.empty')}>{t('inbox.emptyHint')}</Empty>
           ) : (
+            <>
+            {channels.length > 1 && (
+              <div className="toolbar" style={{ padding: '12px 16px 0' }} role="group" aria-label={t('inbox.channelFilter')}>
+                <button className={chFilter === '' ? 'btn btn-sm btn-primary' : 'btn btn-sm'} aria-pressed={chFilter === ''} onClick={() => setChFilter('')}>{t('inbox.allChannels')}</button>
+                {channels.map((ch) => (
+                  <button key={ch} className={chFilter === ch ? 'btn btn-sm btn-primary' : 'btn btn-sm'} aria-pressed={chFilter === ch} onClick={() => setChFilter(ch)}>{CHANNEL_NAME[ch] ?? ch}</button>
+                ))}
+              </div>
+            )}
             <ul className="chat-list">
-              {list.map((c) => (
+              {list.filter((c) => !chFilter || c.channel === chFilter).map((c) => (
                 <li key={`${c.channel}:${c.chatId}`}>
                   <button className="chat-item" onClick={() => setOpen({ channel: c.channel, chatId: c.chatId })}>
                     <span className="chat-name">
                       <b>{name(c)}</b>
-                      {c.channel !== 'TELEGRAM' && <Badge tone="blue">{CHANNEL_NAME[c.channel] ?? c.channel}</Badge>}
+                      <Badge tone={c.channel === 'TELEGRAM' ? 'gray' : 'blue'}>{CHANNEL_NAME[c.channel] ?? c.channel}</Badge>
                       {!c.patient && <Badge tone="amber">{t('inbox.notLinked')}</Badge>}
                       {c.unread > 0 && <Badge tone="blue">{c.unread}</Badge>}
                     </span>
@@ -478,6 +494,7 @@ export default function InboxPage() {
                 </li>
               ))}
             </ul>
+            </>
           )}
         </Card>
       )}

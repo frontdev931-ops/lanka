@@ -34,6 +34,13 @@ export default {
   // A separate build folder lets a test build run without disturbing a running development server
   distDir: process.env.NEXT_DIST_DIR ?? '.next',
   poweredByHeader: false,
+  // The former "Integrations" and "Payment" pages now live in Settings: old links, bookmarks and the LiqPay return address (/billing) land there
+  async redirects() {
+    return [
+      { source: '/integrations', destination: '/settings', permanent: false },
+      { source: '/billing', destination: '/settings?tab=billing', permanent: false },
+    ];
+  },
   async rewrites() {
     return [{ source: '/backend/:path*', destination: `${API_URL}/:path*` }];
   },

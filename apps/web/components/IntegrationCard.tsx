@@ -1,11 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../../../lib/api';
-import { useT } from '../../../lib/i18n';
-import { fmtDateTime } from '../../../lib/ui';
-import { Alert, Badge, Card, Empty, Icon, PageHeader } from '../../../components/ui';
-import { SyncBar } from '../../../components/SyncBar';
+import { api } from '../lib/api';
+import { useT } from '../lib/i18n';
+import { fmtDateTime } from '../lib/ui';
+import { Alert, Badge, Card, Empty, Icon } from './ui';
+import { SyncBar } from './SyncBar';
 
 interface Run {
   id: string;
@@ -25,7 +25,8 @@ interface Status {
   lastRun: { status: string; error: string | null } | null;
 }
 
-export default function IntegrationsPage() {
+// Settings → General: the clinic's data source (the Cliniccards key, loading the data and the history of loads); it was the separate "Integrations" page
+export function IntegrationCard() {
   const t = useT();
   const [runs, setRuns] = useState<Run[]>([]);
   const [status, setStatus] = useState<Status | null>(null);
@@ -105,7 +106,6 @@ export default function IntegrationsPage() {
 
   return (
     <>
-      <PageHeader title={t('int.title')} subtitle={t('int.subtitle')} />
       {error && <Alert tone="error">{error}</Alert>}
       {status?.lastRun?.status === 'FAILED' && (
         <Alert tone="warn">{t('int.lastFailed', { error: status.lastRun.error ?? t('int.unknownError') })}</Alert>
@@ -124,6 +124,7 @@ export default function IntegrationsPage() {
           </>
         }
       >
+        <p className="rule" style={{ marginTop: 0 }}>{t('int.subtitle')}</p>
         <p className="rule">
           {!connected ? t('int.textDemo') : running ? t('int.runningHint') : !loaded ? t('int.notLoadedHint') : t('int.textConnected')}
         </p>
@@ -137,6 +138,7 @@ export default function IntegrationsPage() {
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               autoComplete="off"
+              aria-label={t('int.keyPlaceholder')}
             />
             <button className="btn btn-primary" onClick={connect} disabled={busy || apiKey.length < 8}>
               {connected ? t('int.replaceKey') : t('int.connect')}
@@ -155,9 +157,8 @@ export default function IntegrationsPage() {
           {t('int.keyHint')}
           {status?.lastSyncAt && t('int.lastOk', { date: fmtDateTime(status.lastSyncAt) })}
         </p>
-      </Card>
-
-      <Card flush title={t('int.history')}>
+        <details className="more-details" style={{ marginTop: 12 }}>
+          <summary>{t('int.history')}</summary>
         {runs.length ? (
           <div className="table-wrap">
             <table className="table">
@@ -183,6 +184,7 @@ export default function IntegrationsPage() {
         ) : (
           <Empty title={t('int.noRuns')}>{t('int.noRunsHint')}</Empty>
         )}
+        </details>
       </Card>
     </>
   );

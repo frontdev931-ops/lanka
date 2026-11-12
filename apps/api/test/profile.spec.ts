@@ -53,6 +53,26 @@ describe('профіль: ім\'я', () => {
   });
 });
 
+describe('профіль: фото', () => {
+  it('приймає лише невелике растрове зображення, справжній вміст якого збігається з форматом; фото видно в /auth/me і його можна прибрати', async () => {
+    const u = await register();
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 1)]).toString('base64');
+    const image = `data:image/png;base64,${png}`;
+    await http().put('/auth/avatar').set(auth(u.token)).send({ image }).expect(200);
+    expect((await http().get('/auth/me').set(auth(u.token)).expect(200)).body.avatar).toBe(image);
+
+    // SVG (may carry scripts), a renamed file whose bytes are not the declared format, an oversized file, no session
+    await http().put('/auth/avatar').set(auth(u.token)).send({ image: `data:image/svg+xml;base64,${Buffer.from('<svg/>').toString('base64')}` }).expect(400);
+    await http().put('/auth/avatar').set(auth(u.token)).send({ image: `data:image/jpeg;base64,${png}` }).expect(400);
+    await http().put('/auth/avatar').set(auth(u.token)).send({ image: `data:image/png;base64,${Buffer.concat([Buffer.from(png, 'base64'), Buffer.alloc(61_000)]).toString('base64')}` }).expect(400);
+    await http().put('/auth/avatar').send({ image }).expect(401);
+    expect((await http().get('/auth/me').set(auth(u.token)).expect(200)).body.avatar).toBe(image);
+
+    await http().delete('/auth/avatar').set(auth(u.token)).expect(200);
+    expect((await http().get('/auth/me').set(auth(u.token)).expect(200)).body.avatar).toBeNull();
+  });
+});
+
 describe('профіль: пароль', () => {
   it('потрібен поточний пароль; старий пароль перестає працювати; інша сесія закривається, поточна лишається', async () => {
     const u = await register();
@@ -144,5 +164,6 @@ describe('профіль: пошта для входу', () => {
     await http().patch('/auth/profile').set('Cookie', cookie).send({ name: 'Гість' }).expect(403);
     await http().post('/auth/change-password').set('Cookie', cookie).send({ currentPassword: 'x', newPassword: NEW_PASSWORD }).expect(403);
     await http().post('/auth/change-email').set('Cookie', cookie).send({ email: `d${rnd()}@example.com`, password: 'x' }).expect(403);
+    await http().delete('/auth/avatar').set('Cookie', cookie).expect(403);
   });
 });

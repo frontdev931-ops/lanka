@@ -13,7 +13,8 @@ interface Settings {
 }
 
 // Requests from the clinic's website forms and ad forms: the address a form posts to, the sites allowed to post from a browser
-export function LeadsCard() {
+// onlyIfEnabled: the lead forms are not offered to clinics yet; forms that are already on stay visible (to manage or turn them off)
+export function LeadsCard({ onlyIfEnabled = false }: { onlyIfEnabled?: boolean } = {}) {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();
   const [s, setS] = useState<Settings | null>(null);
@@ -49,7 +50,7 @@ export function LeadsCard() {
       setBusy(false);
     }
   }
-  if (!s) return null;
+  if (!s || (onlyIfEnabled && !s.enabled)) return null;
   const list = () => origins.split(/[\s,]+/).filter(Boolean);
 
   return (

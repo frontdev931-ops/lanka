@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { Alert, Badge, Card } from './ui';
+import { ProHint } from './ProHint';
 import { QrCode } from './QrCode';
 import { useConfirm } from './ConfirmDialog';
 
@@ -56,6 +57,7 @@ export function DigestCard() {
     <Card title={t('dg.title')} actions={<Badge tone={d.frequency === 'OFF' || !d.recipients.length ? 'gray' : 'green'}>{d.frequency === 'OFF' ? t('dg.off') : !d.recipients.length ? t('dg.noRecipients') : t('dg.on')}</Badge>}>
       {dialog}
       {error && <Alert tone="error">{error}</Alert>}
+      <ProHint feature="daily_digest" />
       {info && <Alert tone="success">{info}</Alert>}
       <p className="rule" style={{ marginTop: 0 }}>{t('dg.intro')}</p>
       {!d.botConnected && <Alert tone="warn">{t('dg.needBot')}</Alert>}

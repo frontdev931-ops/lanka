@@ -26,12 +26,10 @@ export default function QualityPage() {
   const { t } = useI18n();
   const [months, setMonths] = useState(3);
   const [data, setData] = useState<Summary | null>(null);
-  const [url, setUrl] = useState('');
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
-  const [busy, setBusy] = useState(false);
 
-  const load = useCallback(() => api<Summary>(`/reviews?months=${months}`).then((d) => { setData(d); setUrl(d.settings.reviewUrl ?? ''); }).catch((e) => setError((e as Error).message)), [months]);
+  const load = useCallback(() => api<Summary>(`/reviews?months=${months}`).then(setData).catch((e) => setError((e as Error).message)), [months]);
   useEffect(() => {
     load();
   }, [load]);
@@ -40,20 +38,6 @@ export default function QualityPage() {
     const id = setTimeout(() => setInfo(''), 5000);
     return () => clearTimeout(id);
   }, [info]);
-
-  const saveUrl = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      await api('/reviews/settings', { method: 'PATCH', body: JSON.stringify({ reviewUrl: url.trim() }) });
-      setInfo(t('common.saved'));
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   if (!data) return error ? <Alert tone="error">{error}</Alert> : <Loading />;
   const max = Math.max(1, ...data.distribution.map((d) => d.count));
@@ -76,7 +60,7 @@ export default function QualityPage() {
 
       {!data.settings.collecting && (
         <Alert tone="info">
-          {t('q.notCollecting')} <Link href="/automations">{t('q.goAutomations')}</Link>
+          {t('q.notCollecting')} <Link href="/automations?view=rules">{t('q.goAutomations')}</Link>
         </Alert>
       )}
 
@@ -103,13 +87,7 @@ export default function QualityPage() {
         </section>
       </div>
 
-      <Card title={t('q.reviewLink')}>
-        <p className="rule" style={{ marginTop: 0 }}>{t('q.reviewLinkHint')}</p>
-        <div className="toolbar">
-          <input className="input grow" type="url" inputMode="url" placeholder="https://g.page/r/…/review" value={url} onChange={(e) => setUrl(e.target.value)} maxLength={300} />
-          <button className="btn" disabled={busy || url.trim() === (data.settings.reviewUrl ?? '')} onClick={saveUrl}>{t('common.save')}</button>
-        </div>
-      </Card>
+      <p className="rule">{t('q.reviewLinkMoved')} <Link href="/automations?view=rules">{t('q.goAutomations')}</Link></p>
 
       {data.count === 0 ? (
         <Card>

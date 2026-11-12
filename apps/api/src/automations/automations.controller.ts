@@ -245,6 +245,14 @@ export class MessagesController {
     return this.results.results(u.clinicId, m);
   }
 
+  // The payback screen (what the messages and the AI brought next to the price of the plan); it carries money, so only the owner and the manager
+  @Get('payback')
+  @Roles(...MANAGERS)
+  payback(@CurrentUser() u: AuthUser, @Query('days') days?: string) {
+    const d = Math.min(365, Math.max(7, Number.parseInt(days ?? '30', 10) || 30));
+    return this.results.payback(u.clinicId, d);
+  }
+
   @Get()
   @Roles(...READERS)
   list(@CurrentUser() u: AuthUser, @Query('status') status?: string, @Query('page') page?: string) {

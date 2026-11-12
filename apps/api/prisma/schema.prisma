@@ -101,6 +101,13 @@ model Clinic {
   // The AI assistant: one key for the whole service (AI_API_KEY on the server), the clinic only turns it on and gets a monthly limit of replies
   aiEnabled           Boolean              @default(false)
   aiMonthlyLimit      Int                  @default(500)
+  // The staff alert "the AI allowance is used up" (one per exhaustion episode, see AiService.limitAlert). aiLimitAlertAt: the Telegram message of the current
+  // episode was really delivered. aiLimitAlertTryAt: the last claimed attempt (stops concurrent requests and paces the retries). Both are cleared when the budget is back.
+  aiLimitAlertAt      DateTime?
+  aiLimitAlertTryAt   DateTime?
+  // The Telegram request of the current episode ended without an answer (a timeout, a network failure): Telegram may or may not have taken the message.
+  // It is NOT counted as delivered, and it is not sent again in this episode (a repeat could be a duplicate); the in-app notice stays. Cleared with the two above.
+  aiLimitAlertUnknownAt DateTime?
   // Allow the AI to create an appointment itself. Always off by default; it cannot be turned on until the connector can write to the clinic's system
   aiAutoBooking       Boolean              @default(false)
   // Foundation of the AI administrator-agent (see .claude/docs/agent-administrator.md). Both are off by default and set only by the service owner.
@@ -527,6 +534,8 @@ model User {
   emailVerifiedAt    DateTime?
   // A new address waiting for confirmation by the link sent to it; the sign-in email changes only after the link is opened
   pendingEmail       String?
+  // The person's own photo (a JPEG, PNG or WebP data URI of at most 60 KB, checked by the server; never SVG)
+  avatar             String?
   // Sessions (tokens) issued before this moment are invalid: changes on a password reset
   sessionsValidAfter DateTime?
   // Two-factor sign-in (TOTP). The secret is stored encrypted; it is on when totpEnabledAt is set

@@ -11,7 +11,7 @@ export default function robots(): MetadataRoute.Robots {
         allow: '/',
         disallow: [
           '/backend/', '/dashboard', '/patients', '/reports', '/settings', '/tasks', '/inbox', '/analytics', '/assistant', '/automations',
-          '/billing', '/imports', '/inquiries', '/insights', '/integrations', '/knowledge', '/my-automations', '/platform', '/quality', '/waitlist',
+          '/billing', '/imports', '/inquiries', '/insights', '/integrations', '/knowledge', '/ai-admin', '/payback', '/my-automations', '/platform', '/quality', '/waitlist',
         ],
       },
     ],

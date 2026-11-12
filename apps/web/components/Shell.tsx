@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { api, isUnauthorized, logout } from '../lib/api';
@@ -12,30 +12,33 @@ import { Brand } from './Brand';
 import { VerifyBanner } from './VerifyBanner';
 import { InstallApp } from './InstallApp';
 import { AcceptTermsGate } from './Terms';
+import { ProfileDialog } from './ProfileDialog';
 
-type NavItem = { href: string; label: Key; icon: string };
+// also: the other pages of the same section (the item stays highlighted on them)
+type NavItem = { href: string; label: Key; icon: string; also?: string[] };
 
+// Eight sections by what the person came to do. Pages that used to be separate items are tabs of a section now (SECTIONS below); their addresses did not change.
 const NAV: (NavItem | { sep: true })[] = [
   { href: '/dashboard', label: 'nav.home', icon: 'home' },
-  { href: '/patients', label: 'nav.patients', icon: 'users' },
-  { href: '/reports', label: 'nav.reports', icon: 'chart' },
-  { href: '/tasks', label: 'nav.tasks', icon: 'check' },
-  { href: '/inquiries', label: 'nav.inquiries', icon: 'phone' },
-  { href: '/imports', label: 'nav.imports', icon: 'upload' },
-  { sep: true },
-  { href: '/assistant', label: 'nav.assistant', icon: 'sparkles' },
-  { href: '/knowledge', label: 'nav.knowledge', icon: 'check' },
-  { href: '/automations', label: 'nav.automations', icon: 'zap' },
-  { href: '/my-automations', label: 'nav.myAutomations', icon: 'sparkles' },
+  // the patient funnel is a product of its own: a first-level item, not a tab of the reports
+  { href: '/analytics', label: 'nav.funnel', icon: 'trend' },
   { href: '/inbox', label: 'nav.inbox', icon: 'message' },
-  { href: '/waitlist', label: 'nav.waitlist', icon: 'users' },
-  { href: '/quality', label: 'nav.quality', icon: 'star' },
-  { href: '/analytics', label: 'nav.analytics', icon: 'trend' },
-  { href: '/insights', label: 'nav.insights', icon: 'zap' },
+  { href: '/automations', label: 'nav.outgoing', icon: 'zap', also: ['/my-automations'] },
+  { href: '/patients', label: 'nav.patients', icon: 'users', also: ['/inquiries', '/waitlist', '/imports'] },
+  { href: '/tasks', label: 'nav.tasks', icon: 'check' },
+  { href: '/reports', label: 'nav.reportsAll', icon: 'chart', also: ['/quality', '/insights', '/payback'] },
+  { href: '/knowledge', label: 'nav.aiAdmin', icon: 'sparkles', also: ['/ai-admin'] },
   { sep: true },
-  { href: '/integrations', label: 'nav.integrations', icon: 'plug' },
-  { href: '/billing', label: 'nav.billing', icon: 'card' },
   { href: '/settings', label: 'nav.settings', icon: 'settings' },
+];
+
+// The tabs of a section, shown above the page on exactly these addresses (not on a patient's card or in the report builder). only: the roles that may open the tab.
+type SectionTab = { href: string; label: Key; only?: string[] };
+const LEAD = ['OWNER', 'MANAGER'];
+const SECTIONS: { label: Key; tabs: SectionTab[] }[] = [
+  { label: 'nav.patients', tabs: [{ href: '/patients', label: 'sec.cards' }, { href: '/inquiries', label: 'nav.inquiries' }, { href: '/waitlist', label: 'nav.waitlist' }] },
+  { label: 'nav.reportsAll', tabs: [{ href: '/reports', label: 'nav.reports' }, { href: '/quality', label: 'nav.quality' }, { href: '/payback', label: 'sec.payback', only: LEAD }, { href: '/insights', label: 'sec.scheduled', only: LEAD }] },
+  { label: 'nav.aiAdmin', tabs: [{ href: '/knowledge', label: 'nav.knowledge' }, { href: '/ai-admin', label: 'sec.mode', only: LEAD }, { href: '/ai-admin/booking', label: 'sec.booking', only: LEAD }] },
 ];
 
 // Only for the owner of the service (see PLATFORM_ADMIN_EMAILS)
@@ -56,6 +59,7 @@ interface Me {
   role: string;
   clinicName: string;
   clinicLogo?: string | null;
+  avatar?: string | null;
   emailVerified?: boolean;
   termsAccepted?: boolean;
   twoFactorRequired?: boolean;
@@ -100,6 +104,9 @@ export default function Shell({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [open, setOpen] = useState(false);
   const [newRequests, setNewRequests] = useState(0);
+  const [aiLimit, setAiLimit] = useState(false);
+  // most of the monthly AI allowance is used and nothing is bought: a notice in advance (closed for this browser session with the cross)
+  const [aiLow, setAiLow] = useState<{ used: number; limit: number } | null>(null);
   useStackedTables();
 
   // The session is stored in an httpOnly cookie: the only way to know whether the user is signed in is to ask the server
@@ -111,7 +118,7 @@ export default function Shell({ children }: { children: ReactNode }) {
       });
   }, [router]);
 
-  // The integrations page reports that the data load is finished: the clinic's logo may have changed
+  // The Cliniccards card in Settings reports that the data load is finished: the clinic's logo may have changed
   useEffect(() => {
     const refresh = () => {
       api<Me>('/auth/me').then(setMe).catch(() => {});
@@ -133,15 +140,37 @@ export default function Shell({ children }: { children: ReactNode }) {
     };
   }, [me]);
 
+  // The shared monthly AI allowance is used up: a notice for the owner and the manager on every page (the live state of the server, so it works without
+  // Telegram and disappears by itself after a top-up or in a new period). Asked again on every page change; shown only where an AI feature is on.
+  useEffect(() => {
+    if (!me || (me.role !== 'OWNER' && me.role !== 'MANAGER') || me.billing?.blocked || me.suspended) return;
+    api<{ available: boolean; enabled: boolean; assistant: boolean; limitReached?: boolean; used: number; monthlyLimit: number; purchased: number }>('/ai')
+      .then((a) => {
+        const on = a.available && (a.enabled || a.assistant);
+        setAiLimit(on && !!a.limitReached);
+        let closed = false;
+        try {
+          closed = window.sessionStorage.getItem('stomat_ai_low_closed') === '1';
+        } catch {
+          // no storage: the notice simply stays
+        }
+        setAiLow(on && !a.limitReached && !closed && a.purchased <= 0 && a.monthlyLimit > 0 && a.used >= a.monthlyLimit * 0.8 ? { used: a.used, limit: a.monthlyLimit } : null);
+      })
+      .catch(() => {});
+  }, [me, path]);
+
   // The owner's "require two-factor" rule sends users without it to settings.
   useEffect(() => {
     if (!me) return;
     if (me.twoFactorRequired && !path.startsWith('/settings')) router.replace('/settings');
-    // Real data opens after payment: until then the only page is the payment page
-    else if (me.billing?.blocked && !path.startsWith('/billing')) router.replace('/billing');
+    // Real data opens after payment: until then the only page is the payment tab of Settings (the settings page shows only that tab then)
+    else if (me.billing?.blocked && !path.startsWith('/settings')) router.replace('/settings?tab=billing');
   }, [me, path, router]);
 
+  const [profile, setProfile] = useState(false);
   useEffect(() => setOpen(false), [path]);
+
+  const closeProfile = useCallback(() => setProfile(false), []);
 
   async function signOut() {
     await logout();
@@ -149,7 +178,13 @@ export default function Shell({ children }: { children: ReactNode }) {
   }
 
   const isActive = (href: string) => path.startsWith(href);
+  const inSection = (n: NavItem) => [n.href, ...(n.also ?? [])].some(isActive);
   const moreActive = open || !TABS.some((x) => isActive(x.href));
+  const section = SECTIONS.find((s) => s.tabs.some((x) => x.href === path));
+  // "Ask AI" (the manager's assistant over the clinic's data) is a button pinned on every page instead of a sidebar item. Not for a doctor (the server
+  // refuses the role), not on its own page, and not in the inbox, where it would cover the reply field on a phone.
+  const askAi = !!me && me.role !== 'DOCTOR' && !me.suspended && !me.billing?.blocked && !path.startsWith('/assistant') && !path.startsWith('/inbox');
+  const sectionTabs = section?.tabs.filter((x) => !x.only || (me && x.only.includes(me.role))) ?? [];
 
   return (
     <div className="app">
@@ -162,15 +197,12 @@ export default function Shell({ children }: { children: ReactNode }) {
 
         <nav className="nav">
           {(me?.platformAdmin ? [...NAV, PLATFORM_ITEM] : NAV)
-            .filter((n) => 'sep' in n || n.href !== '/my-automations' || me?.role === 'OWNER' || me?.role === 'MANAGER')
-            .filter((n) => 'sep' in n || n.href !== '/insights' || me?.role === 'OWNER' || me?.role === 'MANAGER')
             .filter((n) => 'sep' in n || n.href !== '/knowledge' || me?.role === 'OWNER' || me?.role === 'MANAGER' || me?.role === 'ADMIN')
-            .filter((n) => 'sep' in n || n.href !== '/billing' || ((me?.role === 'OWNER' || me?.role === 'MANAGER') && !me?.billing?.demo))
             .map((n, i) =>
             'sep' in n ? (
               <div key={i} className="nav-sep" />
             ) : (
-              <Link key={n.href} href={n.href} className={`nav-item${isActive(n.href) ? ' active' : ''}`}>
+              <Link key={n.href} href={n.href} className={`nav-item${inSection(n) ? ' active' : ''}`}>
                 <Icon name={n.icon} />
                 {t(n.label)}
                 {n.href === '/inbox' && newRequests > 0 && <span className="nav-badge" aria-label={`${newRequests}`}>{newRequests}</span>}
@@ -182,8 +214,10 @@ export default function Shell({ children }: { children: ReactNode }) {
         <div className="user-box">
           <LanguageSwitcher />
           <InstallApp />
-          <div className="user-line">
-            {me?.clinicLogo ? (
+          <button type="button" className="user-line user-line-btn" onClick={() => setProfile(true)} aria-haspopup="dialog" title={t('prof.open')}>
+            {me?.avatar ? (
+              <img className="avatar avatar-logo" src={me.avatar} alt="" />
+            ) : me?.clinicLogo ? (
               <img className="avatar avatar-logo" src={me.clinicLogo} alt="" />
             ) : (
               <span className="avatar">{initials(me?.name)}</span>
@@ -193,28 +227,69 @@ export default function Shell({ children }: { children: ReactNode }) {
               <span>{me?.clinicName ?? ''}</span>
               <span>{me ? label('role', me.role) : ''}</span>
             </div>
-          </div>
+          </button>
           <button className="btn btn-sm" onClick={signOut}>
             <Icon name="logout" size={15} /> {t('common.logout')}
           </button>
         </div>
       </aside>
+      {profile && <ProfileDialog onClose={closeProfile} />}
 
       <main className="content">
         {me && me.role === 'OWNER' && me.termsAccepted === false && <AcceptTermsGate onAccepted={() => setMe({ ...me, termsAccepted: true })} />}
         {me && me.emailVerified === false && <VerifyBanner />}
         {me?.billing?.demo && <Alert tone="info">{t('demo.banner')} <Link href="/login?register=1">{t('demo.connect')}</Link></Alert>}
         {me?.twoFactorRequired && <Alert tone="warn">{t('twofa.requiredBanner')}</Alert>}
-        {me?.billing?.status === 'PAST_DUE' && !me.billing.blocked && <Alert tone="warn">{t('billing.pastDueBanner', { days: me.billing.graceDays })} <Link href="/billing">{t('billing.pay')}</Link></Alert>}
+        {me?.billing?.status === 'PAST_DUE' && !me.billing.blocked && <Alert tone="warn">{t('billing.pastDueBanner', { days: me.billing.graceDays })} <a href="/settings?tab=billing">{t('billing.pay')}</a></Alert>}
+        {/* the limit is managed in Payment; a demo clinic has no Payment tab, its limit field is in General */}
+        {aiLimit && !me?.suspended && <Alert tone="warn">{t('ailimit.banner')} <a href={me?.billing?.demo ? '/settings' : '/settings?tab=billing'}>{t(me?.billing?.demo ? 'ailimit.toGeneral' : 'ailimit.toBilling')}</a></Alert>}
+        {aiLow && !aiLimit && !me?.suspended && (
+          <Alert tone="info">
+            {t('ailimit.low', { used: aiLow.used, limit: aiLow.limit })}{' '}
+            <a href={me?.billing?.demo ? '/settings' : '/settings?tab=billing'}>{t(me?.billing?.demo ? 'ailimit.toGeneral' : 'ailimit.toBilling')}</a>{' '}
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => {
+                setAiLow(null);
+                try {
+                  window.sessionStorage.setItem('stomat_ai_low_closed', '1');
+                } catch {
+                  // closed only until the next page
+                }
+              }}
+            >
+              {t('ailimit.close')}
+            </button>
+          </Alert>
+        )}
         {me?.suspended ? (
           <div className="card" style={{ padding: 24, textAlign: 'center' }}>
             <h2 style={{ marginTop: 0 }}>{t('nav.suspendedTitle')}</h2>
             <p className="muted">{t('nav.suspendedText')}</p>
           </div>
         ) : (
-          children
+          <>
+            {section && sectionTabs.length > 1 && (
+              <nav className="line-tabs section-tabs" aria-label={t(section.label)}>
+                {sectionTabs.map((x) => (
+                  <Link key={x.href} href={x.href} className={`line-tab${x.href === path ? ' active' : ''}`} aria-current={x.href === path ? 'page' : undefined}>
+                    {t(x.label)}
+                  </Link>
+                ))}
+              </nav>
+            )}
+            {children}
+          </>
         )}
       </main>
+
+      {askAi && (
+        <Link href="/assistant" className="ask-ai" aria-label={t('sec.askAi')} title={t('sec.askAi')}>
+          <Icon name="sparkles" size={20} />
+          <span>{t('sec.askAi')}</span>
+        </Link>
+      )}
 
       <nav className="tabbar" aria-label={t('nav.menu')}>
         {TABS.map((x) => (

@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../../../lib/api';
-import { fmtDate } from '../../../lib/ui';
-import { useI18n } from '../../../lib/i18n';
-import { Alert, Badge, Card, Empty, Loading, PageHeader } from '../../../components/ui';
+import { api } from '../lib/api';
+import { fmtDate } from '../lib/ui';
+import { useI18n } from '../lib/i18n';
+import { Alert, Badge, Card, Empty, Loading } from './ui';
 
 interface Overview {
   configured: boolean;
@@ -27,9 +27,10 @@ interface Form {
 
 const FEATURES = ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest'] as const;
 
-// Payment page: the plan, the first payment (connection + first month), renewal, extra AI replies and the payment history.
+// Settings → "Payment" (the former /billing page): the plan, the first payment (connection + first month), renewal and the payment history.
+// One compact card for AI replies: how many are left this period and the button to buy a pack (POST /billing/ai-pack; only the owner pays, canBuy).
 // The card is entered on the LiqPay page; we only send the person there.
-export default function BillingPage() {
+export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
   const { t } = useI18n();
   const [o, setO] = useState<Overview | null>(null);
   const [error, setError] = useState('');
@@ -59,11 +60,9 @@ export default function BillingPage() {
   if (!o) return error ? <Alert tone="error">{error}</Alert> : <Loading />;
   const active = o.status === 'ACTIVE' || o.status === 'PAST_DUE';
   const money = (minor: number) => `${(minor / 100).toLocaleString()} ${t('billing.uah')}`;
-  const aiPct = o.ai.included ? Math.min(100, (o.ai.used / o.ai.included) * 100) : 100;
 
   return (
     <>
-      <PageHeader title={t('billing.title')} subtitle={t('billing.subtitle')} />
       {error && <Alert tone="error">{error}</Alert>}
       {!o.configured && <Alert tone="warn">{t('billing.notConfigured')}</Alert>}
       {o.status === 'AWAITING_PAYMENT' && <Alert tone="info">{t('billing.awaiting')}</Alert>}
@@ -102,22 +101,20 @@ export default function BillingPage() {
         <p className="muted" style={{ fontSize: 13 }}>{t('billing.secure')}</p>
       </Card>
 
+      {/* only the offer: how many replies are used is on the plan card above (one place for the meter) */}
       <Card title={t('billing.aiTitle')}>
-        <div className="plan-meter">
-          <div className="plan-meter-top">
-            <span>{t('billing.aiUsed', { used: o.ai.used, limit: o.ai.included })}</span>
-            <b>{t('billing.aiLeft', { n: o.ai.remaining })}</b>
+        {o.ai.purchased > 0 && <p className="rule" style={{ marginTop: 0 }}>{t('billing.aiBought', { n: o.ai.purchased.toLocaleString() })}</p>}
+        <p className="rule">{t('billing.packOffer', { n: o.pack.replies.toLocaleString(), sum: o.pack.priceUah.toLocaleString() })}</p>
+        {canBuy ? (
+          <div className="toolbar">
+            <button className="btn btn-primary" disabled={busy || !o.configured || !active || o.pack.bought >= o.pack.cap} onClick={() => go('/billing/ai-pack')}>
+              {t('billing.packBuy', { n: o.pack.replies.toLocaleString(), sum: o.pack.priceUah.toLocaleString() })}
+            </button>
+            {o.pack.bought >= o.pack.cap && <span className="muted">{t('billing.packCap', { n: o.pack.cap })}</span>}
           </div>
-          <span className="q-bar-track"><span className="q-bar" style={{ width: `${aiPct}%` }} /></span>
-        </div>
-        <p className="muted" style={{ fontSize: 13 }}>{t('billing.aiRules', { bought: o.ai.purchased })}</p>
-        <div className="toolbar">
-          <button className="btn" disabled={busy || !o.configured || !active || o.pack.bought >= o.pack.cap} onClick={() => go('/billing/ai-pack')}>
-            {t('billing.buyAi')}: {o.pack.replies} · {o.pack.priceUah} {t('billing.uah')}
-          </button>
-        </div>
-        {!active && <p className="muted" style={{ fontSize: 13 }}>{t('billing.buyAiLocked')}</p>}
-        {o.pack.bought >= o.pack.cap && <p className="muted" style={{ fontSize: 13 }}>{t('billing.packCap')}</p>}
+        ) : (
+          <p className="muted" style={{ fontSize: 13 }}>{t('billing.packOwner')}</p>
+        )}
       </Card>
 
       <Card flush title={t('billing.history')}>

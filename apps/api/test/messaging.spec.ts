@@ -701,6 +701,20 @@ describe('результат сообщений для воронки', () => {
     await http().get('/messages/results').set(auth(doctor)).expect(403);
     const other = await clinic();
     expect((await http().get('/messages/results').set(auth(other.token)).expect(200)).body.rows).toEqual([]);
+
+    // the payback screen: each appointment once, payments only after the message, reminders by the outcome of their visit
+    await prisma.payment.create({ data: { clinicId, patientId: a.id, externalId: `p${rnd()}`, paidAt: ago(10), amount: 1500 } });
+    await prisma.payment.create({ data: { clinicId, patientId: a.id, externalId: `p${rnd()}`, paidAt: ago(25), amount: 999 } }); // before the message
+    await prisma.payment.create({ data: { clinicId, patientId: b.id, externalId: `p${rnd()}`, paidAt: ago(5), amount: 700 } }); // did not book after a message
+    const pay = (await http().get('/messages/payback?days=30').set(auth(token)).expect(200)).body;
+    expect(pay).toMatchObject({ days: 30, attributionDays: 14, sent: 7, booked: 2, attended: 1, remindedVisits: 1, paid: 1500 });
+    // a shorter period leaves only the fresh message and its appointment, and no payment
+    expect((await http().get('/messages/payback?days=7').set(auth(token)).expect(200)).body).toMatchObject({ sent: 3, booked: 1, attended: 0, paid: 0 });
+    // money: only the owner and the manager; another clinic sees none of it
+    await http().get('/messages/payback').set(auth(doctor)).expect(403);
+    const admin = await member(token, 'ADMIN');
+    await http().get('/messages/payback').set(auth(admin)).expect(403);
+    expect((await http().get('/messages/payback').set(auth(other.token)).expect(200)).body).toMatchObject({ sent: 0, booked: 0, paid: 0, remindedVisits: 0 });
   });
 });
 

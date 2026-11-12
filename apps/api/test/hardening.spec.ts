@@ -86,7 +86,12 @@ describe('склад команди', () => {
     };
     await http().get('/team').set(auth(o.token)).expect(200);
     const [admin, doctor, analyst] = [await make('ADMIN'), await make('DOCTOR'), await make('ANALYST')];
-    await http().get('/team').set(auth(admin)).expect(200);
+    // whether a colleague has set up two-factor sign-in is shown to the owner only
+    const ownerView = (await http().get('/team').set(auth(o.token)).expect(200)).body as { twoFactor?: boolean }[];
+    expect(ownerView).toHaveLength(4);
+    expect(ownerView.every((m) => m.twoFactor === false)).toBe(true);
+    const adminView = (await http().get('/team').set(auth(admin)).expect(200)).body as object[];
+    expect(adminView.some((m) => 'twoFactor' in m)).toBe(false);
     await http().get('/team').set(auth(doctor)).expect(403);
     await http().get('/team').set(auth(analyst)).expect(403);
   });

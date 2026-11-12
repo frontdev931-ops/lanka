@@ -74,6 +74,13 @@ a:hover { text-decoration: underline; }
 
 .user-box { border-top: 1px solid var(--border); padding: 14px 8px 4px; display: flex; flex-direction: column; gap: 10px; }
 .user-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* The name in the side panel opens "My profile" */
+.user-line-btn { min-height: 44px; padding: 6px; margin: 0 -6px; width: calc(100% + 12px); border: none; border-radius: 10px; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.user-line-btn:hover { background: var(--primary-soft); }
+.user-line-btn:focus-visible { outline: 2px solid var(--primary-dark); outline-offset: 0; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.modal-head h2 { margin: 0; }
+.modal-close { min-width: 44px; min-height: 44px; justify-content: center; }
 .avatar {
   width: 36px; height: 36px; border-radius: 50%; flex: none;
   background: var(--primary-soft); color: var(--primary-dark);
@@ -147,6 +154,8 @@ table.heat td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .avatar-logo { object-fit: cover; background: #fff; border: 1px solid var(--border, #e5e7eb); }
 .avatar.lg { width: 56px; height: 56px; font-size: 20px; }
+.profile-photo { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.profile-photo .toolbar { margin: 0; }
 .user-meta { min-width: 0; }
 .user-meta b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-meta span { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -240,6 +249,21 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .tab:hover { color: var(--text); }
 .tab.active { background: var(--primary); border-color: var(--primary); color: #fff; }
 
+/* Section tabs (Settings, the team): one shared bottom line, the active tab underlined; scrolls sideways inside itself on a phone */
+.line-tabs { display: flex; flex-wrap: nowrap; overflow-x: auto; border-bottom: 1px solid var(--border); margin-bottom: 18px; scrollbar-width: none; }
+.line-tabs::-webkit-scrollbar { display: none; }
+.line-tab {
+  flex: none; min-height: 44px; padding: 10px 14px; margin-bottom: -1px; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+  background: none; color: var(--muted); font: inherit; font-size: 14px; font-weight: 500; white-space: nowrap; cursor: pointer;
+}
+/* a section's tabs are links to its pages */
+a.line-tab { display: inline-flex; align-items: center; text-decoration: none; }
+.dash-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 4px 0 12px; }
+.section-title { margin: 26px 0 6px; font-size: 17px; }
+.line-tab:hover { color: var(--text); border-bottom-color: var(--border); }
+.line-tab:focus-visible { outline: 2px solid var(--primary-dark); outline-offset: -2px; }
+.line-tab.active { color: var(--text); font-weight: 700; border-bottom-color: var(--primary); }
+
 /* ---------- tables ---------- */
 .table-wrap { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -312,6 +336,19 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 
 /* ---------- small components of the new screens ---------- */
 .tabbar { display: none; }
+/* "Ask AI": a pinned button on every page; a round icon above the bottom bar on a phone */
+.ask-ai {
+  position: fixed; right: 24px; bottom: 24px; z-index: 40; display: inline-flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 20px 0 16px;
+  border-radius: 999px; background: linear-gradient(135deg, var(--primary), #38b6a5); color: #fff; font-weight: 600; font-size: 14px;
+  box-shadow: 0 6px 18px rgba(14, 154, 160, 0.35); transition: transform .12s, box-shadow .12s;
+}
+.ask-ai:hover { text-decoration: none; transform: translateY(-1px); box-shadow: 0 8px 22px rgba(14, 154, 160, 0.45); }
+.ask-ai:focus-visible { outline: 2px solid var(--primary-dark); outline-offset: 3px; }
+@media (max-width: 880px) {
+  .ask-ai { right: 16px; bottom: calc(72px + env(safe-area-inset-bottom)); width: 52px; height: 52px; padding: 0; justify-content: center; }
+  .ask-ai span { display: none; }
+}
+@media print { .ask-ai { display: none; } }
 .steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
 .step { padding: 6px 12px; border-radius: 999px; background: var(--gray-soft); color: var(--muted); font-size: 13.5px; font-weight: 600; }
 .step.active { background: var(--primary); color: #fff; }
@@ -617,3 +654,16 @@ body { -webkit-tap-highlight-color: transparent; }
 @media (max-width: 640px) {
   .agent-draft-actions > .btn { flex: 1 1 100%; min-height: 44px; }
 }
+
+/* ---------- switch (settings that take effect at once) ---------- */
+.switch-row { display: flex; align-items: flex-start; gap: 12px; margin: 12px 0; min-height: 44px; }
+.switch { position: relative; flex: none; width: 46px; height: 28px; margin-top: 0; border-radius: 14px; border: 1px solid var(--border); background: #cdd5dc; cursor: pointer; padding: 0; transition: background 0.15s; }
+.switch .switch-knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); transition: left 0.15s; }
+.switch.on { background: var(--primary); border-color: var(--primary); }
+.switch.on .switch-knob { left: 21px; }
+.switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.switch:focus-visible { outline: 3px solid rgba(14, 154, 160, 0.3); outline-offset: 2px; }
+.switch-label { font-weight: 600; font-size: 14px; cursor: pointer; display: block; }
+.switch-hint { display: block; font-size: 13px; margin-top: 2px; }
+/* an expandable part of a settings card */
+.more-details > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--primary-dark); font-weight: 600; font-size: 14px; }

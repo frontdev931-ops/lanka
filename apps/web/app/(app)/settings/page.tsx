@@ -1,32 +1,28 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, download } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
-import { fmtDateTime, initials } from '../../../lib/ui';
+import { fmtDateTime } from '../../../lib/ui';
 import { SecurityCard } from '../../../components/SecurityCard';
-import { ProfileCard } from '../../../components/ProfileCard';
 import { PlanCard } from '../../../components/PlanCard';
-import { PushCard } from '../../../components/PushCard';
-import { useConfirm } from '../../../components/ConfirmDialog';
-import { Alert, Badge, Card, Empty, Icon, PageHeader } from '../../../components/ui';
+import { TeamAccess } from '../../../components/TeamAccess';
+import { IntegrationCard } from '../../../components/IntegrationCard';
+import { LineTabs } from '../../../components/LineTabs';
+import { Alert, Card, Empty, Icon, PageHeader } from '../../../components/ui';
 import { WorkHours } from '../../../components/WorkHours';
 import { ClinicContacts } from '../../../components/ClinicContacts';
-import { BookingSettings } from '../../../components/BookingSettings';
+import { ChannelSettings } from '../../../components/ChannelSettings';
+import { BillingSettings } from '../../../components/BillingSettings';
+import { SendingSettings } from '../../../components/SendingSettings';
+import { AiGeneralSettings, AiLimitCard } from '../../../components/AiGeneralSettings';
 
-interface Member {
-  id: string;
-  name: string;
-  email: string;
+interface Me {
   role: string;
-}
-
-interface Pending {
-  id: string;
   email: string;
-  role: string;
-  expiresAt: string;
+  twoFactorRequired?: boolean;
+  billing?: { demo: boolean; blocked: boolean };
 }
 
 interface AuditRow {
@@ -36,75 +32,54 @@ interface AuditRow {
   user: string | null;
 }
 
-const ASSIGNABLE = ['MANAGER', 'ADMIN', 'DOCTOR', 'ANALYST'];
+// The tabs of Settings: the general part (everybody); the team (those the server shows the staff list to: the owner, the manager and the administrator; only the
+// owner manages it); patient communication by task: channels (connections only), replies to patients (incoming conversations and booking from them),
+// automatic messages (on a schedule or after an event) — the owner and the manager, the server allows only them to change it; the payment (the owner and
+// the manager, not in the demo clinic) with the plan and its usage. The sending switch and the manager's assistant are in General. Replies to patients
+// and booking moved to "AI administrator" (/ai-admin), the rules of automatic messages to "Reminders and campaigns" → "Rules" (/automations?view=rules).
+// While the clinic is blocked until payment, the payment tab is the only one: the server closes the rest.
+const TABS = ['general', 'team', 'channels', 'billing'] as const;
+// old addresses: the tabs that moved out of Settings (replies to patients → "AI administrator", automatic messages → "Reminders and campaigns" → "Rules")
+const MOVED: Record<string, string> = { ai: '/ai-admin', replies: '/ai-admin', messages: '/automations?view=rules' };
+type Tab = (typeof TABS)[number];
 
 export default function SettingsPage() {
   const router = useRouter();
   const { t, label } = useI18n();
-  const { ask, dialog } = useConfirm();
-  const [info, setInfo] = useState('');
-  const [role, setRole] = useState<string | null>(null);
-  const [team, setTeam] = useState<Member[]>([]);
-  const [pending, setPending] = useState<Pending[]>([]);
+  const [me, setMe] = useState<Me | null>(null);
+  const role = me?.role ?? null;
   const [audit, setAudit] = useState<{ rows: AuditRow[]; total: number; page: number; pageSize: number } | null>(null);
   const [auditPage, setAuditPage] = useState(1);
-  const [link, setLink] = useState('');
-  const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
 
   const isOwner = role === 'OWNER';
   const canAudit = role === 'OWNER' || role === 'MANAGER';
+  const [tab, setTab] = useState<Tab>('general');
+  const canPay = canAudit && !me?.billing?.demo;
+  const tabs: Tab[] = me?.billing?.blocked ? ['billing'] : canAudit ? TABS.filter((k) => k !== 'billing' || canPay) : role === 'ADMIN' ? ['general', 'team'] : ['general'];
+  // the tab of the address (?tab=channels), also after the return from a Facebook or Instagram login; a tab the role cannot open falls back to the general one
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('tab');
+    if (q && MOVED[q]) router.replace(MOVED[q]);
+    else if (q && (TABS as readonly string[]).includes(q)) setTab(q as Tab);
+  }, [router]);
+  const shown: Tab = role && !tabs.includes(tab) ? tabs[0] : tab;
+  const pick = (next: Tab) => {
+    setTab(next);
+    const q = new URLSearchParams(window.location.search);
+    q.delete('ch'); // the inner tab of "Channels"
+    if (next === 'general') q.delete('tab');
+    else q.set('tab', next);
+    window.history.replaceState(null, '', `${window.location.pathname}${q.toString() ? `?${q}` : ''}`);
+  };
 
-  // The server shows the team only to the owner, the manager and the administrator: a doctor or an analyst does not ask
-  const loadTeam = useCallback(() => {
-    api<Member[]>('/team').then(setTeam).catch(() => undefined);
+  useEffect(() => {
+    api<Me>('/auth/me').then(setMe).catch(() => undefined);
   }, []);
-  const loadPending = useCallback(() => {
-    api<Pending[]>('/team/invitations').then(setPending).catch(() => undefined);
-  }, []);
-
   useEffect(() => {
-    loadTeam();
-    api<{ role: string }>('/auth/me').then((m) => setRole(m.role)).catch(() => undefined);
-  }, [loadTeam]);
-  useEffect(() => {
-    if (isOwner) loadPending();
-  }, [isOwner, loadPending]);
-  useEffect(() => {
-    if (!canAudit) return;
+    if (!canAudit || me?.billing?.blocked) return;
     api<typeof audit>(`/clinic/audit?page=${auditPage}`).then(setAudit).catch((e) => setError((e as Error).message));
-  }, [canAudit, auditPage]);
-
-  async function invite(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const f = Object.fromEntries(new FormData(form)) as Record<string, string>;
-    setError('');
-    setLink('');
-    setCopied(false);
-    try {
-      const r = await api<{ link: string }>('/team/invitations', { method: 'POST', body: JSON.stringify(f) });
-      setLink(r.link);
-      form.reset();
-      loadPending();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
-
-  async function revoke(id: string) {
-    await api(`/team/invitations/${id}`, { method: 'DELETE' }).catch((e) => setError((e as Error).message));
-    loadPending();
-  }
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopied(true);
-    } catch {
-      /* without access to the clipboard the link can be selected and copied by hand */
-    }
-  }
+  }, [canAudit, auditPage, me?.billing?.blocked]);
 
   async function removeClinic(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -122,125 +97,33 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader title={t('set.title')} subtitle={t('set.subtitle')} />
+      <PageHeader title={t('set.title')} subtitle={t(`set.sub.${shown}`)} />
+      {tabs.length > 1 && <LineTabs id="set" label={t('set.title')} tabs={tabs} active={shown} onPick={pick} render={(k) => t(`set.tab.${k}`)} />}
+      {shown !== 'general' && (
+        <div role="tabpanel" id={`set-panel-${shown}`} aria-labelledby={`set-tab-${shown}`}>
+          {shown === 'team' && <TeamAccess role={role} myEmail={me?.email ?? null} />}
+          {shown === 'channels' && <ChannelSettings />}
+          {shown === 'billing' && (
+            <>
+              <PlanCard />
+              <BillingSettings canBuy={isOwner} />
+            </>
+          )}
+        </div>
+      )}
+      {shown === 'general' && (
+      <div role={tabs.length > 1 ? 'tabpanel' : undefined} id="set-panel-general" aria-labelledby={tabs.length > 1 ? 'set-tab-general' : undefined}>
       {error && <Alert tone="error">{error}</Alert>}
 
-      {dialog}
-      {info && <Alert tone="success">{info}</Alert>}
-      <ProfileCard />
-      <SecurityCard />
-      <PushCard />
-      {canAudit && <PlanCard isOwner={isOwner} />}
-
-      <Card flush title={t('set.team')}>
-        <div className="table-wrap">
-          <table className="table">
-            <thead><tr><th>{t('set.colEmployee')}</th><th>{t('set.colEmail')}</th><th>{t('set.colRole')}</th>{isOwner && <th>{t('set.colActions')}</th>}</tr></thead>
-            <tbody>
-              {team.map((m) => (
-                <tr key={m.id}>
-                  <td>
-                    <span className="toolbar">
-                      <span className="avatar">{initials(m.name)}</span>
-                      <span className="cell-main">{m.name}</span>
-                    </span>
-                  </td>
-                  <td>{m.email}</td>
-                  <td>
-                    {isOwner && m.role !== 'OWNER' ? (
-                      <select
-                        className="select"
-                        value={m.role}
-                        aria-label={t('set.colRole')}
-                        onChange={(e) =>
-                          api(`/team/members/${m.id}`, { method: 'PATCH', body: JSON.stringify({ role: e.target.value }) })
-                            .then(() => { setInfo(t('common.saved')); loadTeam(); })
-                            .catch((err) => setError((err as Error).message))
-                        }
-                      >
-                        {ASSIGNABLE.map((r) => (
-                          <option key={r} value={r}>{label('role', r)}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <Badge tone={m.role === 'OWNER' ? 'teal' : 'gray'}>{label('role', m.role)}</Badge>
-                    )}
-                  </td>
-                  {isOwner && (
-                    <td>
-                      {m.role !== 'OWNER' && (
-                        <span className="toolbar">
-                          <button
-                            className="btn btn-sm"
-                            onClick={async () => (await ask(t('set.reset2faConfirm', { name: m.name }), { confirmLabel: t('set.reset2fa') })) && api(`/team/members/${m.id}/reset-2fa`, { method: 'POST' }).then(() => setInfo(t('set.reset2faDone'))).catch((err) => setError((err as Error).message))}
-                          >
-                            {t('set.reset2fa')}
-                          </button>
-                          <button
-                            className="btn btn-sm"
-                            onClick={async () => (await ask(t('set.removeConfirm', { name: m.name }), { danger: true, confirmLabel: t('set.remove') })) && api(`/team/members/${m.id}`, { method: 'DELETE' }).then(() => { setInfo(t('set.removed')); loadTeam(); }).catch((err) => setError((err as Error).message))}
-                          >
-                            {t('set.remove')}
-                          </button>
-                        </span>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      {isOwner && (
-        <>
-          <Card title={t('set.inviteTitle')}>
-            <p className="rule">{t('set.inviteHint')}</p>
-            <form onSubmit={invite} className="toolbar">
-              <input className="input" name="email" type="email" placeholder={t('login.email')} required />
-              <select className="select" name="role" defaultValue="ADMIN">
-                {ASSIGNABLE.map((r) => <option key={r} value={r}>{label('role', r)}</option>)}
-              </select>
-              <button type="submit" className="btn btn-primary"><Icon name="plus" size={16} /> {t('set.inviteBtn')}</button>
-            </form>
-            {link && (
-              <div style={{ marginTop: 14 }}>
-                <p className="rule" style={{ marginBottom: 6 }}>{t('set.inviteLink')}</p>
-                <div className="code-box">
-                  <span style={{ flex: 1 }}>{link}</span>
-                  <button type="button" className="btn btn-sm" onClick={copy}><Icon name="copy" size={14} /> {copied ? t('common.copied') : t('common.copy')}</button>
-                </div>
-              </div>
-            )}
-          </Card>
-
-          <Card flush title={t('set.pending')}>
-            {pending.length ? (
-              <div className="table-wrap">
-                <table className="table">
-                  <thead><tr><th>{t('set.colEmail')}</th><th>{t('set.colRole')}</th><th>{t('set.colExpires')}</th><th></th></tr></thead>
-                  <tbody>
-                    {pending.map((p) => (
-                      <tr key={p.id}>
-                        <td>{p.email}</td>
-                        <td>{label('role', p.role)}</td>
-                        <td>{fmtDateTime(p.expiresAt)}</td>
-                        <td><button className="btn btn-sm btn-danger" onClick={() => revoke(p.id)}>{t('set.revoke')}</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <Empty title={t('set.noPending')} />
-            )}
-          </Card>
-        </>
-      )}
+      {/* the owner's own two-factor setup is on their row in "Team"; here it stays for everyone else, and for an owner the clinic already requires it from */}
+      {me && (!isOwner || me.twoFactorRequired) && <SecurityCard />}
+      <IntegrationCard />
+      {canAudit && <SendingSettings />}
+      {/* the clinic's own AI allowance field: only for a clinic without the Payment tab (the demo) */}
+      {canAudit && !canPay && <AiLimitCard />}
+      {canAudit && <AiGeneralSettings />}
 
       {canAudit && <ClinicContacts />}
-      {canAudit && <BookingSettings />}
       {canAudit && <WorkHours />}
 
       {canAudit && (
@@ -295,6 +178,8 @@ export default function SettingsPage() {
             </form>
           </section>
         </>
+      )}
+      </div>
       )}
     </>
   );

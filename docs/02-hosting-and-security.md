@@ -40,7 +40,7 @@ If a secret is weak, `JWT_SECRET` equals `ENCRYPTION_KEY`, the address is `http:
 2. Deploy the API from `Dockerfile.api` (migrations run at start: `prisma migrate deploy`). Check: `GET /health` must return `{"ok":true}`.
 3. Deploy the site with `API_URL`.
 4. Register the owner and **confirm the email** from the message.
-5. "Інтеграції" → the Cliniccards key. Data loading starts by itself.
+5. "Налаштування" → "Загальні" → the Cliniccards card: the key. Data loading starts by itself.
 6. Set the clinic working hours in "Налаштування"; optionally turn on two-factor sign-in for the owner.
 7. "Автоматизації": connect the Telegram bot, the staff chat and the manager digest; leave the master switch "Off" until texts and queues are checked.
 8. Turn on an availability check (for example UptimeRobot) on `https://<api>/health`.
