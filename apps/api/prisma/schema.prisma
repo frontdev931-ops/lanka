@@ -567,6 +567,19 @@ model AuthToken {
   @@index([userId, type])
 }
 
+// A "call me back" request from the public site (the landing page form). It comes before a clinic exists, so it has no clinicId: it is the service's
+// own data, seen only by the service owner on /platform. Only what the visitor typed is kept (no address, no browser data).
+model ContactRequest {
+  id        String    @id @default(cuid())
+  phone     String
+  name      String?
+  lang      String    @default("uk")
+  createdAt DateTime  @default(now())
+  handledAt DateTime?
+
+  @@index([createdAt])
+}
+
 // Attempt counters (sign-in, registration, password reset). In the database, not in memory: they work across several servers.
 model RateLimit {
   key         String   @id

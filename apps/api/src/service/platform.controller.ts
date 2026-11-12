@@ -35,6 +35,10 @@ class ClinicPatchDto {
   @IsOptional() @IsString() agentAutoServiceId?: string | null;
 }
 
+class ContactHandledDto {
+  @IsBoolean() handled: boolean;
+}
+
 @Controller('platform')
 @UseGuards(AuthGuard)
 export class PlatformController {
@@ -83,6 +87,21 @@ export class PlatformController {
       aiTokensThisMonth: (a.get(c.id)?._sum.inputTokens ?? 0) + (a.get(c.id)?._sum.outputTokens ?? 0),
       lastSyncAt: sy.get(c.id)?.lastSyncAt ?? null,
     }));
+  }
+
+  // "Call me back" requests from the public site, newest first
+  @Get('contact-requests')
+  async contactRequests(@CurrentUser() u: AuthUser) {
+    await this.assertAdmin(u);
+    return this.prisma.contactRequest.findMany({ orderBy: { createdAt: 'desc' }, take: 100 });
+  }
+
+  @Patch('contact-requests/:id')
+  async markContact(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ContactHandledDto) {
+    await this.assertAdmin(u);
+    const r = await this.prisma.contactRequest.updateMany({ where: { id }, data: { handledAt: dto.handled ? new Date() : null } });
+    if (!r.count) throw new NotFoundException();
+    return { ok: true };
   }
 
   @Get('plans')

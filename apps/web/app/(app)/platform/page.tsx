@@ -41,11 +41,14 @@ export default function PlatformPage() {
   const [plans, setPlans] = useState<PlanInfo[]>([]);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  // "call me back" requests from the landing page
+  const [contacts, setContacts] = useState<{ id: string; phone: string; name: string | null; lang: string; createdAt: string; handledAt: string | null }[]>([]);
   const [custom, setCustom] = useState<{ id: string; users: string; messages: string; ai: string } | null>(null);
 
   const load = useCallback(() => {
     api<Row[]>('/platform/clinics').then(setRows).catch((e) => setError((e as Error).message));
     api<PlanInfo[]>('/platform/plans').then(setPlans).catch(() => undefined);
+    api<typeof contacts>('/platform/contact-requests').then(setContacts).catch(() => undefined);
   }, []);
   useEffect(() => {
     load();
@@ -83,6 +86,40 @@ export default function PlatformPage() {
         <section className="card stat"><div className="stat-top">{t('pf.messages')}</div><div className="stat-value">{fmtNumber(totals.messages)}</div></section>
         <section className="card stat"><div className="stat-top">{t('pf.tokens')}</div><div className="stat-value">{fmtNumber(totals.tokens)}</div></section>
       </div>
+
+      <Card flush title={t('pf.contacts')}>
+        <p className="rule" style={{ padding: '0 20px' }}>{t('pf.contactsHint')}</p>
+        {contacts.length === 0 ? (
+          <Empty title={t('pf.noContacts')} />
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr><th>{t('pf.colWhen')}</th><th>{t('pf.colPhone')}</th><th>{t('pf.colName')}</th><th>{t('pf.colLang')}</th><th>{t('pf.colState')}</th></tr>
+              </thead>
+              <tbody>
+                {contacts.map((c) => (
+                  <tr key={c.id}>
+                    <td>{fmtDateTime(c.createdAt)}</td>
+                    <td><a href={`tel:${c.phone}`}>{c.phone}</a></td>
+                    <td>{c.name ?? '—'}</td>
+                    <td>{c.lang.toUpperCase()}</td>
+                    <td>
+                      <Badge tone={c.handledAt ? 'gray' : 'amber'}>{c.handledAt ? t('pf.contactDone') : t('pf.contactNew')}</Badge>{' '}
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => api(`/platform/contact-requests/${c.id}`, { method: 'PATCH', body: JSON.stringify({ handled: !c.handledAt }) }).then(load).catch((e) => setError((e as Error).message))}
+                      >
+                        {c.handledAt ? t('pf.markNew') : t('pf.markDone')}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       <Card flush title={t('pf.clinics')}>
         {rows.length === 0 ? (

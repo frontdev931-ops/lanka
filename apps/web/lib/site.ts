@@ -12,18 +12,18 @@ const OG_LOCALE: Record<Locale, string> = { uk: 'uk_UA', ru: 'ru_UA', en: 'en_US
 // The same positioning as the visible page (lib/landing-text.ts): no measured results, only what the product does
 const TEXT: Record<Locale, { title: string; description: string; imageAlt: string }> = {
   uk: {
-    title: 'LANKA: більше повторних візитів і менше ручної роботи для клінік на Cliniccards',
-    description: 'Пацієнти без наступного запису, звернення з Telegram та Instagram з допомогою ШІ, звіти в Excel і PDF без ручних таблиць. Працює разом із Cliniccards. Демо без реєстрації.',
+    title: 'LANKA: ШІ-адміністратор, повідомлення пацієнтам і звіти для стоматологічної клініки',
+    description: 'Перетворюйте звернення на записи й звільняйте час команди: ШІ-адміністратор, нагадування, завдання й звіти в одному робочому просторі. Готове підключення Cliniccards. Демо без реєстрації.',
     imageAlt: 'LANKA: звіти, ШІ-адміністратор і автоматизація для клінік на Cliniccards',
   },
   ru: {
-    title: 'LANKA: больше повторных визитов и меньше ручной работы для клиник на Cliniccards',
-    description: 'Пациенты без следующей записи, обращения из Telegram и Instagram с помощью ИИ, отчёты в Excel и PDF без ручных таблиц. Работает вместе с Cliniccards. Демо без регистрации.',
+    title: 'LANKA: ИИ-администратор, сообщения пациентам и отчёты для стоматологической клиники',
+    description: 'Превращайте обращения в записи и освобождайте время команды: ИИ-администратор, напоминания, задачи и отчёты в одном рабочем пространстве. Готовое подключение Cliniccards. Демо без регистрации.',
     imageAlt: 'LANKA: отчёты, ИИ-администратор и автоматизация для клиник на Cliniccards',
   },
   en: {
-    title: 'LANKA: more repeat visits and less manual work for Cliniccards clinics',
-    description: 'Patients without a next appointment, Telegram and Instagram inquiries with AI help, Excel and PDF reports without manual spreadsheets. Works alongside Cliniccards. Demo, no sign-up.',
+    title: 'LANKA: AI front desk, patient messages and reports for dental clinics',
+    description: 'Turn inquiries into appointments and free up your team: an AI front desk, reminders, tasks and reports in one workspace. Ready Cliniccards integration. Demo, no sign-up.',
     imageAlt: 'LANKA: reports, AI front desk and automation for clinics on Cliniccards',
   },
 };
