@@ -9,21 +9,21 @@ export const LANDING_PATH: Record<Locale, string> = { uk: '/', ru: '/ru', en: '/
 
 const OG_LOCALE: Record<Locale, string> = { uk: 'uk_UA', ru: 'ru_UA', en: 'en_US' };
 
-// Only what really works is named here (see the integration flags in landing-text.ts)
+// The same positioning as the visible page (lib/landing-text.ts): no measured results, only what the product does
 const TEXT: Record<Locale, { title: string; description: string; imageAlt: string }> = {
   uk: {
-    title: 'LANKA: звіти та ШІ-адміністратор для клінік на Cliniccards',
-    description: 'Звіти з Excel і PDF, відповіді ШІ пацієнтам у месенджерах, нагадування та воронка пацієнта для клінік на Cliniccards. Демо без реєстрації.',
+    title: 'LANKA: більше повторних візитів і менше ручної роботи для клінік на Cliniccards',
+    description: 'Пацієнти без наступного запису, звернення з Telegram та Instagram з допомогою ШІ, звіти в Excel і PDF без ручних таблиць. Працює разом із Cliniccards. Демо без реєстрації.',
     imageAlt: 'LANKA: звіти, ШІ-адміністратор і автоматизація для клінік на Cliniccards',
   },
   ru: {
-    title: 'LANKA: отчёты и ИИ-администратор для клиник на Cliniccards',
-    description: 'Отчёты в Excel и PDF, ответы ИИ пациентам в мессенджерах, напоминания и воронка пациента для клиник на Cliniccards. Демо без регистрации.',
+    title: 'LANKA: больше повторных визитов и меньше ручной работы для клиник на Cliniccards',
+    description: 'Пациенты без следующей записи, обращения из Telegram и Instagram с помощью ИИ, отчёты в Excel и PDF без ручных таблиц. Работает вместе с Cliniccards. Демо без регистрации.',
     imageAlt: 'LANKA: отчёты, ИИ-администратор и автоматизация для клиник на Cliniccards',
   },
   en: {
-    title: 'LANKA: reports and AI front desk for Cliniccards clinics',
-    description: 'Excel and PDF reports, AI replies to patients in messengers, reminders and a patient funnel for clinics on Cliniccards. Demo, no sign-up.',
+    title: 'LANKA: more repeat visits and less manual work for Cliniccards clinics',
+    description: 'Patients without a next appointment, Telegram and Instagram inquiries with AI help, Excel and PDF reports without manual spreadsheets. Works alongside Cliniccards. Demo, no sign-up.',
     imageAlt: 'LANKA: reports, AI front desk and automation for clinics on Cliniccards',
   },
 };

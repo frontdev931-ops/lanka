@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
@@ -78,6 +78,23 @@ export default function InboxPage() {
   const [list, setList] = useState<Conv[] | null>(null);
   const [open, setOpen] = useState<{ channel: string; chatId: string } | null>(null);
   const [thread, setThread] = useState<Thread | null>(null);
+  // The open conversation starts at its newest message, like a messenger. A new message moves it down only when the person was already near the bottom
+  // (reading older messages is not interrupted).
+  const threadRef = useRef<HTMLDivElement>(null);
+  const shownChat = useRef<string | null>(null);
+  // was the person at the bottom before the last change (measured on scroll, before new messages make the list taller)
+  const atBottom = useRef(true);
+  const msgCount = thread?.messages.length ?? 0;
+  useLayoutEffect(() => {
+    const el = threadRef.current;
+    if (!el || !open || !thread) return;
+    const key = `${open.channel}:${open.chatId}`;
+    if (shownChat.current !== key || atBottom.current) el.scrollTop = el.scrollHeight;
+    shownChat.current = key;
+  }, [open, thread, msgCount]);
+  useEffect(() => {
+    if (!open) shownChat.current = null;
+  }, [open]);
   const [copied, setCopied] = useState(false);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -544,7 +561,7 @@ export default function InboxPage() {
                   <button className="btn btn-sm" disabled={busy} onClick={resumeBot}>{t('inbox.botResume')}</button>
                 </Alert>
               )}
-              <div className="chat-thread">
+              <div className="chat-thread" ref={threadRef} onScroll={(e) => { const el = e.currentTarget; atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120; }}>
                 {thread.messages.map((m) => (
                   <div key={m.id} className={`bubble ${m.direction === 'IN' ? 'in' : 'out'}`}>
                     <div>{m.text}</div>
