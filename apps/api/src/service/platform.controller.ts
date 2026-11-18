@@ -1,24 +1,10 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, Patch, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Patch, UseGuards } from '@nestjs/common';
 import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
 import { assertAutoServiceSet, configuredAutoServiceIds } from '../automations/agent-auto-gate';
 import { AuthGuard, AuthUser, CurrentUser } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLAN_KEYS, PLANS, effectiveLimits, monthStart } from './plans';
-
-// Platform owner = the people listed in PLATFORM_ADMIN_EMAILS (and with a verified email). Clinic roles do not give this access.
-export async function isPlatformAdmin(prisma: PrismaService, userId: string): Promise<boolean> {
-  const list = (process.env.PLATFORM_ADMIN_EMAILS ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-  if (!list.length) return false;
-  const u = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, emailVerifiedAt: true } });
-  const verifiedOrDev = !!u?.emailVerifiedAt || process.env.REQUIRE_EMAIL_VERIFICATION === 'false';
-  return !!u && verifiedOrDev && list.includes(u.email.toLowerCase());
-}
-
-export async function assertPlatformAdmin(prisma: PrismaService, userId: string) {
-  if (!(await isPlatformAdmin(prisma, userId))) throw new ForbiddenException();
-  const need = process.env.PLATFORM_REQUIRE_2FA === 'true' || (process.env.NODE_ENV === 'production' && process.env.PLATFORM_REQUIRE_2FA !== 'false');
-  if (need && !(await prisma.user.findUnique({ where: { id: userId }, select: { totpEnabledAt: true } }))?.totpEnabledAt) throw new ForbiddenException('platform_2fa_required');
-}
+import { PlatformAdminGuard } from './platform-access';
 
 class ClinicPatchDto {
   // NETWORK is given only by a network (a branch joins it): never set by hand
@@ -47,17 +33,12 @@ class ContactHandledDto {
 }
 
 @Controller('platform')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, PlatformAdminGuard)
 export class PlatformController {
   constructor(private prisma: PrismaService) {}
 
-  // The service owner sees every clinic: in production the account must have the second factor turned on
-  // (PLATFORM_REQUIRE_2FA=false opens this for a first launch; 'true' forces it in any environment)
-  private assertAdmin(u: AuthUser) { return assertPlatformAdmin(this.prisma, u.userId); }
-
   @Get('clinics')
-  async clinics(@CurrentUser() u: AuthUser) {
-    await this.assertAdmin(u);
+  async clinics() {
     const since = monthStart();
     const [clinics, members, patients, messages, ai, sync] = await Promise.all([
       this.prisma.clinic.findMany({ orderBy: { createdAt: 'desc' }, take: 500, select: { id: true, name: true, createdAt: true, plan: true, bookingWriteEnabled: true, billingStatus: true, paidUntil: true, aiPurchased: true, limitOverrides: true, suspendedAt: true, aiEnabled: true, aiMonthlyLimit: true, sendingEnabled: true, require2fa: true } }),
@@ -94,29 +75,25 @@ export class PlatformController {
 
   // "Call me back" requests from the public site, newest first
   @Get('contact-requests')
-  async contactRequests(@CurrentUser() u: AuthUser) {
-    await this.assertAdmin(u);
+  async contactRequests() {
     return this.prisma.contactRequest.findMany({ where: { clinicId: null }, orderBy: { createdAt: 'desc' }, take: 100, select: { id: true, phone: true, name: true, lang: true, createdAt: true, handledAt: true } });
   }
 
   @Patch('contact-requests/:id')
-  async markContact(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ContactHandledDto) {
-    await this.assertAdmin(u);
+  async markContact(@Param('id') id: string, @Body() dto: ContactHandledDto) {
     const r = await this.prisma.contactRequest.updateMany({ where: { id, clinicId: null }, data: { handledAt: dto.handled ? new Date() : null } });
     if (!r.count) throw new NotFoundException();
     return { ok: true };
   }
 
   @Get('plans')
-  async plans(@CurrentUser() u: AuthUser) {
-    await this.assertAdmin(u);
+  async plans() {
     // NETWORK is given only by a network, never chosen by hand
     return Object.entries(PLANS).filter(([key]) => key !== 'NETWORK').map(([key, p]) => ({ key, label: p.label, limits: p.limits }));
   }
 
   @Patch('clinics/:id')
   async patch(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ClinicPatchDto) {
-    await this.assertAdmin(u);
     const clinic = await this.prisma.clinic.findUnique({ where: { id }, select: { id: true } });
     if (!clinic) throw new NotFoundException();
     const limits: Record<string, number> | undefined = dto.limits

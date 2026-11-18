@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
 import { IsArray, IsIn, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
 import { AuthGuard, AuthUser, CurrentUser } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
-import { assertPlatformAdmin } from '../service/platform.controller';
+import { PlatformAdminGuard } from '../service/platform-access';
 import { LeadsService } from './leads.service';
 import { WebsiteRequestsService } from './website-requests.service';
 
@@ -16,13 +16,12 @@ class WebsiteProgressDto {
 }
 
 @Controller('platform')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, PlatformAdminGuard)
 export class PlatformWebsiteController {
   constructor(private prisma: PrismaService, private leads: LeadsService, private requests: WebsiteRequestsService) {}
 
   @Get('website-requests')
-  async openRequests(@CurrentUser() u: AuthUser) {
-    await assertPlatformAdmin(this.prisma, u.userId);
+  async openRequests() {
     return this.requests.openRequests();
   }
 
@@ -32,22 +31,19 @@ export class PlatformWebsiteController {
   }
 
   @Get('clinics/:id/website')
-  async website(@CurrentUser() u: AuthUser, @Param('id') id: string) {
-    await assertPlatformAdmin(this.prisma, u.userId);
+  async website(@Param('id') id: string) {
     return this.details(id);
   }
 
   @Patch('clinics/:id/website')
   async configure(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: WebsiteConfigDto) {
-    await assertPlatformAdmin(this.prisma, u.userId);
     await this.leads.update(id, dto);
     await this.prisma.auditLog.create({ data: { clinicId: id, userId: u.userId, action: 'leads.settings', details: { origins: dto.origins?.length, formConfigured: dto.formConfig === undefined ? undefined : dto.formConfig !== null } } });
     return this.details(id);
   }
 
   @Patch('clinics/:id/website/requests/:requestId')
-  async progress(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('requestId') requestId: string, @Body() dto: WebsiteProgressDto) {
-    await assertPlatformAdmin(this.prisma, u.userId);
+  async progress(@Param('id') id: string, @Param('requestId') requestId: string, @Body() dto: WebsiteProgressDto) {
     const { formConfig } = await this.leads.settings(id);
     await this.requests.record(id, requestId, dto.action, formConfig);
     return this.details(id);

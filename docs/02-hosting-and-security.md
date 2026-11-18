@@ -25,7 +25,9 @@ A document for whoever puts LANKA on a hosting provider. What is ready in the co
 | API | `AUTO_SYNC` | on by default: the daily Cliniccards load at 03:00 Kyiv time; `off` turns it off (the older `AUTO_SYNC_MINUTES=0` also turns it off) |
 | API | `AI_API_KEY` | the service-wide AI key (create it in the provider console, set a monthly spend limit there too); without it the AI features are unavailable |
 | API | `AI_MODEL` | optional, default `claude-haiku-5-5` |
-| API | `PLATFORM_ADMIN_EMAILS` | the service owner's email(s), comma-separated; they see all clinics and can change plans and suspend a clinic at `/platform` |
+| API | `PLATFORM_ADMIN_EMAILS` | platform-admin allowlist and notification recipients. Include `hello@lankaclinic.app` for the temporary policy |
+| API | `PLATFORM_OWNER_USER_ID` | database user ID of the existing verified `hello@lankaclinic.app` account. An unset or incorrect ID denies platform access |
+| API | `PLATFORM_REQUIRE_2FA` | set to `false` for the temporary exception. Use `true` to restore mandatory platform 2FA |
 | API | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | phone push notifications for staff; generate the pair once with `npm run vapid` in `apps/api`; keep the private key secret |
 | API | `META_APP_SECRET`, `META_VERIFY_TOKEN` | Instagram: the secret of the service's Meta app (checks the signature of every webhook) and a random string you also enter in the Meta webhook settings; without them Instagram messages are ignored |
 | API | `LIQPAY_PUBLIC_KEY`, `LIQPAY_PRIVATE_KEY` | LiqPay merchant keys; without them online payment is off. The payment callback address is `https://lankaclinic.app/backend/billing/liqpay/callback` |
@@ -38,6 +40,25 @@ A document for whoever puts LANKA on a hosting provider. What is ready in the co
 | Web | `API_URL` | the API address as seen by the web server |
 
 If a secret is weak, `JWT_SECRET` equals `ENCRYPTION_KEY`, the address is `http://`, or neither `RESEND_API_KEY` nor `SMTP_URL` is set, the API refuses to start and prints the reason. `CLINICCARDS_BASE_URL` is ignored in production. Leave `CLINICCARDS_WRITE_ENABLED` unset.
+
+## Temporary platform-owner access
+
+Only the pinned account can open `/platform` and call its API. Look up the ID of the existing account in the deployment database with a read-only query:
+
+```sql
+SELECT id FROM "User"
+WHERE email = 'hello@lankaclinic.app' AND "emailVerifiedAt" IS NOT NULL;
+```
+
+Set the following on the API deployment. The account must already be included in the platform-admin allowlist. Additional entries may remain for notifications.
+
+```dotenv
+PLATFORM_OWNER_USER_ID=<ID from the query>
+PLATFORM_ADMIN_EMAILS=hello@lankaclinic.app
+PLATFORM_REQUIRE_2FA=false
+```
+
+The exception applies to the platform's additional 2FA check. Configured factors still apply at sign-in, and clinic-wide 2FA still applies to API calls. To restore mandatory platform 2FA, set `PLATFORM_REQUIRE_2FA=true` and restart the API with the same account ID and allowlist. Production also requires platform 2FA when the flag is unset. The Web deployment uses its existing server-side `API_URL` to check access before rendering the page.
 
 ## First launch
 1. Create the PostgreSQL database and save `DATABASE_URL`.

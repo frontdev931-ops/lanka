@@ -12,7 +12,7 @@ Patient data is personal and medical. The decisions below are mandatory for the 
 
 ## Service access
 - A clinic can be suspended by the platform owner (`Clinic.suspendedAt`): every request except `/auth/*` returns 403, the scheduler, auto-replies, the digest and the planner skip it, bot chats are not processed. Data is kept.
-- The platform-owner endpoints (`/platform/*`) work only for verified emails listed in `PLATFORM_ADMIN_EMAILS`; clinic roles never give this access. Every change is written to the clinic's own audit log (`platform.clinic_changed`).
+- The platform page and API require the authenticated `PLATFORM_OWNER_USER_ID` to match the existing verified `hello@lankaclinic.app` account in `PLATFORM_ADMIN_EMAILS`. Use `PLATFORM_REQUIRE_2FA=false` for the platform-only exception. Configured sign-in factors and clinic 2FA requirements still apply. See the hosting guide for restoration. Clinic mutations are written to the clinic's own audit log (`platform.clinic_changed`).
 - The owner can require two-factor sign-in from all staff (`Clinic.require2fa`, only after turning it on for themselves). Until a member sets it up, the guard lets them reach only `/auth/*` (including the two-factor endpoints).
 - Plan limits: staff (members plus open invitations), messages per month (messages over the limit wait, they are not lost) and AI replies per month.
 - Staff management is owner-only: change a role, remove a member (open tasks lose their assignee), reset a member's second factor (closes their sessions). The owner and oneself cannot be changed.

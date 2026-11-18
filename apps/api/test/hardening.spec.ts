@@ -6,6 +6,7 @@ import { AppModule } from '../src/app.module';
 import { DUMMY_HASH } from '../src/auth/auth.service';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { pinPlatformFixture } from './platform-fixture';
 
 jest.setTimeout(60_000);
 
@@ -100,20 +101,21 @@ describe('склад команди', () => {
 describe('власник сервісу бачить усі клініки: потрібен другий фактор', () => {
   it('у продакшені (або з PLATFORM_REQUIRE_2FA=true) без двофакторного входу огляд закритий, з ним відкритий', async () => {
     const a = await register(ADMIN);
-    await http().get('/platform/clinics').set(auth(a.token)).expect(200); // not required in development
-    process.env.PLATFORM_REQUIRE_2FA = 'true';
+    const restore = await pinPlatformFixture(prisma, ADMIN);
     try {
+      await http().get('/platform/clinics').set(auth(a.token)).expect(200);
+      process.env.PLATFORM_REQUIRE_2FA = 'true';
       const r = await http().get('/platform/clinics').set(auth(a.token)).expect(403);
       expect(JSON.stringify(r.body)).toContain('двофакторний');
       await http().patch('/platform/clinics/x').set(auth(a.token)).send({ suspended: true }).expect(403);
-      await prisma.user.update({ where: { email: ADMIN }, data: { totpEnabledAt: new Date() } });
+      await prisma.user.update({ where: { id: process.env.PLATFORM_OWNER_USER_ID }, data: { totpEnabledAt: new Date() } });
       await http().get('/platform/clinics').set(auth(a.token)).expect(200);
       // an ordinary clinic owner never gets in
       const other = await register();
       await http().get('/platform/clinics').set(auth(other.token)).expect(403);
     } finally {
-      delete process.env.PLATFORM_REQUIRE_2FA;
-      await prisma.user.update({ where: { email: ADMIN }, data: { totpEnabledAt: null } });
+      await prisma.user.update({ where: { id: process.env.PLATFORM_OWNER_USER_ID }, data: { totpEnabledAt: null } });
+      await restore();
     }
   });
 });

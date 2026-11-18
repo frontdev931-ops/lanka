@@ -10,6 +10,7 @@ import { FacebookApi, MetaApiError } from '../src/automations/meta-graph.api';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { parkOtherDueEvents } from './park-events';
+import { pinPlatformFixture } from './platform-fixture';
 
 jest.setTimeout(60_000);
 
@@ -147,18 +148,14 @@ describe('підключення сайту командою LANKA', () => {
   const configPath = (clinicId: string) => `/platform/clinics/${clinicId}/website`;
   const configure = (token: string, clinicId: string, body: object) => http().patch(configPath(clinicId)).set(auth(token)).send(body);
   const platformEmail = `la-platform-${rnd()}@example.com`;
-  let oldAdmins: string | undefined;
+  let restorePlatform: (() => Promise<void>) | undefined;
   let platform: { token: string; clinicId: string };
 
   beforeAll(async () => {
-    oldAdmins = process.env.PLATFORM_ADMIN_EMAILS;
-    process.env.PLATFORM_ADMIN_EMAILS = platformEmail;
     platform = await clinic(platformEmail);
+    restorePlatform = await pinPlatformFixture(prisma, platformEmail);
   });
-  afterAll(() => {
-    if (oldAdmins === undefined) delete process.env.PLATFORM_ADMIN_EMAILS;
-    else process.env.PLATFORM_ADMIN_EMAILS = oldAdmins;
-  });
+  afterAll(async () => { await restorePlatform?.(); });
 
   it('зберігає один відкритий запит при одночасних кліках і збої листа та показує його власнику платформи', async () => {
     const legacyOrigin = 'https://www.112dental.com.ua';

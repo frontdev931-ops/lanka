@@ -9,6 +9,7 @@ import { sign } from '../src/billing/liqpay';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { NetworkService } from '../src/network/network.service';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { pinPlatformFixture } from './platform-fixture';
 
 jest.setTimeout(120_000);
 
@@ -21,6 +22,7 @@ const fake = { configured: true, seq: [] as string[], prompts: [] as string[], c
 } };
 let app: INestApplication;
 let prisma: PrismaService;
+let restorePlatform: (() => Promise<void>) | undefined;
 let mail: MailService;
 const rnd = () => Math.random().toString(36).slice(2, 9);
 const http = () => request(app.getHttpServer());
@@ -40,6 +42,7 @@ beforeAll(async () => {
   mail = app.get(MailService);
 });
 afterAll(async () => {
+  await restorePlatform?.();
   delete process.env.LIQPAY_PUBLIC_KEY;
   delete process.env.LIQPAY_PRIVATE_KEY;
   delete process.env.PLATFORM_ADMIN_EMAILS;
@@ -70,8 +73,13 @@ const pay = (orderId: string, amountMinor: number, status = 'success') => {
 const order = (body: { data: string }) => JSON.parse(Buffer.from(body.data, 'base64').toString()) as { order_id: string; amount: number };
 
 // The service owner, a network owner with two clinics joined into a network
+let platformUser: Awaited<ReturnType<typeof register>> | undefined;
 async function setup() {
-  const admin = (await prisma.user.findUnique({ where: { email: ADMIN } })) ? { token: await login(ADMIN) } : await register(ADMIN);
+  if (!platformUser) {
+    platformUser = await register(ADMIN);
+    restorePlatform = await pinPlatformFixture(prisma, ADMIN);
+  }
+  const admin = platformUser;
   const owner = await register();
   const net = (await http().post('/platform/networks').set(auth(admin.token)).send({ name: `Мережа ${rnd()}`, ownerEmail: owner.email }).expect(201)).body as { id: string };
   // a second clinic of the same owner: created as a new branch of the network

@@ -7,6 +7,7 @@ import { RequestsService } from '../src/automations/requests.service';
 import { hotp, stepOf } from '../src/auth/totp';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { pinPlatformFixture } from './platform-fixture';
 
 jest.setTimeout(60_000);
 
@@ -23,6 +24,7 @@ const pushFake = {
 
 let app: INestApplication;
 let prisma: PrismaService;
+let restorePlatform: (() => Promise<void>) | undefined;
 const rnd = () => Math.random().toString(36).slice(2, 9);
 const http = () => request(app.getHttpServer());
 const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
@@ -38,6 +40,7 @@ beforeAll(async () => {
   prisma = app.get(PrismaService);
 });
 afterAll(async () => {
+  await restorePlatform?.();
   delete process.env.PLATFORM_ADMIN_EMAILS;
   await app.close();
 });
@@ -79,9 +82,10 @@ describe('тарифы, лимиты и использование', () => {
 });
 
 describe('обзор владельца сервиса', () => {
-  it('доступ только по списку PLATFORM_ADMIN_EMAILS; тариф и лимиты меняются; приостановка закрывает клинику, но не стирает данные', async () => {
+  it('доступ лише для закріпленого власника платформи; тариф и лимиты меняются; приостановка закрывает клинику, но не стирает данные', async () => {
     const owner = await clinic();
     const platform = await clinic(ADMIN_EMAIL);
+    restorePlatform = await pinPlatformFixture(prisma, ADMIN_EMAIL);
     await http().get('/platform/clinics').set(auth(owner.token)).expect(403);
     await http().patch(`/platform/clinics/${owner.clinicId}`).set(auth(owner.token)).send({ plan: 'PRO' }).expect(403);
     expect((await http().get('/auth/me').set(auth(owner.token))).body.platformAdmin).toBe(false);

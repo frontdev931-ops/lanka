@@ -6,6 +6,7 @@ import { AppModule } from '../src/app.module';
 import { MailService } from '../src/auth/mail.service';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { pinPlatformFixture } from './platform-fixture';
 
 jest.setTimeout(60_000);
 
@@ -13,6 +14,7 @@ jest.setTimeout(60_000);
 // address, and the list on /platform for the service owner only. Mail goes to the in-memory outbox (no provider in tests).
 let app: INestApplication;
 let prisma: PrismaService;
+let restorePlatform: (() => Promise<void>) | undefined;
 let mail: MailService;
 const rnd = () => Math.random().toString(36).slice(2, 9);
 const http = () => request(app.getHttpServer());
@@ -31,6 +33,7 @@ beforeAll(async () => {
   mail = app.get(MailService);
 });
 afterAll(async () => {
+  await restorePlatform?.();
   delete process.env.PLATFORM_ADMIN_EMAILS;
   await app.close();
 });
@@ -48,6 +51,7 @@ describe('заявка «зв’яжіться зі мною» з лендинг
     expect(sent).toHaveLength(1);
 
     const owner = await register(ADMIN);
+    restorePlatform = await pinPlatformFixture(prisma, ADMIN);
     const list = (await http().get('/platform/contact-requests').set(auth(owner)).expect(200)).body;
     expect(list.some((r: { id: string }) => r.id === row.id)).toBe(true);
     await http().patch(`/platform/contact-requests/${row.id}`).set(auth(owner)).send({ handled: true }).expect(200);

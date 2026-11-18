@@ -12,7 +12,7 @@ import { RateLimitService } from './rate-limit.service';
 import { hashToken, newToken } from './tokens';
 import { TERMS_VERSION } from '../common/terms';
 import { TwoFactorService } from './two-factor.service';
-import { isPlatformAdmin } from '../service/platform.controller';
+import { isPlatformAdmin } from '../service/platform-access';
 import { accessBlocked, billingEnforced, GRACE_DAYS } from '../service/plans';
 
 const MIN = 60_000;

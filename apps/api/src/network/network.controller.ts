@@ -10,7 +10,7 @@ import { TERMS_VERSION } from '../common/terms';
 import { PrismaService } from '../prisma/prisma.service';
 import { toPdf, toXlsx } from '../reports/report-export';
 import { ReportsService } from '../reports/reports.service';
-import { isPlatformAdmin } from '../service/platform.controller';
+import { PlatformAdminGuard } from '../service/platform-access';
 import { BRANCH_SETUP_MIN_UAH } from '../service/plans';
 import { NetworkService } from './network.service';
 
@@ -230,19 +230,12 @@ class QuoteDto {
 // The service owner (PLATFORM_ADMIN_EMAILS) creates a network for an agreed contract and quotes further branches' onboarding. This gives the service
 // owner no access to a network's data and gives network members nothing of the platform.
 @Controller('platform/networks')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, PlatformAdminGuard)
 export class NetworkPlatformController {
   constructor(private prisma: PrismaService) {}
 
-  private async assertAdmin(u: AuthUser) {
-    if (!(await isPlatformAdmin(this.prisma, u.userId))) throw new ForbiddenException();
-    const need = process.env.PLATFORM_REQUIRE_2FA === 'true' || (process.env.NODE_ENV === 'production' && process.env.PLATFORM_REQUIRE_2FA !== 'false');
-    if (need && !(await this.prisma.user.findUnique({ where: { id: u.userId }, select: { totpEnabledAt: true } }))?.totpEnabledAt) throw new ForbiddenException('platform_2fa_required');
-  }
-
   @Get()
-  async list(@CurrentUser() u: AuthUser) {
-    await this.assertAdmin(u);
+  async list() {
     return this.prisma.network.findMany({
       orderBy: { createdAt: 'desc' },
       select: { id: true, name: true, billingStatus: true, paidUntil: true, setupPaidAt: true, createdAt: true, members: { select: { role: true, user: { select: { email: true } } } }, clinics: { select: { id: true, name: true, branchSetupQuoteUah: true, branchSetupPaidAt: true } } },
@@ -251,8 +244,7 @@ export class NetworkPlatformController {
 
   // The owner must already have an account (the person who signed the contract); their clinics are NOT added: they attach them themselves
   @Post()
-  async create(@CurrentUser() u: AuthUser, @Body() dto: CreateNetworkDto) {
-    await this.assertAdmin(u);
+  async create(@Body() dto: CreateNetworkDto) {
     const owner = await this.prisma.user.findUnique({ where: { email: dto.ownerEmail.toLowerCase() }, select: { id: true } });
     if (!owner) throw new NotFoundException('user_not_found');
     const n = await this.prisma.network.create({ data: { name: dto.name.trim(), members: { create: { userId: owner.id, role: 'OWNER' } } }, select: { id: true, name: true } });
@@ -261,7 +253,6 @@ export class NetworkPlatformController {
 
   @Patch(':id/branches/:clinicId')
   async quote(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('clinicId') clinicId: string, @Body() dto: QuoteDto) {
-    await this.assertAdmin(u);
     const r = await this.prisma.clinic.updateMany({ where: { id: clinicId, networkId: id, branchSetupPaidAt: null }, data: { branchSetupQuoteUah: dto.setupQuoteUah ?? null } });
     if (!r.count) throw new NotFoundException('branch_not_found');
     await this.prisma.auditLog.create({ data: { clinicId, userId: u.userId, action: 'network.branch_quote', details: { networkId: id, quoteUah: dto.setupQuoteUah ?? null } } });

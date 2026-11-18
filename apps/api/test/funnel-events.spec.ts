@@ -14,6 +14,7 @@ import { clinicDate } from '../src/common/clinic-time';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { MockHandle, MOCK_KEY, startMock } from '../mock/cliniccards-mock';
+import { pinPlatformFixture } from './platform-fixture';
 
 jest.setTimeout(120_000);
 
@@ -21,12 +22,22 @@ jest.setTimeout(120_000);
 // collection flag is on. Synthetic data, the mock Cliniccards and fake channels only.
 let app: INestApplication;
 let prisma: PrismaService;
+let restorePlatform: (() => Promise<void>) | undefined;
 let mock: MockHandle;
 const rnd = () => Math.random().toString(36).slice(2, 9);
 const http = () => request(app.getHttpServer());
 const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
 const PASSWORD = 'correct-horse-battery';
 const ADMIN_EMAIL = `platform-${rnd()}@example.com`;
+let platformToken: string | undefined;
+async function getPlatformToken() {
+  if (!platformToken) {
+    const res = await http().post('/auth/register').send({ acceptTerms: true, clinicName: `Платформа ${rnd()}`, name: 'Адмін', email: ADMIN_EMAIL, password: PASSWORD }).expect(201);
+    restorePlatform = await pinPlatformFixture(prisma, ADMIN_EMAIL);
+    platformToken = res.body.accessToken as string;
+  }
+  return platformToken;
+}
 
 const ai = { configured: true, service: 'Консультація', complete: async () => ({ text: JSON.stringify({ intent: 'booking', reply: 'Оберіть, будь ласка, час.', summary: 'хоче записатися', service: ai.service, options: [] }), inputTokens: 1, outputTokens: 1 }) };
 const sent: { chatId: string; text: string; buttons: { label: string; payload: string }[] }[] = [];
@@ -47,6 +58,7 @@ beforeAll(async () => {
   });
 });
 afterAll(async () => {
+  await restorePlatform?.();
   jest.restoreAllMocks();
   await app.close();
   await mock.close();
@@ -299,9 +311,7 @@ describe('події воронки: лише з окремим прапором
     const owner = await clinic();
     await http().patch(`/platform/clinics/${owner.clinicId}`).set(auth(owner.token)).send({ funnelEventsEnabled: true }).expect(403);
     expect((await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } })).funnelEventsEnabled).toBe(false);
-    const res = await http().post('/auth/register').send({ acceptTerms: true, clinicName: `Платформа ${rnd()}`, name: 'Адмін', email: ADMIN_EMAIL, password: PASSWORD }).expect(201);
-    await prisma.user.update({ where: { email: ADMIN_EMAIL }, data: { emailVerifiedAt: new Date() } });
-    const admin = res.body.accessToken as string;
+    const admin = await getPlatformToken();
     await http().patch(`/platform/clinics/${owner.clinicId}`).set(auth(admin)).send({ funnelEventsEnabled: true, aiAgentMode: true }).expect(200);
     expect(await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId }, select: { funnelEventsEnabled: true, aiAgentMode: true } })).toEqual({ funnelEventsEnabled: true, aiAgentMode: true });
     expect(await prisma.auditLog.count({ where: { clinicId: owner.clinicId, action: 'platform.clinic_changed' } })).toBe(1);
@@ -311,8 +321,7 @@ describe('події воронки: лише з окремим прапором
     const owner = await clinic();
     expect(await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId }, select: { aiAgentAuto: true, agentAutoServiceId: true } })).toEqual({ aiAgentAuto: false, agentAutoServiceId: null });
     await http().patch(`/platform/clinics/${owner.clinicId}`).set(auth(owner.token)).send({ aiAgentAuto: true }).expect(403);
-    const login = await http().post('/auth/login').send({ email: ADMIN_EMAIL, password: PASSWORD });
-    const admin = login.body.accessToken as string;
+    const admin = await getPlatformToken();
     expect(admin).toBeTruthy();
     // the agent alone does not turn the autonomy on
     await http().patch(`/platform/clinics/${owner.clinicId}`).set(auth(admin)).send({ aiAgentMode: true }).expect(200);
@@ -330,7 +339,7 @@ describe('події воронки: лише з окремим прапором
 
   it('набір послуг автономного режиму: лише схвалені активні послуги цієї клініки, без повторів, не більше п’яти; хибне оновлення відхиляється цілком; зміна в аудиті; очищення вимикає й не повертає стару послугу', async () => {
     const owner = await clinic();
-    const admin = (await http().post('/auth/login').send({ email: ADMIN_EMAIL, password: PASSWORD })).body.accessToken as string;
+    const admin = await getPlatformToken();
     const svc = (title: string, o: { approved?: boolean; active?: boolean; clinicId?: string } = {}) =>
       prisma.kbItem.create({ data: { clinicId: o.clinicId ?? owner.clinicId, kind: 'SERVICE', title, active: o.active !== false, ...(o.approved === false ? {} : { approvedAt: new Date() }) } });
     const [a, b, c2, d, e, f] = await Promise.all(['А', 'Б', 'В', 'Г', 'Ґ', 'Д'].map((t) => svc(t)));
