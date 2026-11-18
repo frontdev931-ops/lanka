@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { createHmac } from 'crypto';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
+import { MailService } from '../src/auth/mail.service';
 import { InboundService } from '../src/automations/inbound.service';
 import { LeadsService, channelFromUtm, mapMetaLead } from '../src/automations/leads.service';
 import { FacebookApi, MetaApiError } from '../src/automations/meta-graph.api';
@@ -55,8 +56,7 @@ afterAll(async () => {
   await app.close();
 });
 
-async function clinic() {
-  const email = `l${rnd()}@example.com`;
+async function clinic(email = `l${rnd()}@example.com`) {
   const res = await http().post('/auth/register').send({ acceptTerms: true, clinicName: `Клініка ${rnd()}`, name: 'Анна', email, password: PASSWORD }).expect(201);
   const clinicId = (await prisma.user.findUniqueOrThrow({ where: { email }, include: { memberships: true } })).memberships[0].clinicId;
   return { token: res.body.accessToken as string, clinicId };
@@ -134,39 +134,124 @@ describe('заявки з сайту', () => {
   });
 });
 
-describe('код встановлення форм', () => {
-  it('зберігає конфігурацію лише в поточній клініці та додає її чинний публічний ключ', async () => {
-    const origin = 'https://www.112dental.com.ua';
+describe('підключення сайту командою LANKA', () => {
+  const origin = 'https://clinic.example';
+  const formConfig = {
+    page: `${origin}/`,
+    formId: 'fixture-form',
+    selector: 'body.home [data-id="fixture-form"] form.elementor-form',
+    fields: { name: 'form_fields[name]', phone: 'form_fields[phone]' },
+  };
+  const clinicSettings = (token: string) => http().get('/automations/leads').set(auth(token)).expect(200);
+  const requestConnection = (token: string, website = origin) => http().post('/automations/leads/connection-request').set(auth(token)).send({ website });
+  const configPath = (clinicId: string) => `/platform/clinics/${clinicId}/website`;
+  const configure = (token: string, clinicId: string, body: object) => http().patch(configPath(clinicId)).set(auth(token)).send(body);
+  const platformEmail = `la-platform-${rnd()}@example.com`;
+  let oldAdmins: string | undefined;
+  let platform: { token: string; clinicId: string };
+
+  beforeAll(async () => {
+    oldAdmins = process.env.PLATFORM_ADMIN_EMAILS;
+    process.env.PLATFORM_ADMIN_EMAILS = platformEmail;
+    platform = await clinic(platformEmail);
+  });
+  afterAll(() => {
+    if (oldAdmins === undefined) delete process.env.PLATFORM_ADMIN_EMAILS;
+    else process.env.PLATFORM_ADMIN_EMAILS = oldAdmins;
+  });
+
+  it('зберігає один відкритий запит при одночасних кліках і збої листа та показує його власнику платформи', async () => {
+    const a = await clinic();
+    const b = await clinic();
+    const invite = (await http().post('/team/invitations').set(auth(a.token)).send({ email: `manager-${rnd()}@example.com`, role: 'MANAGER' }).expect(201)).body.link as string;
+    const manager = (await http().post(`/invites/${invite.split('/').pop()}/accept`).send({ name: 'Менеджер', password: PASSWORD }).expect(201)).body.accessToken;
+    await requestConnection(manager).expect(403);
+    await requestConnection(a.token, 'https://user:password@clinic.example').expect(400);
+    const mail = jest.spyOn(app.get(MailService), 'send').mockRejectedValue(new Error('Synthetic mail failure'));
+    try {
+      const results = await Promise.all(Array.from({ length: 4 }, () => requestConnection(a.token).expect(200)));
+      const id = results[0].body.id;
+      expect(new Set(results.map((r) => r.body.id))).toEqual(new Set([id]));
+      expect(mail).toHaveBeenCalledTimes(1);
+      expect(await prisma.contactRequest.count({ where: { clinicId: a.clinicId, handledAt: null } })).toBe(1);
+      expect((await clinicSettings(a.token)).body.request).toMatchObject({ id, websiteOrigin: origin, installedAt: null, handledAt: null });
+      expect((await clinicSettings(b.token)).body.request).toBeNull();
+      await http().get('/platform/website-requests').set(auth(a.token)).expect(403);
+      const queue = (await http().get('/platform/website-requests').set(auth(platform.token)).expect(200)).body;
+      expect(queue).toEqual(expect.arrayContaining([expect.objectContaining({ id, clinicId: a.clinicId, websiteOrigin: origin, email: expect.stringMatching(/@example\.com$/) })]));
+      const publicCallbacks = (await http().get('/platform/contact-requests').set(auth(platform.token)).expect(200)).body;
+      expect(publicCallbacks.map((r: { id: string }) => r.id)).not.toContain(id);
+      await http().patch(`/platform/contact-requests/${id}`).set(auth(platform.token)).send({ handled: true }).expect(404);
+    } finally {
+      mail.mockRestore();
+    }
+  });
+
+  it('лише власник платформи готує код з чинним ключем клініки, без позначки про встановлення чи надходження', async () => {
     const a = await enabled([origin]);
     const b = await enabled([origin]);
-    const formConfig = {
-      page: `${origin}/`,
-      formId: '4229aa4d',
-      selector: 'body.home [data-id="4229aa4d"] form.elementor-form',
-      fields: { name: 'form_fields[name]', phone: 'form_fields[email]', message: 'form_fields[message]' },
-    };
-    const get = (token: string) => http().get('/automations/leads').set(auth(token)).expect(200);
-    const patch = (body: object) => http().patch('/automations/leads').set(auth(a.token)).send(body);
-    expect((await get(a.token)).body).toMatchObject({ formConfig: null, snippet: null });
-    await patch({ formConfig: { ...formConfig, page: 'https://foreign.example/' } }).expect(400);
-    await patch({ formConfig: { ...formConfig, fields: { name: 'form_fields[name]' } } }).expect(400);
-    await patch({ formConfig }).expect(200);
-    const saved = (await get(a.token)).body;
-    const site = new URL(a.url).origin;
-    expect(saved.formConfig).toEqual(formConfig);
+    await configure(a.token, a.clinicId, { formConfig }).expect(403);
+    await http().get(configPath(a.clinicId)).set(auth(b.token)).expect(403);
+    await http().patch('/automations/leads').set(auth(a.token)).send({ formConfig }).expect(403);
+    await configure(platform.token, a.clinicId, { formConfig: { ...formConfig, page: 'https://different.example/' } }).expect(400);
+    await configure(platform.token, a.clinicId, { formConfig: { ...formConfig, fields: {} } }).expect(400);
+    const details = (await configure(platform.token, a.clinicId, { formConfig }).expect(200)).body;
+    expect(details).toMatchObject({ formConfig, verifiedAt: null, lastReceivedAt: null, request: null, requestReceivedAt: null });
+    expect(details).not.toHaveProperty('secret');
+    const saved = (await clinicSettings(a.token)).body;
+    expect(saved).not.toHaveProperty('formConfig');
     expect(saved.snippet).toBe([
-      `<script defer src="${site}/lanka-forms.js"`,
+      `<script defer src="${new URL(a.url).origin}/lanka-forms.js"`,
       `        data-form-key="${a.key}"></script>`,
-      `<script defer src="${site}/lanka-forms-elementor.js"`,
-      '        data-form-selector="body.home [data-id=&quot;4229aa4d&quot;] form.elementor-form"',
-      '        data-form-id="4229aa4d"',
-      '        data-lanka-fields="name=form_fields[name]; phone=form_fields[email]; message=form_fields[message]"></script>',
+      `<script defer src="${new URL(a.url).origin}/lanka-forms-elementor.js"`,
+      '        data-form-selector="body.home [data-id=&quot;fixture-form&quot;] form.elementor-form"',
+      '        data-form-id="fixture-form"',
+      '        data-lanka-fields="name=form_fields[name]; phone=form_fields[phone]"></script>',
     ].join('\n'));
-    expect((await get(b.token)).body).toMatchObject({ formKey: b.key, formConfig: null, snippet: null });
+    expect((await clinicSettings(b.token)).body).toMatchObject({ formKey: b.key, snippet: null });
+    const cors = await http().options(`/leads/${a.key}`).set('Origin', origin).expect(204);
+    expect(cors.headers['access-control-allow-origin']).toBe(origin);
 
-    expect((await patch({ origins: [] }).expect(200)).body).toMatchObject({ formKey: a.key, formConfig, snippet: null });
-    expect((await patch({ origins: [origin] }).expect(200)).body.snippet).toBe(saved.snippet);
-    expect((await patch({ formConfig: null }).expect(200)).body).toMatchObject({ formKey: a.key, formConfig: null, snippet: null });
+    const c = await clinic();
+    const ready = (await configure(platform.token, c.clinicId, { origins: [origin], formConfig }).expect(200)).body;
+    expect(ready.enabled).toBe(false);
+    expect(ready.snippet).toContain(`data-form-key="${ready.formKey}"`);
+    const enabledLater = (await http().patch('/automations/leads').set(auth(c.token)).send({ enabled: true }).expect(200)).body;
+    expect(enabledLater.formKey).toBe(ready.formKey);
+  });
+
+  it('позначає встановлення вручну і завершує запит після надходження заявки з потрібної форми', async () => {
+    const a = await enabled([origin]);
+    const b = await enabled([origin]);
+    const mail = jest.spyOn(app.get(MailService), 'send').mockResolvedValue(undefined);
+    try {
+      const request = (await requestConnection(a.token).expect(200)).body;
+      await configure(platform.token, a.clinicId, { formConfig }).expect(200);
+      const progress = (token: string, clinicId: string, action: string) => http().patch(`${configPath(clinicId)}/requests/${request.id}`).set(auth(token)).send({ action });
+      await progress(a.token, a.clinicId, 'installed').expect(403);
+      await progress(platform.token, b.clinicId, 'installed').expect(404);
+      await progress(platform.token, a.clinicId, 'complete').expect(409);
+      const installed = (await progress(platform.token, a.clinicId, 'installed').expect(200)).body;
+      expect(installed.request.installedAt).toBeTruthy();
+      expect(installed.request.handledAt).toBeNull();
+      expect(installed.verifiedAt).toBeNull();
+      expect(installed.requestReceivedAt).toBeNull();
+      const enquiry = { via: 'WEBSITE_FORM', channel: 'SITE', landing: formConfig.page, formId: formConfig.formId };
+      await prisma.inquiry.createMany({ data: [
+        { ...enquiry, clinicId: b.clinicId },
+        { ...enquiry, clinicId: a.clinicId, formId: 'another-form' },
+        { ...enquiry, clinicId: a.clinicId, createdAt: new Date(new Date(request.createdAt).getTime() - 1000) },
+      ] });
+      await progress(platform.token, a.clinicId, 'complete').expect(409);
+      const received = await prisma.inquiry.create({ data: { ...enquiry, clinicId: a.clinicId } });
+      const complete = (await progress(platform.token, a.clinicId, 'complete').expect(200)).body;
+      expect(complete.requestReceivedAt).toBe(received.createdAt.toISOString());
+      expect(complete.request.handledAt).toBeTruthy();
+      expect((await clinicSettings(a.token)).body.request).toMatchObject({ id: request.id, handledAt: complete.request.handledAt });
+      expect((await requestConnection(a.token).expect(200)).body.id).not.toBe(request.id);
+    } finally {
+      mail.mockRestore();
+    }
   });
 });
 

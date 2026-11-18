@@ -1,10 +1,18 @@
 # Website integration for existing forms
 
-LANKA receives a copy of enquiries accepted by the clinic's existing website forms. The site's validation, confirmation, email and other destinations stay in place. Set up intake in **Settings → Channels → Website** on Start or Pro. Enabling intake prepares LANKA to receive enquiries. The website maintainer installs the integration separately. LANKA verifies the connection when it receives an enquiry. The plan includes this integration and installation instructions. Custom website work and non-standard forms are quoted separately.
+LANKA receives a copy of enquiries accepted by the clinic's existing website forms. The site's validation, confirmation, email and other destinations stay in place. Website form intake is included in Start and Pro. Custom website work and non-standard forms are quoted separately.
+
+## Request an assisted connection
+
+1. The clinic owner opens **Settings → Channels → Website**, enters the website address and selects **Request connection**. The request is saved in the platform inbox, and the team uses the account email to coordinate with the clinic's website maintainer. Each clinic can have one open request. Keep credentials out of the request.
+2. The platform owner opens **/platform → Website connections**, opens the clinic and saves the allowed website address and the existing form's configuration. The current browser code appears in both the platform and clinic screens. Clinics with a prepared code or verified receipt can continue without a new request. Intake on/off stays under the clinic's control.
+3. The team or website maintainer installs the code. The platform owner records installation separately. After an actual enquiry arrives, the platform owner checks its receipt and completes the request. The code alone does not verify receipt. For a prepared browser adapter the evidence must match its page and form ID. For server forwarding include the source `page_url` on the requested website so the team can identify the enquiry.
+
+The platform reuses the existing contact-request inbox storage and mail service. The saved request stays visible if a notification fails. The new request fields and open-request unique index are in migration `20261118105238_assisted_website_connection`. Prepared form configuration uses the existing migration `20261118103755_lead_form_config`.
 
 ## Choose a delivery method
 
-Use one delivery method per form. **Website installation code** provides a complete browser snippet when an installer has saved the form configuration for this clinic. **Technical settings** contains that configuration, key management and the server alternative.
+Use one delivery method per form. **Website installation code** provides the complete snippet once a platform owner has prepared the configuration. **Instructions for my developer** contains guidance, key management and the server alternative.
 
 ### Website server (recommended)
 
@@ -28,7 +36,7 @@ The endpoint also accepts `application/x-www-form-urlencoded` and an ID in `subm
 
 ### Browser adapter
 
-Use this option when server integration is unavailable and the existing form has a reliable success hook. Add the exact HTTPS origin where the form runs to the clinic's allowed origins. For a configured Elementor form, copy the whole block from **Website installation code**. LANKA uses the current public key and the web origin of its deployment. For custom integrations, the public key is also available in **Technical settings**. If the site uses CSP, allow the LANKA origin in `script-src` and `connect-src`.
+Use this option when server integration is unavailable and the existing form has a reliable success hook. Add the exact HTTPS origin where the form runs to the clinic's allowed origins. For a configured Elementor form, copy the whole block from **Website installation code**. LANKA uses the current public key and the web origin of its deployment. For custom integrations, the public key is also available under **Instructions for my developer**. If the site uses CSP, allow the LANKA origin in `script-src` and `connect-src`.
 
 ```html
 <script src="https://app.lankaclinic.app/lanka-forms.js" data-form-key="PUBLIC_FORM_KEY" defer></script>
@@ -71,7 +79,7 @@ The pilot selects only the footer form on the home page. It forwards the name, p
 
 Intake is enabled in the 112 Dental LANKA account and `https://www.112dental.com.ua` is on the allowed list. Verification is pending the first received enquiry.
 
-1. After the LANKA update and migration `20261118103755_lead_form_config` are deployed, open **Settings → Channels → Website → Technical settings** in the 112 Dental clinic. Paste this JSON into **Elementor form configuration** and save it. The page must belong to an allowed origin. The configuration is saved only for the current clinic.
+1. After the LANKA update and migrations are deployed, the platform owner opens **/platform → Website connections**, selects 112 Dental and saves the JSON below in **Elementor form configuration**. Keep `https://www.112dental.com.ua` in the allowed addresses. This configuration is applied explicitly to 112 Dental.
 
 ```json
 {

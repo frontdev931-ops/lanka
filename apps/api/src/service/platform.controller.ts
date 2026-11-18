@@ -14,6 +14,12 @@ export async function isPlatformAdmin(prisma: PrismaService, userId: string): Pr
   return !!u && verifiedOrDev && list.includes(u.email.toLowerCase());
 }
 
+export async function assertPlatformAdmin(prisma: PrismaService, userId: string) {
+  if (!(await isPlatformAdmin(prisma, userId))) throw new ForbiddenException();
+  const need = process.env.PLATFORM_REQUIRE_2FA === 'true' || (process.env.NODE_ENV === 'production' && process.env.PLATFORM_REQUIRE_2FA !== 'false');
+  if (need && !(await prisma.user.findUnique({ where: { id: userId }, select: { totpEnabledAt: true } }))?.totpEnabledAt) throw new ForbiddenException('platform_2fa_required');
+}
+
 class ClinicPatchDto {
   // NETWORK is given only by a network (a branch joins it): never set by hand
   @IsOptional() @IsIn(PLAN_KEYS.filter((k) => k !== 'NETWORK')) plan?: string;
@@ -47,11 +53,7 @@ export class PlatformController {
 
   // The service owner sees every clinic: in production the account must have the second factor turned on
   // (PLATFORM_REQUIRE_2FA=false opens this for a first launch; 'true' forces it in any environment)
-  private async assertAdmin(u: AuthUser) {
-    if (!(await isPlatformAdmin(this.prisma, u.userId))) throw new ForbiddenException();
-    const need = process.env.PLATFORM_REQUIRE_2FA === 'true' || (process.env.NODE_ENV === 'production' && process.env.PLATFORM_REQUIRE_2FA !== 'false');
-    if (need && !(await this.prisma.user.findUnique({ where: { id: u.userId }, select: { totpEnabledAt: true } }))?.totpEnabledAt) throw new ForbiddenException('platform_2fa_required');
-  }
+  private assertAdmin(u: AuthUser) { return assertPlatformAdmin(this.prisma, u.userId); }
 
   @Get('clinics')
   async clinics(@CurrentUser() u: AuthUser) {
@@ -94,13 +96,13 @@ export class PlatformController {
   @Get('contact-requests')
   async contactRequests(@CurrentUser() u: AuthUser) {
     await this.assertAdmin(u);
-    return this.prisma.contactRequest.findMany({ orderBy: { createdAt: 'desc' }, take: 100 });
+    return this.prisma.contactRequest.findMany({ where: { clinicId: null }, orderBy: { createdAt: 'desc' }, take: 100, select: { id: true, phone: true, name: true, lang: true, createdAt: true, handledAt: true } });
   }
 
   @Patch('contact-requests/:id')
   async markContact(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ContactHandledDto) {
     await this.assertAdmin(u);
-    const r = await this.prisma.contactRequest.updateMany({ where: { id }, data: { handledAt: dto.handled ? new Date() : null } });
+    const r = await this.prisma.contactRequest.updateMany({ where: { id, clinicId: null }, data: { handledAt: dto.handled ? new Date() : null } });
     if (!r.count) throw new NotFoundException();
     return { ok: true };
   }

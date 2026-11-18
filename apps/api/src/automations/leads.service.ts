@@ -16,6 +16,7 @@ import { FB_MODE } from './meta-login.service';
 import { StaffNotifierService } from './staff-notifier.service';
 import { WebChatService } from './webchat.service';
 import { FORM_ID, leadInstallationCode, readLeadFormConfig } from './lead-form-config';
+import { WebsiteRequestsService, websiteRequestState } from './website-requests.service';
 
 const HOUR = 3_600_000;
 // The same phone from the same channel inside this time is the same person pressing the button twice
@@ -108,6 +109,7 @@ export class LeadsService {
     private push: PushService,
     private inbound: InboundService,
     private facebook: FacebookApi,
+    private websiteRequests: WebsiteRequestsService,
   ) {
     // Ad-form leads come through the durable inbox: a failure to fetch the lead is retried
     this.inbound.register('LEADGEN', async (clinicId, payload) => {
@@ -123,7 +125,11 @@ export class LeadsService {
     const site = (process.env.WEB_ORIGIN ?? 'http://localhost:3000').replace(/\/$/, '');
     const origins = (c.leadOrigins as string[]) ?? [];
     const formConfig = readLeadFormConfig(c.leadFormConfig);
-    const last = await this.prisma.inquiry.findFirst({ where: { clinicId, via: 'WEBSITE_FORM' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } });
+    const [last, request] = await Promise.all([
+      this.prisma.inquiry.findFirst({ where: { clinicId, via: 'WEBSITE_FORM' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
+      this.prisma.contactRequest.findFirst({ where: { clinicId }, orderBy: { createdAt: 'desc' }, select: websiteRequestState }),
+    ]);
+    const receipt = request ? await this.websiteRequests.matchingReceipt(clinicId, request, formConfig) : null;
     return {
       enabled: c.leadEnabled,
       origins,
@@ -132,16 +138,24 @@ export class LeadsService {
       url: c.leadKey ? `${site}/backend/leads/${c.leadKey}` : null,
       serverUrl: `${site}/backend/leads/v1/enquiries`,
       formConfig,
+      formPage: formConfig?.page ?? null,
       snippet: c.leadKey && formConfig && origins.includes(new URL(formConfig.page).origin) ? leadInstallationCode(site, c.leadKey, formConfig) : null,
       secret: { set: !!c.leadSecretHash, hint: c.leadSecretHint },
       // configured is not verified: verified = a real enquiry was accepted from a website form
       verifiedAt: c.leadVerifiedAt,
       lastReceivedAt: last?.createdAt ?? null,
+      request,
+      requestReceivedAt: receipt?.createdAt ?? null,
     };
   }
 
+  async clinicSettings(clinicId: string) {
+    const { formConfig, ...settings } = await this.settings(clinicId);
+    return settings;
+  }
+
   async update(clinicId: string, d: { enabled?: boolean; origins?: string[]; formConfig?: Record<string, unknown> | null }) {
-    const cur = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { leadKey: true, leadOrigins: true, isDemo: true } });
+    const cur = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { leadOrigins: true, isDemo: true } });
     if (cur.isDemo) throw new ForbiddenException('demo_restricted');
     const data: Prisma.ClinicUpdateInput = {};
     let origins = (cur.leadOrigins as string[]) ?? [];
@@ -161,29 +175,33 @@ export class LeadsService {
     }
     if (d.enabled !== undefined) {
       data.leadEnabled = d.enabled;
-      if (d.enabled && !cur.leadKey) data.leadKey = randomBytes(18).toString('base64url');
     }
-    await this.prisma.clinic.update({ where: { id: clinicId }, data });
-    return this.settings(clinicId);
+    const update = this.prisma.clinic.update({ where: { id: clinicId }, data });
+    if (d.enabled || d.formConfig) {
+      await this.prisma.$transaction([
+        update,
+        this.prisma.clinic.updateMany({ where: { id: clinicId, leadKey: null }, data: { leadKey: randomBytes(18).toString('base64url') } }),
+      ]);
+    } else await update;
   }
 
   async rotateKey(clinicId: string) {
     await this.prisma.clinic.update({ where: { id: clinicId }, data: { leadKey: randomBytes(18).toString('base64url') } });
-    return this.settings(clinicId);
+    return this.clinicSettings(clinicId);
   }
 
   // A new server secret (the old one stops working at once). Returned ONCE; only its hash and last four characters are kept.
-  async newSecret(clinicId: string): Promise<{ secret: string; settings: Awaited<ReturnType<LeadsService['settings']>> }> {
+  async newSecret(clinicId: string) {
     const cur = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { isDemo: true } });
     if (cur.isDemo) throw new ForbiddenException('demo_restricted');
     const secret = `lsk_${randomBytes(30).toString('base64url')}`;
     await this.prisma.clinic.update({ where: { id: clinicId }, data: { leadSecretHash: secretHash(secret), leadSecretHint: secret.slice(-4) } });
-    return { secret, settings: await this.settings(clinicId) };
+    return { secret, settings: await this.clinicSettings(clinicId) };
   }
 
   async revokeSecret(clinicId: string) {
     await this.prisma.clinic.update({ where: { id: clinicId }, data: { leadSecretHash: null, leadSecretHint: null } });
-    return this.settings(clinicId);
+    return this.clinicSettings(clinicId);
   }
 
   // ---------- the public addresses ----------

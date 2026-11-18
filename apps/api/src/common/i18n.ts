@@ -161,6 +161,11 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Сначала сохраните адрес этого сайта в списке разрешённых.',
     en: 'Save this site in the allowed addresses first.',
   },
+  website_receipt_required: {
+    uk: 'Позначте встановлення й дочекайтеся заявки з підключеної форми, перш ніж завершувати запит.',
+    ru: 'Отметьте установку и дождитесь заявки из подключённой формы, прежде чем завершать запрос.',
+    en: 'Record installation and confirm a received enquiry from the connected form before completing this request.',
+  },
   inquiry_empty: {
     uk: 'Вкажіть хоча б телефон, ім’я або примітку',
     ru: 'Укажите хотя бы телефон, имя или заметку',

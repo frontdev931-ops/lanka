@@ -6,6 +6,7 @@ import { useI18n } from '../../../lib/i18n';
 import { fmtDate, fmtDateTime, fmtNumber } from '../../../lib/ui';
 import { Alert, Badge, Card, Empty, Loading, PageHeader } from '../../../components/ui';
 import { useConfirm } from '../../../components/ConfirmDialog';
+import { PlatformWebsiteConnections } from '../../../components/PlatformWebsiteConnections';
 
 interface Row {
   id: string;
@@ -42,7 +43,7 @@ export default function PlatformPage() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   // "call me back" requests from the landing page
-  const [contacts, setContacts] = useState<{ id: string; phone: string; name: string | null; lang: string; createdAt: string; handledAt: string | null }[]>([]);
+  const [contacts, setContacts] = useState<{ id: string; phone: string | null; name: string | null; lang: string; createdAt: string; handledAt: string | null }[]>([]);
   const [custom, setCustom] = useState<{ id: string; users: string; messages: string; ai: string } | null>(null);
 
   const load = useCallback(() => {
@@ -87,6 +88,8 @@ export default function PlatformPage() {
         <section className="card stat"><div className="stat-top">{t('pf.tokens')}</div><div className="stat-value">{fmtNumber(totals.tokens)}</div></section>
       </div>
 
+      <PlatformWebsiteConnections clinics={rows} />
+
       <Card flush title={t('pf.contacts')}>
         <p className="rule" style={{ padding: '0 20px' }}>{t('pf.contactsHint')}</p>
         {contacts.length === 0 ? (
@@ -101,7 +104,7 @@ export default function PlatformPage() {
                 {contacts.map((c) => (
                   <tr key={c.id}>
                     <td>{fmtDateTime(c.createdAt)}</td>
-                    <td><a href={`tel:${c.phone}`}>{c.phone}</a></td>
+                    <td>{c.phone ? <a href={`tel:${c.phone}`}>{c.phone}</a> : '—'}</td>
                     <td>{c.name ?? '—'}</td>
                     <td>{c.lang.toUpperCase()}</td>
                     <td>

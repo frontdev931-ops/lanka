@@ -5,7 +5,7 @@ import type { Locale } from './i18n';
 //   - benefits are what LANKA lets a clinic do, never measured results (there are no validated conversion, savings or ROI figures);
 //   - three levels are kept apart: standard features; features that depend on a channel, a plan, a permission or controlled activation (said beside
 //     the claim); individual work that is assessed first (custom website work, non-standard form integrations, ad forms, other systems, custom reports).
-//     Forwarding from existing website forms is included in Start and Pro, with self-installation instructions. Custom website work is quoted separately.
+//     Forwarding from existing website forms is included in Start and Pro, with assisted connection available in Settings. Custom website work is quoted separately.
 //   - the patient agent: drafts by default, replies on its own (Instagram, Messenger, Telegram) only after the clinic owner switches it on in Pro; a request is not a
 //     booking; writes to the clinic's system only where they are switched on;
 //   - screens are real app screens on the demo clinic (made-up data, dates and phones removed); drawings are labelled as examples.
@@ -92,7 +92,7 @@ const uk: LandingText = {
     sub: 'ШІ-адміністратор, повідомлення пацієнтам, завдання та звіти — в одному робочому просторі. Для власника, керуючого, адміністратора й маркетолога.',
     demo: 'Подивитися демо',
     discuss: 'Обговорити підключення',
-    integration: 'Готове підключення Cliniccards. Клініка підключає наявні форми на сайті за інструкцією; інші системи й доробка сайту — за індивідуальним узгодженням.',
+    integration: 'Готове підключення Cliniccards. Допоможемо підключити наявні форми сайту. Інші системи й доробку сайту погоджуємо окремо.',
     note: 'Демо — копія вигаданої клініки, без реєстрації.',
     shotAlt: 'Головна сторінка LANKA: показники за період і робота, що чекає на команду',
     chat: { in: 'Можна на гігієну в четвер після обіду?', out: 'Так, є такі варіанти:', slots: ['Чт, 14:30', 'Чт, 16:00'], request: 'Заявка на запис' },
@@ -169,7 +169,7 @@ const uk: LandingText = {
       { t: 'Інша медична система', d: 'Інша система обліку чи джерело даних — за наявності API або вивантаження.' },
       { t: 'Ваші звіти й процеси', d: 'Власні звіти, правила повідомлень і порядок роботи команди.' },
     ],
-    onboarding: { title: 'Допоможемо налаштувати й почати роботу', items: ['Підключимо Cliniccards і завантажимо дані', 'Налаштуємо обрані канали: Telegram-бот, а на «Про» — Instagram і Messenger', 'Допоможемо підготувати знання клініки для відповідей ШІ', 'Покажемо команді, де звіти, розмови й заявки'], note: 'Входить у підключення. Інструкція з підключення наявних форм входить у тариф. Доробку сайту, нестандартні форми й інші системи оцінюємо окремо.' },
+    onboarding: { title: 'Допоможемо налаштувати й почати роботу', items: ['Підключимо Cliniccards і завантажимо дані', 'Налаштуємо обрані канали: Telegram-бот, а на «Про» — Instagram і Messenger', 'Допоможемо підготувати знання клініки для відповідей ШІ', 'Покажемо команді, де звіти, розмови й заявки'], note: 'Входить у підключення. Підключення наявних форм можна замовити в налаштуваннях. Доробку сайту, нестандартні форми й інші системи оцінюємо окремо.' },
     support: { t: 'Підтримка, до якої можна звернутися', d: 'Допоможемо з налаштуваннями, відповімо на запитання й розберемося, якщо щось не працює.', write: 'Написати', call: 'Замовити дзвінок' },
     journeyLabel: 'Як це має працювати із сайтом',
     journey: ['Заявка із сайту', 'Звернення в LANKA', 'Опрацювання командою', 'Запис'],
@@ -221,7 +221,7 @@ const uk: LandingText = {
       { q: 'Що буде, коли закінчаться відповіді ШІ?', a: 'Відповіді, чернетки й помічник керівника стають на паузу до нового періоду або докупівлі пакета. Власник і керівник бачать повідомлення в кабінеті, у службовий чат Telegram приходить сповіщення, а листування продовжує персонал.' },
       { q: 'Хто допоможе з налаштуванням і до кого звертатися потім?', a: 'Під час підключення ми налаштовуємо дані, канали й знання для ШІ та показуємо команді кабінет. Далі пишіть нам на пошту або залиште номер у формі — допоможемо з налаштуваннями й розберемося, якщо щось не працює.' },
       { q: 'Що таке сигнали і куди вони приходять?', a: 'LANKA перевіряє вибрані показники за останніми даними: частку неявок і скасувань, падіння кількості завершених візитів порівняно з попереднім періодом і заявки, що довго чекають відповіді. Коли показник перевищує поріг, сигнал приходить у службовий чат Telegram і листом власнику, не частіше разу на добу. Сигнали вмикаються в налаштуваннях і входять у тариф «Про». Сигнал підказує, куди подивитися, але не пояснює причину.' },
-      { q: 'Чи можна підключити наш сайт або іншу систему?', a: 'Так. «Старт» і «Про» включають пересилання копій заявок із наявних форм сайту та інструкцію з підключення. Сайт має підтримувати серверне пересилання після прийняття заявки або код, що отримує підтвердження від форми. Доробку сайту, нестандартну форму чи іншу систему оцінюємо окремо.' },
+      { q: 'Чи можна підключити наш сайт або іншу систему?', a: 'Так. «Старт» і «Про» включають пересилання копій заявок із наявних форм сайту. Опцію підключення можна замовити в налаштуваннях. Сайт має підтримувати серверне пересилання після прийняття заявки або код, що отримує підтвердження від форми. Доробку сайту, нестандартну форму чи іншу систему оцінюємо окремо.' },
     ],
   },
   final: { title: 'Подивіться, як LANKA може працювати для вашої клініки', text: 'Відкрийте демо за хвилину або залиште номер — обговоримо підключення.', support: 'Після підключення ви не залишаєтеся сам на сам: допоможемо з налаштуваннями й відповімо на запитання.' },
@@ -239,7 +239,7 @@ const ru: LandingText = {
     sub: 'ИИ-администратор, сообщения пациентам, задачи и отчёты — в одном рабочем пространстве. Для владельца, управляющего, администратора и маркетолога.',
     demo: 'Посмотреть демо',
     discuss: 'Обсудить подключение',
-    integration: 'Готовое подключение Cliniccards. Клиника подключает существующие формы сайта по инструкции; другие системы и доработка сайта — по индивидуальной договорённости.',
+    integration: 'Готовое подключение Cliniccards. Поможем подключить существующие формы сайта. Другие системы и доработку сайта согласуем отдельно.',
     note: 'Демо — копия выдуманной клиники, без регистрации.',
     shotAlt: 'Главная страница LANKA: показатели за период и работа, которая ждёт команду',
     chat: { in: 'Можно на гигиену в четверг после обеда?', out: 'Да, есть такие варианты:', slots: ['Чт, 14:30', 'Чт, 16:00'], request: 'Заявка на запись' },
@@ -316,7 +316,7 @@ const ru: LandingText = {
       { t: 'Другая медицинская система', d: 'Другая система учёта или источник данных — при наличии API или выгрузки.' },
       { t: 'Ваши отчёты и процессы', d: 'Собственные отчёты, правила сообщений и порядок работы команды.' },
     ],
-    onboarding: { title: 'Поможем настроить и начать работу', items: ['Подключим Cliniccards и загрузим данные', 'Настроим выбранные каналы: Telegram-бот, а на «Про» — Instagram и Messenger', 'Поможем подготовить знания клиники для ответов ИИ', 'Покажем команде, где отчёты, разговоры и заявки'], note: 'Входит в подключение. Инструкция по подключению существующих форм входит в тариф. Доработку сайта, нестандартные формы и другие системы оцениваем отдельно.' },
+    onboarding: { title: 'Поможем настроить и начать работу', items: ['Подключим Cliniccards и загрузим данные', 'Настроим выбранные каналы: Telegram-бот, а на «Про» — Instagram и Messenger', 'Поможем подготовить знания клиники для ответов ИИ', 'Покажем команде, где отчёты, разговоры и заявки'], note: 'Входит в подключение. Подключение существующих форм можно заказать в настройках. Доработку сайта, нестандартные формы и другие системы оцениваем отдельно.' },
     support: { t: 'Поддержка, к которой можно обратиться', d: 'Поможем с настройками, ответим на вопросы и разберёмся, если что-то не работает.', write: 'Написать', call: 'Заказать звонок' },
     journeyLabel: 'Как это должно работать с сайтом',
     journey: ['Заявка с сайта', 'Обращение в LANKA', 'Обработка командой', 'Запись'],
@@ -368,7 +368,7 @@ const ru: LandingText = {
       { q: 'Что будет, когда закончатся ответы ИИ?', a: 'Ответы, черновики и помощник руководителя встают на паузу до нового периода или докупки пакета. Владелец и руководитель видят сообщение в кабинете, в служебный чат Telegram приходит уведомление, а переписку продолжает персонал.' },
       { q: 'Кто поможет с настройкой и к кому обращаться потом?', a: 'Во время подключения мы настраиваем данные, каналы и знания для ИИ и показываем команде кабинет. Дальше пишите нам на почту или оставьте номер в форме — поможем с настройками и разберёмся, если что-то не работает.' },
       { q: 'Что такое сигналы и куда они приходят?', a: 'LANKA проверяет выбранные показатели по последним данным: долю неявок и отмен, падение числа завершённых визитов по сравнению с предыдущим периодом и заявки, которые долго ждут ответа. Когда показатель превышает порог, сигнал приходит в служебный чат Telegram и письмом владельцу, не чаще раза в сутки. Сигналы включаются в настройках и входят в тариф «Про». Сигнал подсказывает, куда посмотреть, но не объясняет причину.' },
-      { q: 'Можно ли подключить наш сайт или другую систему?', a: 'Да. «Старт» и «Про» включают пересылку копий заявок из существующих форм и инструкцию по подключению. Сайт должен поддерживать пересылку с сервера после принятия заявки или код, который получает подтверждение от формы. Доработку сайта, нестандартную форму или другую систему оцениваем отдельно.' },
+      { q: 'Можно ли подключить наш сайт или другую систему?', a: 'Да. «Старт» и «Про» включают пересылку копий заявок из существующих форм. Подключение можно заказать в настройках. Сайт должен поддерживать пересылку с сервера после принятия заявки или код, который получает подтверждение от формы. Доработку сайта, нестандартную форму или другую систему оцениваем отдельно.' },
     ],
   },
   final: { title: 'Посмотрите, как LANKA может работать для вашей клиники', text: 'Откройте демо за минуту или оставьте номер — обсудим подключение.', support: 'После подключения вы не остаётесь один на один: поможем с настройками и ответим на вопросы.' },
@@ -386,7 +386,7 @@ const en: LandingText = {
     sub: 'An AI front desk, patient messages, tasks and reports in one workspace. For the owner, the manager, the front desk and marketing.',
     demo: 'See the demo',
     discuss: 'Discuss a connection',
-    integration: 'Ready-made Cliniccards integration. The clinic connects its existing website forms using the installation guide; other systems and website changes by individual arrangement.',
+    integration: 'Ready-made Cliniccards integration. We help connect existing website forms. Other systems and website changes are quoted separately.',
     note: 'The demo is a copy of a made-up clinic, no sign-up.',
     shotAlt: 'LANKA home: figures for the period and the work waiting for the team',
     chat: { in: 'Can I book a cleaning on Thursday afternoon?', out: 'Yes, these times are free:', slots: ['Thu, 14:30', 'Thu, 16:00'], request: 'Booking request' },
@@ -463,7 +463,7 @@ const en: LandingText = {
       { t: 'Another practice system', d: 'Another records system or data source, if it has an API or an export.' },
       { t: 'Your reports and processes', d: 'Custom reports, messaging rules and team workflows.' },
     ],
-    onboarding: { title: 'We help you set up and get started', items: ['We connect Cliniccards and load the data', 'We set up the channels you choose: the Telegram bot, and on Pro also Instagram and Messenger', 'We help prepare the clinic’s information for AI replies', 'We show the team where reports, conversations and requests are'], note: 'Included in the setup fee. Your plan includes instructions for connecting existing forms. We quote separately for website changes, non-standard forms and other systems.' },
+    onboarding: { title: 'We help you set up and get started', items: ['We connect Cliniccards and load the data', 'We set up the channels you choose: the Telegram bot, and on Pro also Instagram and Messenger', 'We help prepare the clinic’s information for AI replies', 'We show the team where reports, conversations and requests are'], note: 'Included in the setup fee. You can request help connecting existing forms in Settings. We quote separately for website changes, non-standard forms and other systems.' },
     support: { t: 'Support you can reach', d: 'We help with settings, answer questions and look into it when something does not work.', write: 'Write to us', call: 'Request a call' },
     journeyLabel: 'How it should work with your website',
     journey: ['Website request', 'Inquiry in LANKA', 'Handled by the team', 'Appointment'],
@@ -515,7 +515,7 @@ const en: LandingText = {
       { q: 'What happens when the AI replies run out?', a: 'Replies, drafts and the manager’s assistant pause until the new period or a pack top-up. The owner and the manager see a notice in the workspace, the staff Telegram chat gets a message, and staff keep handling the conversations.' },
       { q: 'Who helps with the setup, and whom do we contact later?', a: 'During the setup we configure the data, channels and AI information and show the team around. After that, email us or leave your number in the form: we help with settings and look into it when something does not work.' },
       { q: 'What are signals, and where do they arrive?', a: 'LANKA checks chosen measures on the latest data: the share of no-shows and cancellations, a drop in completed visits against the previous period, and requests waiting too long. When a measure passes its threshold, a signal goes to the staff Telegram chat and by email to the owner, at most once a day. Signals are turned on in the settings and are part of the Pro plan. A signal points where to look; it does not explain the cause.' },
-      { q: 'Can you connect our website or another system?', a: 'Yes. Start and Pro include forwarding copies from existing website forms, with installation instructions. The site needs server-side forwarding after acceptance or code that can receive the form’s success signal. We quote separately for website changes, non-standard forms and other systems.' },
+      { q: 'Can you connect our website or another system?', a: 'Yes. Start and Pro include forwarding copies from existing website forms. You can request connection in Settings. The site needs server-side forwarding after acceptance or code that can receive the form’s success signal. We quote separately for website changes, non-standard forms and other systems.' },
     ],
   },
   final: { title: 'See how LANKA could work for your clinic', text: 'Open the demo in a minute, or leave your number to discuss a connection.', support: 'After the setup you are not on your own: we help with settings and answer your questions.' },

@@ -205,6 +205,7 @@ model Clinic {
   leadEnabled              Boolean              @default(false)
   leadOrigins              Json                 @default("[]")
   leadFormConfig           Json?
+  websiteConnectionRequests ContactRequest[]
   leadSecretHash           String?              @unique
   leadSecretHint           String?
   // The first enquiry really accepted from a website form
@@ -618,17 +619,22 @@ model AuthToken {
   @@index([userId, type])
 }
 
-// A "call me back" request from the public site (the landing page form). It comes before a clinic exists, so it has no clinicId: it is the service's
-// own data, seen only by the service owner on /platform. Only what the visitor typed is kept (no address, no browser data).
+// The platform inbox holds public callbacks and authenticated requests to connect an existing clinic website.
 model ContactRequest {
   id        String    @id @default(cuid())
-  phone     String
+  phone     String?
   name      String?
   lang      String    @default("uk")
   createdAt DateTime  @default(now())
   handledAt DateTime?
+  clinicId      String?
+  clinic        Clinic?   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  email         String?
+  websiteOrigin String?
+  installedAt   DateTime?
 
   @@index([createdAt])
+  @@index([clinicId, createdAt])
 }
 
 // Attempt counters (sign-in, registration, password reset). In the database, not in memory: they work across several servers.
