@@ -1071,6 +1071,9 @@ model BillingPayment {
   amountMinor Int
   // The setup fee included in the amount (kopecks), for the receipt
   setupMinor  Int       @default(0)
+  // The verified buyer and setup coverage captured for the single-clinic Pro check.
+  oneTimeProBuyerId String?
+  oneTimeProIncludesSetup Boolean @default(false)
   // AI replies in a pack
   packReplies Int       @default(0)
   status      String    @default("PENDING")

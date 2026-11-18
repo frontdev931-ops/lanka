@@ -17,12 +17,12 @@ interface Overview {
   status: 'AWAITING_PAYMENT' | 'ACTIVE' | 'PAST_DUE' | 'LAPSED';
   paidUntil: string | null;
   graceUntil: string | null;
-  plans: { key: string; priceUah: number; totalUah: number; limits: { users: number; messagesPerMonth: number; aiRepliesPerMonth: number }; features: string[] }[];
+  plans: { key: string; priceUah: number; totalUah: number; limits: { users: number; messagesPerMonth: number; aiRepliesPerMonth: number }; features: string[]; oneTimePro?: { includesSetup: boolean } }[];
   setupPaid: boolean;
   setupUah: number | null;
   pack: { replies: number; priceUah: number; bought: number; cap: number; periodFrom: string; periodTo: string | null };
   ai: { included: number; used: number; purchased: number; remaining: number };
-  payments: { id: string; kind: string; plan: string | null; amountMinor: number; status: PaymentState; createdAt: string; paidAt: string | null; refundedMinor: number }[];
+  payments: { id: string; kind: string; plan: string | null; amountMinor: number; status: PaymentState; createdAt: string; paidAt: string | null; refundedMinor: number; oneTimePro: boolean }[];
 }
 const FEATURES = ['multi_channel', 'patient_agent', 'ai_assistant', 'ai_autoreply', 'advanced_analytics', 'daily_digest'] as const;
 
@@ -41,13 +41,16 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
     void load();
   }, [load]);
 
-  async function go(path: string, body?: object) {
+  async function go(path: string, body?: object, quotedMinor?: number) {
     setBusy(true);
     setError('');
     try {
       const payment = await api<BillingCheckout>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
-      if (payment.url) window.location.assign(payment.url);
-      else setPaymentId(payment.id);
+      setPaymentId(payment.id);
+      if (quotedMinor !== undefined && payment.amountMinor !== quotedMinor) {
+        setError(t('billing.quoteChanged'));
+        void load();
+      } else if (payment.url) window.location.assign(payment.url);
     } catch (e) {
       setError((e as Error).message);
       void load();
@@ -82,7 +85,7 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
           {o.plans.map((p) => (
             <section key={p.key} className={`rule-card${o.plan === p.key && active ? ' plan-current' : ''}`}>
               <b>{p.key === 'START' ? t('billing.start') : t('billing.pro')}</b>
-              <div className="stat-value" style={{ margin: '6px 0' }}>{p.priceUah.toLocaleString()} {t('billing.perMonth')}</div>
+              {p.oneTimePro ? <p>{t('billing.oneTimePro')}</p> : <div className="stat-value" style={{ margin: '6px 0' }}>{p.priceUah.toLocaleString()} {t('billing.perMonth')}</div>}
               <ul className="terms-list">
                 <li>{t('billing.limUsers', { n: p.limits.users })}</li>
                 <li>{t('billing.limMessages', { n: p.limits.messagesPerMonth.toLocaleString() })}</li>
@@ -93,9 +96,14 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
                 ))}
               </ul>
               <p>{t('billing.period', { from: fmtDate(o.nextPeriod.from), to: fmtDate(o.nextPeriod.to) })}</p>
-              {o.setupUah != null && <p>{t('billing.setupLine', { sum: o.setupUah.toLocaleString() })}</p>}
+              {p.oneTimePro ? (
+                <>
+                  {p.oneTimePro.includesSetup && <p>{t('billing.oneTimeProSetup')}</p>}
+                  <p>{t('billing.oneTimeProRenewal', { sum: p.priceUah.toLocaleString() })}</p>
+                </>
+              ) : o.setupUah != null && <p>{t('billing.setupLine', { sum: o.setupUah.toLocaleString() })}</p>}
               <p><strong>{t('billing.total', { sum: p.totalUah.toLocaleString() })}</strong></p>
-              {canBuy && <button className="btn btn-primary" disabled={busy || !o.configured} onClick={() => go('/billing/checkout', { plan: p.key })}>{t('billing.pay')}</button>}
+              {canBuy && <button className="btn btn-primary" disabled={busy || !o.configured} onClick={() => go('/billing/checkout', { plan: p.key }, p.totalUah * 100)}>{t('billing.pay')}</button>}
             </section>
           ))}
         </div>
@@ -137,7 +145,7 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
                 {o.payments.map((p) => (
                   <tr key={p.id}>
                     <td>{fmtDate(p.paidAt ?? p.createdAt)}</td>
-                    <td>{p.kind === 'AI_PACK' ? t('billing.kindPack') : t('billing.kindPlan', { plan: p.plan === 'PRO' ? t('billing.pro') : p.plan === 'START' ? t('billing.start') : (p.plan ?? '') })}</td>
+                    <td>{p.oneTimePro ? t('billing.oneTimePro') : p.kind === 'AI_PACK' ? t('billing.kindPack') : t('billing.kindPlan', { plan: p.plan === 'PRO' ? t('billing.pro') : p.plan === 'START' ? t('billing.start') : (p.plan ?? '') })}</td>
                     <td>{money(p.amountMinor)}</td>
                     <td>
                       <Badge tone={p.status === 'PAID' ? 'green' : p.status === 'PENDING' ? 'amber' : 'red'}>{t(`billing.st.${p.status}`)}</Badge>

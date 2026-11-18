@@ -9,6 +9,7 @@ import { Alert } from './ui';
 export interface BillingCheckout {
   id: string;
   url: string | null;
+  amountMinor?: number;
 }
 
 export type PaymentState = 'PENDING' | 'PAID' | 'FAILED' | 'EXPIRED' | 'REVERSED';
@@ -21,6 +22,7 @@ export interface BillingPayment extends BillingCheckout {
   periodTo: string | null;
   refundedMinor: number;
   review: boolean;
+  oneTimePro?: { includesSetup: boolean };
   diagnostic?: { invoiceId: string | null; reference: string; webhookReceivedAt: string | null; checkoutLinkUnavailable: boolean };
 }
 
@@ -61,7 +63,7 @@ export function BillingPaymentStatus({ path, onSettled }: { path: string; onSett
   const checkButton = <button className="btn" disabled={refreshing} onClick={refresh}>{t('billing.refreshPayment')}</button>;
   if (error) return <Alert tone="error">{error}<div className="toolbar" style={{ marginTop: 8 }}>{checkButton}</div></Alert>;
   if (!payment) return <Alert tone="info">{t('billing.checking')}</Alert>;
-  const { status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, review, url, diagnostic } = payment;
+  const { status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, review, url, diagnostic, oneTimePro } = payment;
   const label = review ? 'billing.review' : status === 'PAID' ? 'billing.confirmed' :
     status === 'EXPIRED' ? 'billing.st.EXPIRED' : status === 'FAILED' ? 'billing.st.FAILED' :
     status === 'REVERSED' ? 'billing.st.REVERSED' : 'billing.pendingPayment';
@@ -70,8 +72,9 @@ export function BillingPaymentStatus({ path, onSettled }: { path: string; onSett
   return (
     <Alert tone={status === 'PAID' && !refundedMinor ? 'success' : status === 'PENDING' && !review ? 'info' : 'warn'}>
       <strong role="status">{t(label)}</strong>
-      <div>{diagnostic ? `${t('billing.colSum')} · ${sum(amountMinor)} ${t('billing.uah')}` : t('billing.total', { sum: sum(amountMinor) })}</div>
+      <div>{diagnostic || oneTimePro ? `${t('billing.colSum')} · ${sum(amountMinor)} ${t('billing.uah')}` : t('billing.total', { sum: sum(amountMinor) })}</div>
       {setupMinor > 0 && <div>{t('billing.setupLine', { sum: sum(setupMinor) })}</div>}
+      {oneTimePro && <div>{t('billing.oneTimePro')}{oneTimePro.includesSetup && <> · {t('billing.oneTimeProSetup')}</>}</div>}
       {periodFrom && periodTo && <div>{t('billing.period', { from: fmtDate(periodFrom), to: fmtDate(periodTo) })}</div>}
       {refundedMinor > 0 && <div>{t('billing.refundedSum', { sum: sum(refundedMinor) })}</div>}
       {diagnostic && (

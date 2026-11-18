@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 export const PLATFORM_OWNER_EMAIL = 'hello@lankaclinic.app';
 
-async function platformOwner(prisma: PrismaService, userId: string) {
+async function platformOwner(prisma: Pick<PrismaService, 'user'>, userId: string) {
   const pinnedId = process.env.PLATFORM_OWNER_USER_ID?.trim();
   if (!pinnedId || userId !== pinnedId) return null;
   const admins = (process.env.PLATFORM_ADMIN_EMAILS ?? '').split(',').map((email) => email.trim().toLowerCase());
@@ -17,6 +17,15 @@ export async function isPlatformAdmin(prisma: PrismaService, userId: string): Pr
   return !!(await platformOwner(prisma, userId));
 }
 
+function platformRequires2fa() {
+  return process.env.PLATFORM_REQUIRE_2FA === 'true' || (process.env.NODE_ENV === 'production' && process.env.PLATFORM_REQUIRE_2FA !== 'false');
+}
+
+export async function canAccessPlatform(prisma: Pick<PrismaService, 'user'>, userId: string): Promise<boolean> {
+  const owner = await platformOwner(prisma, userId);
+  return !!owner && (!platformRequires2fa() || !!owner.totpEnabledAt);
+}
+
 @Injectable()
 export class PlatformAdminGuard implements CanActivate {
   constructor(private prisma: PrismaService) {}
@@ -25,8 +34,7 @@ export class PlatformAdminGuard implements CanActivate {
     const { user } = context.switchToHttp().getRequest<{ user?: AuthUser }>();
     const owner = user && await platformOwner(this.prisma, user.userId);
     if (!owner) throw new ForbiddenException();
-    const require2fa = process.env.PLATFORM_REQUIRE_2FA === 'true' || (process.env.NODE_ENV === 'production' && process.env.PLATFORM_REQUIRE_2FA !== 'false');
-    if (require2fa && !owner.totpEnabledAt) throw new ForbiddenException('platform_2fa_required');
+    if (platformRequires2fa() && !owner.totpEnabledAt) throw new ForbiddenException('platform_2fa_required');
     return true;
   }
 }

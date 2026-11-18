@@ -32,6 +32,16 @@ Use mocked API tests or an isolated staging deployment with a dedicated [officia
 
 The diagnostic verifies the payment transport and persistence. Subscription and AI-pack entitlement grants need separate checks.
 
+### One-time live Pro purchase for 112 Dental
+
+1. Sign in as `hello@lankaclinic.app` and select the existing 112 Dental clinic in the clinic switcher. Open `https://app.lankaclinic.app/backend/auth/me` in that session. Verify `clinicName`, `role: "OWNER"` and the account email, then copy the exact `clinicId`. The server matches the ID, the current owner membership and the existing verified, pinned platform account policy.
+2. Apply migration `20261118170000_one_time_pro_checkout` through the existing API deployment before using the updated web checkout. Set `BILLING_ONE_TIME_PRO_CLINIC_ID` to the verified clinic ID and `BILLING_ONE_TIME_PRO_ENABLED=true` in **Railway → API → Variables**. Existing acquiring and platform credentials are reused. The feature is off by default.
+3. In the 112 Dental clinic, open **Settings → Payment → Pro**. Check the **Pro · разова перевірка оплати** label, the 1 UAH total, the displayed period and the 3,990 UAH manual renewal price. When setup is unpaid, the quote shows it is included. Click **Оплатити** and check the amount and description on the mono page before making one payment.
+4. On return, confirm one paid Pro check for 1 UAH in payment history and match it in the mono cabinet. Check that Pro is active and paid through one calendar month after the later of payment confirmation and the previous paid-through date. Successful payment records any unpaid setup as covered. A previous setup date is retained. Confirm the next manual Pro quote is 3,990 UAH and check the clinic's agent and sending settings against their prior values.
+5. Set `BILLING_ONE_TIME_PRO_ENABLED=false` or remove it. The confirmed order permanently consumes the offer for the clinic, including after a refund. An invoice already issued retains its snapshot and continues through ordinary webhook and status processing.
+
+The order is stored as a regular `SUBSCRIPTION` for `PRO`, with the actual 100 kopecks, the authorized buyer snapshot and a flag for included setup. The ordinary subscription lock reuses the payable invoice for that buyer and keeps the slot reserved during an unknown provider result. A bank-reported expiry or a definite rejection before issuance can permit a retry.
+
 For the first authorized live payment, use the intended clinic and verify the price on both screens before paying.
 
 | Purchase | Expected charge |

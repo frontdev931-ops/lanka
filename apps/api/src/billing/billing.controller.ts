@@ -24,20 +24,20 @@ export class BillingController {
   @Get()
   @Roles(Role.OWNER, Role.MANAGER)
   overview(@CurrentUser() u: AuthUser) {
-    return this.billing.overview(u.clinicId);
+    return this.billing.overview(u);
   }
 
   @Get('payments/:id')
   @Roles(Role.OWNER, Role.MANAGER)
   payment(@CurrentUser() u: AuthUser, @Param('id') id: string) {
-    return this.billing.payment(id, { clinicId: u.clinicId, networkId: null }, u.role === Role.OWNER);
+    return this.billing.payment(id, { clinicId: u.clinicId, networkId: null }, u.role === Role.OWNER, u);
   }
 
   @Post('checkout')
   @Roles(Role.OWNER)
   @HttpCode(200)
   async checkout(@CurrentUser() u: AuthUser, @Body() dto: CheckoutDto) {
-    const r = await this.billing.checkout(u.clinicId, dto.plan);
+    const r = await this.billing.checkout(u, dto.plan);
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'billing.checkout', details: { plan: dto.plan } } });
     return r;
   }
