@@ -723,6 +723,8 @@ figure.mock { margin: 0; }
 .switch-hint { display: block; font-size: 13px; margin-top: 2px; }
 /* an expandable part of a settings card */
 .more-details > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--primary-dark); font-weight: 600; font-size: 14px; }
+.website-developer-guide { margin-top: 12px; }
+.website-developer-guide > summary { display: list-item; padding-block: 12px; }
 
 /* ---------- public landing (components/Landing.tsx) ---------- */
 .lp {

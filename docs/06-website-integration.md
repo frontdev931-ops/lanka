@@ -1,8 +1,10 @@
 # Website integration for existing forms
 
-LANKA receives a copy of enquiries accepted by the clinic's existing website forms. The site's validation, confirmation, email and other destinations stay in place. Set up intake in **Settings → Channels → Website** on Start or Pro. The plan includes this integration and installation instructions. Custom website work and non-standard forms are quoted separately.
+LANKA receives a copy of enquiries accepted by the clinic's existing website forms. The site's validation, confirmation, email and other destinations stay in place. Set up intake in **Settings → Channels → Website** on Start or Pro. Enabling intake prepares LANKA to receive enquiries. The website maintainer installs the integration separately. LANKA verifies the connection when it receives an enquiry. The plan includes this integration and installation instructions. Custom website work and non-standard forms are quoted separately.
 
 ## Choose a delivery method
+
+Use one delivery method per form. The **Developer instructions** section contains the settings for both options.
 
 ### Website server (recommended)
 
@@ -65,11 +67,12 @@ Read-only inspection of the [public home page](https://www.112dental.com.ua/) an
 
 The pilot selects only the footer form on the home page. It forwards the name, phone and optional message. The phone input is `type="tel"` even though its Elementor field name is `form_fields[email]`. The public script raises `submit_success` only on a successful AJAX response and does so before reset or redirect. This is the first usable integration method available from public inspection. The installed server-side actions and queue are not visible. Before choosing server delivery for this site, confirm an acceptance-only hook and independent queue on the installed stack.
 
-### Installation for owner review
+### Install on 112 Dental
 
-1. Deploy the LANKA web assets `lanka-forms.js` and `lanka-forms-elementor.js` and ensure the shared API and its website integration migration `20261117100000_website_integration` are available. If the clinic already uses a browser copy integration, coordinate its success-hook upgrade before replacing the script. Existing server integrations without a secret must migrate to authenticated intake.
-2. In the correct clinic in LANKA, open **Settings → Channels → Website**, enable form intake, and add `https://www.112dental.com.ua` to the allowed origins. Copy the public form key.
-3. In WordPress, open **Elementor → Custom Code → Add New**. Set the location to **`<body>` – End** and restrict the display condition to the home page. Paste the two tags below in order and replace `PUBLIC_FORM_KEY` with that clinic's public key. Keep the existing form widget and all its submission actions. [Elementor Custom Code](https://elementor.com/help/custom-code-pro/)
+Intake is enabled in the 112 Dental LANKA account and `https://www.112dental.com.ua` is on the allowed list. Verification is pending the first received enquiry.
+
+1. In the 112 Dental clinic in LANKA, open **Settings → Channels → Website** and copy the existing public form key from the browser integration instructions. The browser script shows this value in `data-form-key`.
+2. In WordPress, open **Elementor → Custom Code → Add New**. Set **Location** to **`<body>` – End** and **Display Conditions** to **Include → Singular → Front Page** (`https://www.112dental.com.ua/`). Paste the entire block below into one entry and replace `PUBLIC_FORM_KEY` with the existing public key. Publish the entry with that display condition and keep the form widget and its submission actions in place. [Elementor Custom Code](https://elementor.com/help/custom-code-pro/) · [Display conditions](https://elementor.com/help/conditions/)
 
 ```html
 <script defer src="https://app.lankaclinic.app/lanka-forms.js"
@@ -80,11 +83,11 @@ The pilot selects only the footer form on the home page. It forwards the name, p
         data-lanka-fields="name=form_fields[name]; phone=form_fields[email]; message=form_fields[message]"></script>
 ```
 
-4. Keep both LANKA script URLs intact and in order. In LiteSpeed Cache → Page Optimization → Tuning, put both URLs in **JS Excludes** if combining or rewriting them, and in **JS Deferred/Delayed Excludes** if LiteSpeed delays them. Clear the affected page cache after changes. If CSP is set, allow `https://app.lankaclinic.app` for scripts and connections. [LiteSpeed settings](https://docs.litespeedtech.com/lscache/lscwp/pageopt/)
-5. After the owner approves a live verification, submit one agreed test enquiry from the chosen form. Check its usual confirmation and destinations and one Website form entry in LANKA. The LANKA card records when an enquiry is accepted. That date alone does not verify the site's other destinations.
+3. Keep both LANKA script URLs intact and in order. In LiteSpeed Cache → Page Optimization → Tuning, put both URLs in **JS Excludes** if combining or rewriting them, and in **JS Deferred/Delayed Excludes** if LiteSpeed delays them. Clear the home page cache. If CSP is set, allow `https://app.lankaclinic.app` for scripts and connections. [LiteSpeed settings](https://docs.litespeedtech.com/lscache/lscwp/pageopt/)
+4. Submit one agreed test enquiry from the footer's existing **Консультація** form. Check the site's usual confirmation and email delivery, then look for one Website form entry in LANKA **Inquiries**. Refresh the status in **Settings → Channels → Website** to view the verification date after receipt.
 
 ### Removal
 
-Remove the Elementor Custom Code entry or both tags from the home-page template and clear the affected page cache. Remove the matching LiteSpeed and CSP entries if they are no longer used. In LANKA remove the 112 Dental browser origin only if no other form there uses it. Disable intake only if the clinic no longer uses it for any form. The website's original handler and historical enquiries remain available.
+In **Elementor → Custom Code**, move the LANKA entry to Draft or Trash and clear the home page cache. Remove matching LiteSpeed and CSP entries if they are no longer used. In LANKA remove the 112 Dental browser origin only if no other form there uses it. Disable intake only if the clinic no longer uses it for any form. The website's original handler and historical enquiries remain available.
 
 The site was inspected without submitting an enquiry. The [local fixture](../examples/clinic-website/README.md) reproduces the selected form's lifecycle. The production flow still requires the owner's authorized end-to-end verification.
