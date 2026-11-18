@@ -19,6 +19,7 @@ export function monoFixture() {
   const statuses = new Map<string, MonoStatus>();
   const statement = new Set<string>();
   let nextCreation: 'unknown' | 'rejected' | null = null;
+  let nextPageUrl: string | undefined;
   let lastTime = 0;
 
   function event(reference: string, amount: number, status: MonoStatus['status'] = 'success', rest: Partial<MonoStatus> = {}) {
@@ -40,6 +41,8 @@ export function monoFixture() {
         const body: InvoiceRequest = JSON.parse(String(init?.body));
         const mode = nextCreation;
         nextCreation = null;
+        const pageUrl = nextPageUrl;
+        nextPageUrl = undefined;
         if (mode === 'rejected') return Response.json({}, { status: 400 });
         const reference = body.merchantPaymInfo.reference;
         expect(invoices.has(reference)).toBe(false);
@@ -47,7 +50,7 @@ export function monoFixture() {
         const reported = event(reference, body.amount, 'created');
         statuses.set(reported.invoiceId, reported);
         if (mode === 'unknown') throw new DOMException('timed out', 'TimeoutError');
-        return Response.json({ invoiceId: reported.invoiceId, pageUrl: 'https://pay.mbnk.biz/' + reported.invoiceId });
+        return Response.json({ invoiceId: reported.invoiceId, pageUrl: pageUrl ?? 'https://pay.mbnk.biz/' + reported.invoiceId });
       }
       if (url.pathname === '/api/merchant/invoice/status') {
         const report = statuses.get(url.searchParams.get('invoiceId')!);
@@ -64,6 +67,7 @@ export function monoFixture() {
   return {
     invoices, install, event,
     failNext: (mode: 'unknown' | 'rejected') => { nextCreation = mode; },
+    pageUrlNext: (url: string) => { nextPageUrl = url; },
     report: (status: MonoStatus, inStatement = false) => {
       statuses.set(status.invoiceId, status);
       if (inStatement) statement.add(status.invoiceId);

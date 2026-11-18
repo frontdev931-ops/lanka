@@ -103,6 +103,44 @@ describe('mono diagnostic', () => {
     expect(await prisma.billingPayment.count({ where: { clinicId: owner.clinicId } })).toBe(0);
   });
 
+  it('opens and reuses the exact bank checkout URL — mono diagnostic navigation', async () => {
+    const pageUrl = 'https://pay.monobank.ua/checkout/opaque-link?source=acquiring%2Ftest';
+    const invoiceCount = mono.invoices.size;
+    mono.pageUrlNext(pageUrl);
+    const checkout = () => http().post(path + '/checkout').set(auth(owner.token)).expect(200);
+    const { body: first } = await checkout();
+    expect(first.url).toBe(pageUrl);
+    const invoice = await prisma.billingPayment.findUniqueOrThrow({ where: { id: first.id } });
+    expect(invoice.monoPageUrl).toBe(pageUrl);
+    expect(invoice.monoInvoiceId).not.toContain('opaque-link');
+    await checkout().expect(200, first);
+    await http().get(path + '/' + first.id).set(auth(owner.token)).expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ status: 'PENDING', url: pageUrl }));
+    expect(mono.invoices.size).toBe(invoiceCount + 1);
+
+    await prisma.billingPayment.update({ where: { id: first.id }, data: { monoExpiresAt: new Date(Date.now() - 1000) } });
+    await http().get(path + '/' + first.id).set(auth(owner.token)).expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ url: null }));
+  });
+
+  it.each([
+    'https://pay.monobank.ua.example.test/checkout',
+    'http://pay.monobank.ua/checkout',
+    'https://user@pay.monobank.ua/checkout',
+  ])('keeps the invoice for reconciliation without offering an unsafe URL %s — mono diagnostic navigation', async (pageUrl) => {
+    mono.pageUrlNext(pageUrl);
+    const invoiceCount = mono.invoices.size;
+    const checkout = () => http().post(path + '/checkout').set(auth(owner.token)).expect(200);
+    const { body: first } = await checkout();
+    expect(first.url).toBeNull();
+    const order = await prisma.billingPayment.findUniqueOrThrow({ where: { id: first.id } });
+    expect(order).toMatchObject({ monoInvoiceId: expect.any(String), monoPageUrl: null });
+    await checkout().expect(200, first);
+    await http().get(path + '/' + first.id).set(auth(owner.token)).expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ status: 'PENDING', url: null, diagnostic: { checkoutLinkUnavailable: true } }));
+    expect(mono.invoices.size).toBe(invoiceCount + 1);
+  });
+
   it('prices on the server, reuses concurrent checkout requests, and records a signed payment exactly once without entitlements', async () => {
     const before = await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } });
     const messages = mail.outbox.length;

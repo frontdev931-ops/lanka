@@ -200,7 +200,12 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     });
     return {
       ...this.paymentStatus(order, this.diagnosticEnabled()),
-      diagnostic: { invoiceId: order.monoInvoiceId, reference: order.orderId, webhookReceivedAt: webhook?.createdAt ?? null },
+      diagnostic: {
+        invoiceId: order.monoInvoiceId,
+        reference: order.orderId,
+        webhookReceivedAt: webhook?.createdAt ?? null,
+        checkoutLinkUnavailable: order.status === 'PENDING' && !order.monoPageUrl,
+      },
     };
   }
 

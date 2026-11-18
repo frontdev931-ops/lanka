@@ -26,7 +26,7 @@ Use mocked API tests or an isolated staging deployment with a dedicated [officia
 ### Live 1 UAH check for the platform owner
 
 1. Set `MONO_DIAGNOSTIC_ENABLED=true` on the **Railway API service** and apply the variable change. The option is off by default and uses the existing acquiring token. With the live token it charges real money.
-2. Sign in to `/platform` as the authorized platform owner. In **Перевірка оплати mono**, select **Перевірити оплату — 1 грн**. Check that the hosted invoice shows 1 UAH and **LANKA — перевірка оплати**, then make one payment.
+2. Sign in to `/platform` as the authorized platform owner. In **Перевірка оплати mono**, select **Перевірити оплату — 1 грн**. LANKA opens the checkout URL supplied by mono in the same tab. Use **Перейти до оплати — 1 грн** to reopen a payable invoice. This opens the stored URL without creating another invoice. Check that the hosted invoice shows 1 UAH and **LANKA — перевірка оплати**, then make one payment.
 3. On return, check **Оплату підтверджено** and **Підписаний вебхук отримано**. Match the invoice ID and amount in the mono cabinet. The bank's status API can confirm payment before the webhook arrives. The webhook timestamp appears only after a signature-verified success event matching the invoice, amount, and currency. The diagnostic is stored as `MONO_DIAGNOSTIC` in `BillingPayment`.
 4. Remove `MONO_DIAGNOSTIC_ENABLED` or set it to `false` and apply the API variable change. This removes the charge button and prevents new diagnostic invoices. Existing diagnostics and webhook evidence remain available to the platform owner in the same clinic session. The bank's validity period still applies to a previously issued checkout link.
 

@@ -13,7 +13,7 @@ export interface BillingCheckout {
 
 export type PaymentState = 'PENDING' | 'PAID' | 'FAILED' | 'EXPIRED' | 'REVERSED';
 
-interface Payment extends BillingCheckout {
+export interface BillingPayment extends BillingCheckout {
   status: PaymentState;
   amountMinor: number;
   setupMinor: number;
@@ -21,12 +21,12 @@ interface Payment extends BillingCheckout {
   periodTo: string | null;
   refundedMinor: number;
   review: boolean;
-  diagnostic?: { invoiceId: string | null; reference: string; webhookReceivedAt: string | null };
+  diagnostic?: { invoiceId: string | null; reference: string; webhookReceivedAt: string | null; checkoutLinkUnavailable: boolean };
 }
 
-export function BillingPaymentStatus({ path, onSettled }: { path: string; onSettled?: () => void }) {
+export function BillingPaymentStatus({ path, onSettled }: { path: string; onSettled?: (payment: BillingPayment) => void }) {
   const { t } = useI18n();
-  const [payment, setPayment] = useState<Payment | null>(null);
+  const [payment, setPayment] = useState<BillingPayment | null>(null);
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -37,12 +37,12 @@ export function BillingPaymentStatus({ path, onSettled }: { path: string; onSett
     let checks = 0;
     async function check() {
       try {
-        const result = await api<Payment>(path);
+        const result = await api<BillingPayment>(path, { cache: 'no-store' });
         if (cancelled) return;
         setPayment(result);
         setError('');
         if (result.status !== 'PENDING') {
-          onSettled?.();
+          onSettled?.(result);
           if (result.status === 'PAID' && !result.diagnostic) window.dispatchEvent(new Event('stomat:me-changed'));
         }
         const waitingForWebhook = result.status === 'PAID' && result.diagnostic && !result.diagnostic.webhookReceivedAt;
@@ -77,11 +77,12 @@ export function BillingPaymentStatus({ path, onSettled }: { path: string; onSett
       {diagnostic && (
         <>
           <div style={{ overflowWrap: 'anywhere' }}>{diagnostic.invoiceId ? t('pf.monoInvoice', { id: diagnostic.invoiceId }) : t('pf.monoReference', { id: diagnostic.reference })}</div>
+          {diagnostic.checkoutLinkUnavailable && <div>{t('pf.monoLinkUnavailable')}</div>}
           <div>{diagnostic.webhookReceivedAt ? t('pf.monoWebhookReceived', { date: fmtDateTime(diagnostic.webhookReceivedAt) }) : t('pf.monoWebhookWaiting')}</div>
         </>
       )}
       <div className="toolbar" style={{ marginTop: 8 }}>
-        {url && <a className="btn btn-primary" href={url}>{t('billing.resume')}</a>}
+        {url && <a className="btn btn-primary" href={url}>{t(diagnostic ? 'pf.monoContinue' : 'billing.resume')}</a>}
         {checkButton}
       </div>
     </Alert>

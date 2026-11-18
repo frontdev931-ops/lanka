@@ -3,6 +3,7 @@ import { createPublicKey, KeyObject, verify } from 'node:crypto';
 import { MONO_DIAGNOSTIC } from './mono-diagnostic';
 
 const BASE = 'https://api.monobank.ua';
+const CHECKOUT_ORIGINS = new Set(['https://pay.mbnk.biz', 'https://pay.monobank.ua']);
 export const MONO_CURRENCY = 980;
 export const INVOICE_VALIDITY = 15 * 60;
 const STATUSES = ['created', 'processing', 'hold', 'success', 'failure', 'reversed', 'expired'] as const;
@@ -68,10 +69,14 @@ export class MonoClient {
         reference: order.orderId, destination: setup ? description + ' + підключення' : description, basketOrder,
       },
     }) as { invoiceId?: string; pageUrl?: string } | null;
-    if (typeof response?.invoiceId !== 'string' || !response.invoiceId || typeof response.pageUrl !== 'string' || !URL.canParse(response.pageUrl)) throw new MonoRequestError();
-    const page = new URL(response.pageUrl);
-    if (page.origin !== 'https://pay.mbnk.biz' || page.username || page.password) throw new MonoRequestError();
-    return { invoiceId: response.invoiceId, pageUrl: page.href };
+    if (typeof response?.invoiceId !== 'string' || !response.invoiceId) throw new MonoRequestError();
+    const { invoiceId, pageUrl } = response;
+    if (typeof pageUrl === 'string' && URL.canParse(pageUrl)) {
+      const page = new URL(pageUrl);
+      if (CHECKOUT_ORIGINS.has(page.origin) && !page.username && !page.password) return { invoiceId, pageUrl };
+    }
+    // An unusable URL is not a failed invoice. Keep its ID for reconciliation.
+    return { invoiceId, pageUrl: null };
   }
 
   async status(invoiceId: string) {
