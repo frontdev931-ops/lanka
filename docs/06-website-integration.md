@@ -4,7 +4,7 @@ LANKA receives a copy of enquiries accepted by the clinic's existing website for
 
 ## Choose a delivery method
 
-Use one delivery method per form. The **Developer instructions** section contains the settings for both options.
+Use one delivery method per form. **Website installation code** provides a complete browser snippet when an installer has saved the form configuration for this clinic. **Technical settings** contains that configuration, key management and the server alternative.
 
 ### Website server (recommended)
 
@@ -28,7 +28,7 @@ The endpoint also accepts `application/x-www-form-urlencoded` and an ID in `subm
 
 ### Browser adapter
 
-Use this option when server integration is unavailable and the existing form has a reliable success hook. Add the exact HTTPS origin where the form runs to the clinic's allowed origins. Use the public key from Settings → Channels → Website in the script tag. If the site uses CSP, allow the LANKA origin in `script-src` and `connect-src`.
+Use this option when server integration is unavailable and the existing form has a reliable success hook. Add the exact HTTPS origin where the form runs to the clinic's allowed origins. For a configured Elementor form, copy the whole block from **Website installation code**. LANKA uses the current public key and the web origin of its deployment. For custom integrations, the public key is also available in **Technical settings**. If the site uses CSP, allow the LANKA origin in `script-src` and `connect-src`.
 
 ```html
 <script src="https://app.lankaclinic.app/lanka-forms.js" data-form-key="PUBLIC_FORM_KEY" defer></script>
@@ -71,18 +71,22 @@ The pilot selects only the footer form on the home page. It forwards the name, p
 
 Intake is enabled in the 112 Dental LANKA account and `https://www.112dental.com.ua` is on the allowed list. Verification is pending the first received enquiry.
 
-1. In the 112 Dental clinic in LANKA, open **Settings → Channels → Website** and copy the existing public form key from the browser integration instructions. The browser script shows this value in `data-form-key`.
-2. In WordPress, open **Elementor → Custom Code → Add New**. Set **Location** to **`<body>` – End** and **Display Conditions** to **Include → Singular → Front Page** (`https://www.112dental.com.ua/`). Paste the entire block below into one entry and replace `PUBLIC_FORM_KEY` with the existing public key. Publish the entry with that display condition and keep the form widget and its submission actions in place. [Elementor Custom Code](https://elementor.com/help/custom-code-pro/) · [Display conditions](https://elementor.com/help/conditions/)
+1. After the LANKA update and migration `20261118103755_lead_form_config` are deployed, open **Settings → Channels → Website → Technical settings** in the 112 Dental clinic. Paste this JSON into **Elementor form configuration** and save it. The page must belong to an allowed origin. The configuration is saved only for the current clinic.
 
-```html
-<script defer src="https://app.lankaclinic.app/lanka-forms.js"
-        data-form-key="PUBLIC_FORM_KEY"></script>
-<script defer src="https://app.lankaclinic.app/lanka-forms-elementor.js"
-        data-form-selector='body.home [data-id="4229aa4d"] form.elementor-form'
-        data-form-id="4229aa4d"
-        data-lanka-fields="name=form_fields[name]; phone=form_fields[email]; message=form_fields[message]"></script>
+```json
+{
+  "page": "https://www.112dental.com.ua/",
+  "formId": "4229aa4d",
+  "selector": "body.home [data-id=\"4229aa4d\"] form.elementor-form",
+  "fields": {
+    "name": "form_fields[name]",
+    "phone": "form_fields[email]",
+    "message": "form_fields[message]"
+  }
+}
 ```
 
+2. Use **Copy code** under **Website installation code**. In WordPress, open **Elementor → Custom Code → Add New** and paste the entire block into one entry. Set **Location** to **`<body>` – End** and **Display Conditions** to **Include → Singular → Front Page**. Publish the entry and keep the form widget and its submission actions in place. [Elementor Custom Code](https://elementor.com/help/custom-code-pro/) · [Display conditions](https://elementor.com/help/conditions/)
 3. Keep both LANKA script URLs intact and in order. In LiteSpeed Cache → Page Optimization → Tuning, put both URLs in **JS Excludes** if combining or rewriting them, and in **JS Deferred/Delayed Excludes** if LiteSpeed delays them. Clear the home page cache. If CSP is set, allow `https://app.lankaclinic.app` for scripts and connections. [LiteSpeed settings](https://docs.litespeedtech.com/lscache/lscwp/pageopt/)
 4. Submit one agreed test enquiry from the footer's existing **Консультація** form. Check the site's usual confirmation and email delivery, then look for one Website form entry in LANKA **Inquiries**. Refresh the status in **Settings → Channels → Website** to view the verification date after receipt.
 

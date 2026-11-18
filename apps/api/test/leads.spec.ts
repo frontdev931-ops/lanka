@@ -134,6 +134,42 @@ describe('заявки з сайту', () => {
   });
 });
 
+describe('код встановлення форм', () => {
+  it('зберігає конфігурацію лише в поточній клініці та додає її чинний публічний ключ', async () => {
+    const origin = 'https://www.112dental.com.ua';
+    const a = await enabled([origin]);
+    const b = await enabled([origin]);
+    const formConfig = {
+      page: `${origin}/`,
+      formId: '4229aa4d',
+      selector: 'body.home [data-id="4229aa4d"] form.elementor-form',
+      fields: { name: 'form_fields[name]', phone: 'form_fields[email]', message: 'form_fields[message]' },
+    };
+    const get = (token: string) => http().get('/automations/leads').set(auth(token)).expect(200);
+    const patch = (body: object) => http().patch('/automations/leads').set(auth(a.token)).send(body);
+    expect((await get(a.token)).body).toMatchObject({ formConfig: null, snippet: null });
+    await patch({ formConfig: { ...formConfig, page: 'https://foreign.example/' } }).expect(400);
+    await patch({ formConfig: { ...formConfig, fields: { name: 'form_fields[name]' } } }).expect(400);
+    await patch({ formConfig }).expect(200);
+    const saved = (await get(a.token)).body;
+    const site = new URL(a.url).origin;
+    expect(saved.formConfig).toEqual(formConfig);
+    expect(saved.snippet).toBe([
+      `<script defer src="${site}/lanka-forms.js"`,
+      `        data-form-key="${a.key}"></script>`,
+      `<script defer src="${site}/lanka-forms-elementor.js"`,
+      '        data-form-selector="body.home [data-id=&quot;4229aa4d&quot;] form.elementor-form"',
+      '        data-form-id="4229aa4d"',
+      '        data-lanka-fields="name=form_fields[name]; phone=form_fields[email]; message=form_fields[message]"></script>',
+    ].join('\n'));
+    expect((await get(b.token)).body).toMatchObject({ formKey: b.key, formConfig: null, snippet: null });
+
+    expect((await patch({ origins: [] }).expect(200)).body).toMatchObject({ formKey: a.key, formConfig, snippet: null });
+    expect((await patch({ origins: [origin] }).expect(200)).body.snippet).toBe(saved.snippet);
+    expect((await patch({ formConfig: null }).expect(200)).body).toMatchObject({ formKey: a.key, formConfig: null, snippet: null });
+  });
+});
+
 describe('інтеграція форм сайту (2026-11-17)', () => {
   const server = (secret: string | null, body: object, idem?: string) => {
     const r = http().post('/leads/v1/enquiries');
@@ -155,8 +191,8 @@ describe('інтеграція форм сайту (2026-11-17)', () => {
     const st = (await http().get('/automations/leads').set(auth(e.token)).expect(200)).body;
     expect(JSON.stringify(st)).not.toContain(secret);
     expect(st.secret).toEqual({ set: true, hint: secret.slice(-4) });
-    expect(st.snippet).toContain(`data-form-key="${e.key}"`);
-    expect(st.snippet).not.toContain('lsk_');
+    expect(st.formKey).toBe(e.key);
+    expect(st.snippet).toBeNull();
     expect(st.verifiedAt).toBeNull();
     const c = await prisma.clinic.findUniqueOrThrow({ where: { id: e.clinicId }, select: { leadSecretHash: true } });
     expect(c.leadSecretHash).not.toContain(secret);

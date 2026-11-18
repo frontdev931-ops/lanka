@@ -151,6 +151,16 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Неверный секретный ключ для заявок',
     en: 'Wrong secret key for enquiries',
   },
+  bad_lead_form_config: {
+    uk: 'Перевірте адресу сторінки, ідентифікатор форми, селектор і поля. Потрібне поле телефону або електронної пошти.',
+    ru: 'Проверьте адрес страницы, идентификатор формы, селектор и поля. Нужно поле телефона или электронной почты.',
+    en: 'Check the page URL, form ID, selector and fields. A phone or email field is required.',
+  },
+  bad_lead_form_origin: {
+    uk: 'Спочатку збережіть адресу цього сайту в списку дозволених.',
+    ru: 'Сначала сохраните адрес этого сайта в списке разрешённых.',
+    en: 'Save this site in the allowed addresses first.',
+  },
   inquiry_empty: {
     uk: 'Вкажіть хоча б телефон, ім’я або примітку',
     ru: 'Укажите хотя бы телефон, имя или заметку',

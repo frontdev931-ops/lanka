@@ -204,6 +204,7 @@ model Clinic {
   leadKey                  String?              @unique
   leadEnabled              Boolean              @default(false)
   leadOrigins              Json                 @default("[]")
+  leadFormConfig           Json?
   leadSecretHash           String?              @unique
   leadSecretHint           String?
   // The first enquiry really accepted from a website form

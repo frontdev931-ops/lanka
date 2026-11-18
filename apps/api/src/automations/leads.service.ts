@@ -15,6 +15,7 @@ import { metaSignatureOk } from './meta-chat.service';
 import { FB_MODE } from './meta-login.service';
 import { StaffNotifierService } from './staff-notifier.service';
 import { WebChatService } from './webchat.service';
+import { FORM_ID, leadInstallationCode, readLeadFormConfig } from './lead-form-config';
 
 const HOUR = 3_600_000;
 // The same phone from the same channel inside this time is the same person pressing the button twice
@@ -56,7 +57,6 @@ const FIELDS = {
 const LIMITS: Record<keyof typeof FIELDS, number> = { name: 120, phone: 40, email: 190, message: 1000, service: 120, page: 1000, referrer: 1000, formId: 80, submissionId: 100, utmSource: 80, utmMedium: 80, utmCampaign: 120 };
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
 const SUBMISSION = /^[A-Za-z0-9._:-]{8,100}$/;
-const FORM_ID = /^[\p{L}\p{N} ._:/-]{1,80}$/u;
 
 // A page address as it may be kept: the site and the path only. The query and the fragment are dropped (they may carry tokens, e-mails, session ids);
 // the campaign marks are read from it separately. Not http(s): nothing.
@@ -119,17 +119,20 @@ export class LeadsService {
 
   // The owner and the manager see the settings; only the owner sees whether a server secret exists and may create or revoke it (it is never shown again)
   async settings(clinicId: string) {
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { leadKey: true, leadEnabled: true, leadOrigins: true, leadSecretHint: true, leadSecretHash: true, leadVerifiedAt: true } });
-    const site = (process.env.WEB_ORIGIN ?? '').replace(/\/$/, '');
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { leadKey: true, leadEnabled: true, leadOrigins: true, leadFormConfig: true, leadSecretHint: true, leadSecretHash: true, leadVerifiedAt: true } });
+    const site = (process.env.WEB_ORIGIN ?? 'http://localhost:3000').replace(/\/$/, '');
+    const origins = (c.leadOrigins as string[]) ?? [];
+    const formConfig = readLeadFormConfig(c.leadFormConfig);
     const last = await this.prisma.inquiry.findFirst({ where: { clinicId, via: 'WEBSITE_FORM' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } });
     return {
       enabled: c.leadEnabled,
-      origins: (c.leadOrigins as string[]) ?? [],
+      origins,
       formKey: c.leadKey,
       // the browser address (the public form key: it works only from the listed sites) and the server address (needs the secret)
       url: c.leadKey ? `${site}/backend/leads/${c.leadKey}` : null,
       serverUrl: `${site}/backend/leads/v1/enquiries`,
-      snippet: c.leadKey ? `<script src="${site}/lanka-forms.js" data-form-key="${c.leadKey}" async></script>` : null,
+      formConfig,
+      snippet: c.leadKey && formConfig && origins.includes(new URL(formConfig.page).origin) ? leadInstallationCode(site, c.leadKey, formConfig) : null,
       secret: { set: !!c.leadSecretHash, hint: c.leadSecretHint },
       // configured is not verified: verified = a real enquiry was accepted from a website form
       verifiedAt: c.leadVerifiedAt,
@@ -137,14 +140,24 @@ export class LeadsService {
     };
   }
 
-  async update(clinicId: string, d: { enabled?: boolean; origins?: string[] }) {
-    const cur = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { leadKey: true, isDemo: true } });
+  async update(clinicId: string, d: { enabled?: boolean; origins?: string[]; formConfig?: Record<string, unknown> | null }) {
+    const cur = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { leadKey: true, leadOrigins: true, isDemo: true } });
     if (cur.isDemo) throw new ForbiddenException('demo_restricted');
-    const data: { leadEnabled?: boolean; leadOrigins?: string[]; leadKey?: string } = {};
+    const data: Prisma.ClinicUpdateInput = {};
+    let origins = (cur.leadOrigins as string[]) ?? [];
     if (d.origins !== undefined) {
       const list = [...new Set(d.origins.map((o) => WebChatService.normalizeOrigin(o)))];
       if (list.length > 10 || list.some((o) => !o)) throw new BadRequestException('bad_widget_origin');
-      data.leadOrigins = list as string[];
+      origins = list as string[];
+      data.leadOrigins = origins;
+    }
+    if (d.formConfig === null) {
+      data.leadFormConfig = Prisma.DbNull;
+    } else if (d.formConfig !== undefined) {
+      const config = readLeadFormConfig(d.formConfig);
+      if (!config) throw new BadRequestException('bad_lead_form_config');
+      if (!origins.includes(new URL(config.page).origin)) throw new BadRequestException('bad_lead_form_origin');
+      data.leadFormConfig = { ...config };
     }
     if (d.enabled !== undefined) {
       data.leadEnabled = d.enabled;

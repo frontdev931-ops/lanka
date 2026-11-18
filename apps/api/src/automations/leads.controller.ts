@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Options, Param, Patch, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { IsArray, IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
 import type { Request, Response } from 'express';
 import { AuthGuard, AuthUser, CurrentUser, Roles } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,6 +9,7 @@ import { LeadsService } from './leads.service';
 class SettingsDto {
   @IsOptional() @IsBoolean() enabled?: boolean;
   @IsOptional() @IsArray() @IsString({ each: true }) @MaxLength(200, { each: true }) origins?: string[];
+  @IsOptional() @IsObject() formConfig?: Record<string, unknown> | null;
 }
 
 // Settings of the lead intake: the owner and the manager
@@ -30,7 +31,7 @@ export class LeadsSettingsController {
   @Roles(Role.OWNER, Role.MANAGER)
   async patch(@CurrentUser() u: AuthUser, @Body() dto: SettingsDto) {
     const r = await this.leads.update(u.clinicId, dto);
-    await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'leads.settings', details: { enabled: dto.enabled, origins: dto.origins?.length } } });
+    await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'leads.settings', details: { enabled: dto.enabled, origins: dto.origins?.length, formConfigured: dto.formConfig === undefined ? undefined : dto.formConfig !== null } } });
     return r;
   }
 

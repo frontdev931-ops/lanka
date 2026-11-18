@@ -13,22 +13,14 @@ interface Settings {
   formKey: string | null;
   serverUrl: string;
   snippet: string | null;
+  formConfig: { page: string; selector: string; formId: string; fields: Record<string, string> } | null;
   secret: { set: boolean; hint: string | null };
   verifiedAt: string | null;
   lastReceivedAt: string | null;
   canManageSecret?: boolean;
 }
 
-const FORM_EXAMPLE = `const forward = LankaForms.capture(form, 'contact',
-  'name=your-name; phone=your-phone; email=your-email; message=your-message');`;
-const SERVER_EXAMPLE = (url: string) => `POST ${url}
-Authorization: Bearer <secret>
-Idempotency-Key: <your form entry id>
-Content-Type: application/json
-
-{"name":"…","phone":"…","email":"…","message":"…","service":"…",
- "form_id":"contact","page_url":"https://…","referrer":"https://…",
- "utm_source":"…","utm_medium":"…","utm_campaign":"…"}`;
+const configText = (config: Settings['formConfig']) => config ? JSON.stringify(config, null, 2) : '';
 
 // Intake can be on before any form has been installed. Verification comes from the first received enquiry.
 export function LeadsCard() {
@@ -36,7 +28,9 @@ export function LeadsCard() {
   const { ask, dialog } = useConfirm();
   const [s, setS] = useState<Settings | null>(null);
   const [origins, setOrigins] = useState('');
+  const [configuration, setConfiguration] = useState('');
   const [secret, setSecret] = useState('');
+  const [copyStatus, setCopyStatus] = useState<'copied' | 'copyFailed' | null>(null);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
@@ -47,6 +41,7 @@ export function LeadsCard() {
         .then((r) => {
           setS(r);
           setOrigins(r.origins.join('\n'));
+          setConfiguration(configText(r.formConfig));
         })
         .catch((e) => setError((e as Error).message)),
     [],
@@ -59,6 +54,7 @@ export function LeadsCard() {
     setBusy(true);
     setError('');
     setInfo('');
+    setCopyStatus(null);
     try {
       const r = await api<T>(path, { method, body: body ? JSON.stringify(body) : undefined });
       const next = pick ? pick(r) : (r as unknown as Settings);
@@ -72,9 +68,34 @@ export function LeadsCard() {
       setBusy(false);
     }
   }
+
+  async function saveConfiguration() {
+    let formConfig: unknown;
+    try {
+      formConfig = configuration.trim() ? JSON.parse(configuration) : null;
+    } catch {
+      setInfo('');
+      setError(t('ld.formConfigInvalid'));
+      return;
+    }
+    const next = await call('/automations/leads', 'PATCH', { formConfig }, t('common.saved'));
+    if (next) setConfiguration(configText(next.formConfig));
+  }
+
+  async function copyCode(code: string) {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('copyFailed');
+    }
+  }
   if (!s) return error ? <Alert tone="error">{error}</Alert> : null;
   const list = () => origins.split(/[\s,]+/).filter(Boolean);
   const intake = <Badge tone={s.enabled ? 'green' : 'gray'}>{t(s.enabled ? 'ld.ready' : 'ld.intakeOff')}</Badge>;
+  const receivedAt = s.lastReceivedAt ?? s.verifiedAt;
+  const page = s.formConfig?.page;
+  const code = s.snippet;
 
   return (
     <Card title={t('ld.title')} actions={intake}>
@@ -93,33 +114,70 @@ export function LeadsCard() {
       </div>
 
       <section className="rule-card" style={{ marginTop: 14 }}>
+        <h3>{t('ld.installCode')}</h3>
+        {code && page ? (
+          <>
+            <p style={{ margin: '8px 0' }}>{t('ld.installHint')}</p>
+            <pre className="code-sample" tabIndex={0} aria-label={t('ld.installCode')}><code>{code}</code></pre>
+            <div className="toolbar" style={{ marginTop: 8 }}>
+              <button className="btn btn-primary" disabled={busy} onClick={() => copyCode(code)}>{t('ld.copyCode')}</button>
+              {copyStatus && <span className="muted" role="status">{t(`ld.${copyStatus}`)}</span>}
+            </div>
+            <p className="muted" style={{ margin: '8px 0 0', overflowWrap: 'anywhere' }}>
+              {t(new URL(page).pathname === '/' ? 'ld.elementorHome' : 'ld.elementorPage', { page })}
+            </p>
+          </>
+        ) : <p className="muted" style={{ margin: '8px 0 0' }}>{t('ld.codeNotReady')}</p>}
+      </section>
+
+      <section className="rule-card" style={{ marginTop: 14 }}>
         <div className="toolbar spread">
           <strong>{t('ld.verification')}</strong>
-          <Badge tone={s.verifiedAt ? 'green' : 'amber'}>{t(s.verifiedAt ? 'site.verified' : 'ld.unverified')}</Badge>
+          <span role="status"><Badge tone={receivedAt ? 'green' : 'amber'}>{t(receivedAt ? 'ld.received' : 'ld.awaiting')}</Badge></span>
         </div>
-        <p className="muted" aria-live="polite" style={{ margin: '8px 0 0' }}>
-          {s.verifiedAt
-            ? s.lastReceivedAt
-              ? t('ld.verifiedAt', { d: fmtDateTime(s.verifiedAt), last: fmtDateTime(s.lastReceivedAt) })
-              : t('ld.firstReceivedAt', { d: fmtDateTime(s.verifiedAt) })
-            : t('ld.notVerified')}
-        </p>
-        {s.enabled && !s.verifiedAt && (
-          <>
-            <p style={{ margin: '8px 0' }}>{t('ld.nextStep')}</p>
-            <button className="btn" disabled={busy} onClick={() => call('/automations/leads', 'GET', undefined, '')}>{t('ld.refreshStatus')}</button>
-          </>
+        {receivedAt ? (
+          <p className="muted" style={{ margin: '8px 0 0' }}>{t('ld.receivedAt', { d: fmtDateTime(receivedAt) })}</p>
+        ) : s.enabled && <p style={{ margin: '8px 0 0' }}>{t('ld.testForm')}</p>}
+        {(s.enabled || s.lastReceivedAt) && (
+          <div className="toolbar" style={{ marginTop: 8 }}>
+            {s.enabled && <button className="btn" disabled={busy} onClick={() => call('/automations/leads', 'GET', undefined, '')}>{t('ld.refreshStatus')}</button>}
+            {s.lastReceivedAt && <a className="btn" href="/inquiries">{t('ld.inquiries')}</a>}
+          </div>
         )}
       </section>
 
       <details className="more-details website-developer-guide">
-        <summary>{t('ld.developerGuide')}</summary>
-        <p className="rule" style={{ margin: 0 }}>{t('ld.developerMethods')}</p>
+        <summary>{t('ld.technicalSettings')}</summary>
+        <section className="rule-card">
+          <label className="field">
+            <span>{t('ld.formConfig')}</span>
+            <textarea className="input" rows={6} spellCheck={false} value={configuration} onChange={(e) => setConfiguration(e.target.value)} />
+          </label>
+          <p className="muted" style={{ margin: '4px 0 8px' }}>{t('ld.formConfigHint')}</p>
+          {s.formKey && (
+            <label className="field">
+              <span>{t('ld.publicKey')}</span>
+              <input className="input" readOnly value={s.formKey} onFocus={(e) => e.currentTarget.select()} />
+            </label>
+          )}
+          <div className="toolbar">
+            <button className="btn" disabled={busy || configuration === configText(s.formConfig)} onClick={saveConfiguration}>{t('ld.saveFormConfig')}</button>
+            {s.formKey && (
+              <button
+                className="btn"
+                disabled={busy}
+                onClick={async () => (await ask(t('ld.rotateConfirm'), { danger: true, confirmLabel: t('wc.rotate') })) && call('/automations/leads/rotate-key', 'POST', undefined, t('ld.rotated'))}
+              >
+                {t('ld.rotatePublicKey')}
+              </button>
+            )}
+          </div>
+        </section>
         {s.enabled && (
           <section className="rule-card" style={{ marginTop: 14 }}>
             <b>{t('ld.serverTitle')}</b>
             <p className="muted" style={{ fontSize: 13, margin: '4px 0' }}>{t('ld.serverHint')}</p>
-            <pre className="code-sample">{SERVER_EXAMPLE(s.serverUrl)}</pre>
+            <input className="input" style={{ width: '100%' }} readOnly value={s.serverUrl} onFocus={(e) => e.currentTarget.select()} aria-label={t('ld.serverUrl')} />
             <p style={{ margin: '8px 0' }}>{s.secret.set ? t('ld.secretSet', { hint: s.secret.hint ?? '' }) : t('ld.secretNone')}</p>
             {secret && (
               <>
@@ -159,33 +217,6 @@ export function LeadsCard() {
             )}
           </section>
         )}
-        {s.snippet && (
-          <section className="rule-card" style={{ marginTop: 14 }}>
-            <b>{t('ld.browserTitle')}</b>
-            <p className="muted" style={{ fontSize: 13, margin: '4px 0' }}>{t('ld.browserHint')}</p>
-            {s.formKey && (
-              <label className="field">
-                <span>{t('ld.publicKey')}</span>
-                <input className="input" readOnly value={s.formKey} onFocus={(e) => e.currentTarget.select()} />
-              </label>
-            )}
-            <input className="input" readOnly value={s.snippet} onFocus={(e) => e.currentTarget.select()} aria-label={t('ld.browserTitle')} />
-            <p className="muted" style={{ fontSize: 13, margin: '8px 0 4px' }}>{t('ld.markForm')}</p>
-            <pre className="code-sample">{FORM_EXAMPLE}</pre>
-            <p className="muted" style={{ fontSize: 13, margin: '4px 0' }}>{t('ld.copyHint')}</p>
-            <div className="toolbar" style={{ marginTop: 8 }}>
-              <button
-                className="btn btn-sm"
-                disabled={busy}
-                onClick={async () => (await ask(t('ld.rotateConfirm'), { danger: true, confirmLabel: t('wc.rotate') })) && call('/automations/leads/rotate-key', 'POST', undefined, t('ld.rotated'))}
-              >
-                {t('wc.rotate')}
-              </button>
-            </div>
-          </section>
-        )}
-        <p className="muted" style={{ fontSize: 13 }}>{t('ld.fields')}</p>
-        <p className="muted" style={{ fontSize: 13 }}>{t('ld.intro')}</p>
       </details>
     </Card>
   );
