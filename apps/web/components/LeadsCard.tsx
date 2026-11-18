@@ -89,7 +89,8 @@ export function LeadsCard() {
   const page = s.formPage;
   const code = s.snippet;
   const prepared = !!code && !!page;
-  const canRequest = s.canRequest && !s.request && !prepared && !receivedAt;
+  const openRequest = s.request && !s.request.handledAt;
+  const canRequest = s.canRequest && !openRequest;
   const displayedWebsite = s.request?.websiteOrigin ?? page ?? s.origins[0];
 
   return (

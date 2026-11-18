@@ -30,7 +30,8 @@ export class LeadsSettingsController {
   @Get()
   @Roles(Role.OWNER, Role.MANAGER)
   async get(@CurrentUser() u: AuthUser) {
-    return { ...(await this.leads.clinicSettings(u.clinicId)), canManageSecret: u.role === Role.OWNER };
+    const owner = u.role === Role.OWNER;
+    return { ...(await this.leads.clinicSettings(u.clinicId)), canManageSecret: owner, canRequest: owner };
   }
 
   @Patch()

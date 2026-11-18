@@ -161,24 +161,30 @@ describe('підключення сайту командою LANKA', () => {
   });
 
   it('зберігає один відкритий запит при одночасних кліках і збої листа та показує його власнику платформи', async () => {
-    const a = await clinic();
+    const legacyOrigin = 'https://www.112dental.com.ua';
+    const a = await enabled([legacyOrigin]);
     const b = await clinic();
     const invite = (await http().post('/team/invitations').set(auth(a.token)).send({ email: `manager-${rnd()}@example.com`, role: 'MANAGER' }).expect(201)).body.link as string;
     const manager = (await http().post(`/invites/${invite.split('/').pop()}/accept`).send({ name: 'Менеджер', password: PASSWORD }).expect(201)).body.accessToken;
+    const legacySettings = { enabled: true, origins: [legacyOrigin], formKey: a.key, snippet: null, verifiedAt: null, lastReceivedAt: null };
+    expect((await clinicSettings(a.token)).body).toMatchObject({ ...legacySettings, canRequest: true, request: null });
+    expect((await clinicSettings(manager)).body.canRequest).toBe(false);
     await requestConnection(manager).expect(403);
     await requestConnection(a.token, 'https://user:password@clinic.example').expect(400);
     const mail = jest.spyOn(app.get(MailService), 'send').mockRejectedValue(new Error('Synthetic mail failure'));
     try {
-      const results = await Promise.all(Array.from({ length: 4 }, () => requestConnection(a.token).expect(200)));
+      const results = await Promise.all(Array.from({ length: 4 }, () => requestConnection(a.token, legacyOrigin).expect(200)));
       const id = results[0].body.id;
       expect(new Set(results.map((r) => r.body.id))).toEqual(new Set([id]));
       expect(mail).toHaveBeenCalledTimes(1);
       expect(await prisma.contactRequest.count({ where: { clinicId: a.clinicId, handledAt: null } })).toBe(1);
-      expect((await clinicSettings(a.token)).body.request).toMatchObject({ id, websiteOrigin: origin, installedAt: null, handledAt: null });
+      expect((await clinicSettings(a.token)).body).toMatchObject({
+        ...legacySettings, canRequest: true, request: { id, websiteOrigin: legacyOrigin, installedAt: null, handledAt: null },
+      });
       expect((await clinicSettings(b.token)).body.request).toBeNull();
       await http().get('/platform/website-requests').set(auth(a.token)).expect(403);
       const queue = (await http().get('/platform/website-requests').set(auth(platform.token)).expect(200)).body;
-      expect(queue).toEqual(expect.arrayContaining([expect.objectContaining({ id, clinicId: a.clinicId, websiteOrigin: origin, email: expect.stringMatching(/@example\.com$/) })]));
+      expect(queue).toEqual(expect.arrayContaining([expect.objectContaining({ id, clinicId: a.clinicId, websiteOrigin: legacyOrigin, email: expect.stringMatching(/@example\.com$/) })]));
       const publicCallbacks = (await http().get('/platform/contact-requests').set(auth(platform.token)).expect(200)).body;
       expect(publicCallbacks.map((r: { id: string }) => r.id)).not.toContain(id);
       await http().patch(`/platform/contact-requests/${id}`).set(auth(platform.token)).send({ handled: true }).expect(404);
