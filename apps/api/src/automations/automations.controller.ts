@@ -256,9 +256,18 @@ export class MessagesController {
 
   @Get()
   @Roles(...READERS)
-  list(@CurrentUser() u: AuthUser, @Query('status') status?: string, @Query('page') page?: string) {
-    const s = ['PENDING_APPROVAL', 'APPROVED', 'SENT', 'FAILED', 'CANCELLED', 'EXPIRED'].includes(status ?? '') ? (status as string) : 'ALL';
-    return this.outbox.list(u.clinicId, s, Number.parseInt(page ?? '1', 10) || 1);
+  list(@CurrentUser() u: AuthUser, @Query('status') status?: string, @Query('page') page?: string, @Query('channel') channel?: string) {
+    const s = ['PENDING_APPROVAL', 'APPROVED', 'SENT', 'FAILED', 'CANCELLED', 'EXPIRED', 'UNKNOWN'].includes(status ?? '') ? (status as string) : 'ALL';
+    const ch = ['TELEGRAM', 'INSTAGRAM'].includes(channel ?? '') ? channel : undefined;
+    return this.outbox.list(u.clinicId, s, Number.parseInt(page ?? '1', 10) || 1, ch);
+  }
+
+  // Send a failed message again (only a failure that certainly did not reach the patient; see OutboxService.retry)
+  @Post(':id/retry')
+  @Roles(...OPERATORS)
+  @HttpCode(200)
+  retry(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.outbox.retry(u.clinicId, u.userId, id);
   }
 
   @Post('approve')

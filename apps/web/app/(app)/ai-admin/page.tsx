@@ -25,7 +25,7 @@ export default function AiAdminModePage() {
   return (
     <>
       <PageHeader title={t('aiadm.modeTitle')} subtitle={t('set.sub.replies')} />
-      <AiSettings onOpenGeneral={() => router.push('/settings')} onOpenBilling={me.billing?.demo ? undefined : () => router.push('/settings?tab=billing')} />
+      <AiSettings isOwner={me.role === 'OWNER'} onOpenGeneral={() => router.push('/settings')} onOpenBilling={me.billing?.demo ? undefined : () => router.push('/settings?tab=billing')} />
     </>
   );
 }

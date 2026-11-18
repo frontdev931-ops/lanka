@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
-import { fmtNumber, fmtMoney } from '../../../lib/ui';
+import { MoneyTotal, fmtNumber, fmtTotals } from '../../../lib/ui';
 import { Alert, Badge, Card, Empty, Loading, PageHeader, statusTone } from '../../../components/ui';
 import { FunnelBars, FunnelRow } from '../../../components/FunnelBars';
 import { MessagingResults } from '../../../components/MessagingResults';
@@ -12,14 +12,15 @@ import { TeamWork } from '../../../components/TeamWork';
 
 type Counts = { card: number; booked: number; came: number; started: number; paid: number; repeat: number; active: number };
 interface Overview {
-  money: { paid: number; payers: number; openPlanNotStarted: number; openPlanStarted: number } | null;
+  // per currency stamp: amounts in different currencies are never added up
+  money: { paid: MoneyTotal[]; payers: number; openPlanNotStarted: MoneyTotal[]; openPlanStarted: MoneyTotal[] } | null;
   months: number;
   lostAfterDays: number;
   counts: Counts;
   medians: { cardToBooked: number | null; bookedToCame: number | null; cameToStarted: number | null };
   cohorts: ({ month: string } & Counts)[];
-  bySource: ({ name: string; paidSum: number } & Counts)[];
-  byDirection: ({ name: string; paidSum: number } & Counts)[];
+  bySource: ({ name: string; paidSum: MoneyTotal[] } & Counts)[];
+  byDirection: ({ name: string; paidSum: MoneyTotal[] } & Counts)[];
   leaks: Record<string, number>;
   sources: string[];
   directions: string[];
@@ -33,7 +34,7 @@ interface InquiryFunnel {
 interface People {
   reason: string;
   total: number;
-  rows: { patientId: string; fullName: string; phone: string | null; source: string; direction: string | null; createdAt: string; lastEvidenceAt: string | null; lastStatus: string | null; openPlanSum: number }[];
+  rows: { patientId: string; fullName: string; phone: string | null; source: string; direction: string | null; createdAt: string; lastEvidenceAt: string | null; lastStatus: string | null; openPlan: MoneyTotal[] }[];
 }
 
 const PATH_STAGES = ['card', 'booked', 'came', 'started', 'paid'] as const;
@@ -94,7 +95,7 @@ export default function AnalyticsPage() {
 
   const stage = (k: string) => t(`fn.st.${k}` as never);
   const fmt = (n: number) => fmtNumber(n);
-  const money = (n: number) => fmtMoney(n, t('billing.uah'));
+  const money = (list: MoneyTotal[]) => fmtTotals(list, t('billing.uah'), t('money.unknown'));
 
   const c = data?.counts;
   const pathRows: FunnelRow[] = c ? PATH_STAGES.map((k) => ({ key: k, label: stage(k), value: c[k], hint: t(`fn.hint.${k}` as never) })) : [];
@@ -115,7 +116,7 @@ export default function AnalyticsPage() {
             <th className="num">{t('fn.st.started')}</th>
             <th className="num">{t('fn.st.paid')}</th>
             <th className="num">{t('fn.st.repeat')}</th>
-            <th className="num">{t('fn.paidSum')}, {t('billing.uah')}</th>
+            <th className="num">{t('fn.paidSum')}</th>
           </tr>
         </thead>
         <tbody>
@@ -127,7 +128,7 @@ export default function AnalyticsPage() {
               <td className="num">{pct(r.started, r.card) ?? '—'}%</td>
               <td className="num">{pct(r.paid, r.card) ?? '—'}%</td>
               <td className="num">{pct(r.repeat, r.card) ?? '—'}%</td>
-              <td className="num">{fmt(r.paidSum)}</td>
+              <td className="num">{money(r.paidSum)}</td>
             </tr>
           ))}
         </tbody>

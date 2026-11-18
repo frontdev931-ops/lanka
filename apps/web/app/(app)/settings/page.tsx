@@ -9,6 +9,7 @@ import { SecurityCard } from '../../../components/SecurityCard';
 import { PlanCard } from '../../../components/PlanCard';
 import { TeamAccess } from '../../../components/TeamAccess';
 import { IntegrationCard } from '../../../components/IntegrationCard';
+import { CurrencyCard } from '../../../components/CurrencyCard';
 import { LineTabs } from '../../../components/LineTabs';
 import { Alert, Card, Empty, Icon, PageHeader } from '../../../components/ui';
 import { WorkHours } from '../../../components/WorkHours';
@@ -118,6 +119,7 @@ export default function SettingsPage() {
       {/* the owner's own two-factor setup is on their row in "Team"; here it stays for everyone else, and for an owner the clinic already requires it from */}
       {me && (!isOwner || me.twoFactorRequired) && <SecurityCard />}
       <IntegrationCard />
+      {canAudit && <CurrencyCard canEdit={isOwner} />}
       {canAudit && <SendingSettings />}
       {/* the clinic's own AI allowance field: only for a clinic without the Payment tab (the demo) */}
       {canAudit && !canPay && <AiLimitCard />}

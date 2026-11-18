@@ -703,6 +703,20 @@ figure.mock { margin: 0; }
 .switch .switch-knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); transition: left 0.15s; }
 .switch.on { background: var(--primary); border-color: var(--primary); }
 .switch.on .switch-knob { left: 21px; }
+/* The touch target of a switch is 44 px in both directions; the visible switch keeps its size (the invisible area lies around it) */
+.switch::after { content: ''; position: absolute; left: 50%; top: 50%; width: 46px; height: 44px; transform: translate(-50%, -50%); }
+@media (max-width: 760px) {
+  .switch-row { align-items: center; }
+  .lang-btn { min-width: 44px; min-height: 44px; justify-content: center; }
+  button.lang-btn { display: inline-flex; align-items: center; }
+}
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+/* The setup steps of the autonomous agent: a mark and the text, the missing ones stand out */
+.agent-steps { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; font-size: 14px; line-height: 1.5; }
+.agent-steps li { display: flex; gap: 10px; align-items: flex-start; }
+.agent-step-mark { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; background: var(--green-soft); color: var(--green); }
+.agent-steps li.missing .agent-step-mark { background: var(--amber-soft); color: var(--amber); }
+.agent-steps a { font-weight: 600; white-space: nowrap; }
 .switch:disabled { opacity: 0.5; cursor: not-allowed; }
 .switch:focus-visible { outline: 3px solid rgba(14, 154, 160, 0.3); outline-offset: 2px; }
 .switch-label { font-weight: 600; font-size: 14px; cursor: pointer; display: block; }
@@ -872,7 +886,7 @@ figure.mock { margin: 0; }
 .lp-btn-light:hover { background: #eaf5f3; }
 
 /* pricing */
-.lp-plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.lp-plans { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
 .lp-plan { display: flex; flex-direction: column; gap: 6px; padding: 28px; border: 1px solid var(--border); border-radius: 18px; background: #fff; box-shadow: 0 8px 24px rgba(20, 33, 43, 0.06); }
 .lp-plan:nth-child(2) { border-color: var(--lp-accent); }
 .lp-plan-lead { color: var(--muted); margin: 0; }
@@ -886,6 +900,19 @@ figure.mock { margin: 0; }
 .lp-details { margin-top: 16px; border: 1px solid var(--border); border-radius: 14px; padding: 4px 18px; }
 .lp-details summary, .lp-faq summary { cursor: pointer; font-weight: 600; padding: 12px 0; min-height: 44px; list-style-position: outside; }
 .lp-details p { margin: 0 0 12px; color: var(--muted); font-size: 15px; }
+
+.lp-price small { font-size: 16px; font-weight: 600; color: var(--muted); }
+.lp-plan-extra { margin: -6px 0 6px; font-size: 14px; font-weight: 600; color: var(--primary-dark); }
+.lp-plan-custom { background: var(--lp-warm); border-style: dashed; }
+.lp-plan-note { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; background: #fff; border-left: 3px solid var(--amber); font-size: 14px; }
+.lp-setup { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 28px; margin-top: 20px; padding: 24px 26px; border-radius: 16px; background: var(--lp-deep); color: #eaf5f3; }
+.lp-setup b { color: #fff; font-size: 18px; }
+.lp-setup-price { font-size: 30px; font-weight: 800; color: #fff; margin: 6px 0; letter-spacing: -0.02em; }
+.lp-setup-price span { display: block; font-size: 14px; font-weight: 500; color: #b6d4cf; letter-spacing: 0; }
+.lp-setup p { margin: 6px 0 0; font-size: 15px; }
+.lp-setup .lp-checks svg { color: var(--lp-accent-2); }
+.lp-setup .lp-small { color: #b6d4cf; }
+.lp-extras-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* trust and FAQ */
 .lp-trust-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; }
@@ -966,7 +993,7 @@ figure.mock { margin: 0; }
   .lp-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 880px) {
-  .lp-hero-grid, .lp-agent-demo, .lp-panel, .lp-panel-wide, .lp-connect, .lp-trust-grid, .lp-plans { grid-template-columns: minmax(0, 1fr); }
+  .lp-hero-grid, .lp-agent-demo, .lp-panel, .lp-panel-wide, .lp-connect, .lp-trust-grid, .lp-plans, .lp-setup, .lp-extras-two { grid-template-columns: minmax(0, 1fr); }
   .lp-hero { padding: 40px 0 72px; }
   .lp-hero-chat { right: 8px; }
   .lp-extras { grid-template-columns: minmax(0, 1fr); }
@@ -1001,3 +1028,11 @@ figure.mock { margin: 0; }
   .lp *, .lp *::before, .lp *::after { transition: none !important; animation: none !important; }
   .lp .btn:hover, .lp-screen-btn:hover { transform: none; }
 }
+
+/* The clinic / branch switcher in the user box */
+.clinic-switch { margin: 0 0 8px; }
+.clinic-switch span { font-size: 12px; }
+.clinic-switch select { width: 100%; }
+
+/* Installation examples (Settings → Channels → Website): scroll inside the block, never the page */
+.code-sample { margin: 6px 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 1.45; white-space: pre; overflow-x: auto; max-width: 100%; }

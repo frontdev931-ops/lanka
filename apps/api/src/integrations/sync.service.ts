@@ -6,6 +6,8 @@ import { AUTO_SYNC_HOUR, autoSyncEnabled, autoSyncSlot, clinicTimeZone } from '.
 import { decrypt, encrypt } from '../common/crypto';
 import { normalizePhone } from '../common/phone';
 import { matchInquiries } from '../inquiries/match';
+import { CurrencyScope, stampCurrency } from './currency-stamp';
+import { SOURCE_CURRENCIES } from '../common/money';
 import { ClinicConnector } from './connector';
 import { DemoConnector } from './demo.connector';
 import { SettingsImportService } from './settings-import.service';
@@ -37,6 +39,11 @@ async function inBatches<T>(items: T[], fn: (item: T) => Promise<void>, size = 2
 const missing = (existing: { externalId: string }[], fresh: Set<string>) =>
   existing.map((r) => r.externalId).filter((id) => !fresh.has(id));
 
+// A running load refreshes its heartbeat this often; without one for HEARTBEAT_STALE_MS it is treated as cut off. MAX_RUN_MS: no load lasts longer.
+export const HEARTBEAT_MS = 20_000;
+export const HEARTBEAT_STALE_MS = 2 * 60_000;
+const MAX_RUN_MS = 30 * 60_000;
+
 // What kind of failure the last load had, for a readable sentence on the card (the full message stays in the history)
 export function errorKind(error: string | null): 'network' | 'interrupted' | 'access' | 'other' {
   const e = error ?? '';
@@ -53,29 +60,36 @@ export class SyncService implements OnApplicationBootstrap {
     private imports: SettingsImportService,
   ) {}
 
-  // A server restart cuts a load off halfway, and the record of it stays "running" forever.
-  // There is one server, so at start any "running" record is certainly orphaned. (If there are several servers,
-  // only records that have not been updated for a long time should be looked at here.)
+  // A server restart cuts a load off halfway, and the record of it stays "running" forever. A running load proves it is alive with a heartbeat
+  // (heartbeatAt, refreshed every HEARTBEAT_MS), so at start only the loads WITHOUT a recent heartbeat are closed: with several API servers a start of one
+  // does not mark the load another one is doing. A load cut off a moment ago is closed by the next check after HEARTBEAT_STALE_MS (every start of a load
+  // and every read of the status runs the check); the daily automatic load then tries again when its lease ends (AutoSyncService).
   async onApplicationBootstrap() {
-    await this.failStale(0);
+    await this.failStale();
   }
 
   // Creates a load record if the clinic has no other running one. The check and creation run under a database lock:
   // auto-refresh and a manual start cannot start at the same time (otherwise a double load on the limit of 60 requests per minute).
   private async startRun(clinicId: string, integrationId: string) {
-    await this.failStale(30 * 60_000, clinicId);
+    await this.failStale(clinicId);
     return this.prisma.$transaction(async (tx) => {
       const [{ locked }] = await tx.$queryRaw<{ locked: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${clinicId})) AS locked`;
       const active = locked ? await tx.syncRun.findFirst({ where: { clinicId, status: SyncStatus.RUNNING }, select: { id: true } }) : true;
       if (!locked || active) throw new ConflictException('sync_running');
-      return tx.syncRun.create({ data: { clinicId, integrationId } });
+      return tx.syncRun.create({ data: { clinicId, integrationId, heartbeatAt: new Date() } });
     });
   }
 
-  // "Running" records older than olderThanMs are considered interrupted
-  private failStale(olderThanMs: number, clinicId?: string) {
+  // "Running" records that are certainly not running any more: no heartbeat for HEARTBEAT_STALE_MS, or started more than MAX_RUN_MS ago (a load never
+  // lasts that long; also the rule for a record made before the heartbeat existed)
+  private failStale(clinicId?: string) {
+    const now = Date.now();
     return this.prisma.syncRun.updateMany({
-      where: { status: SyncStatus.RUNNING, startedAt: { lt: new Date(Date.now() - olderThanMs) }, ...(clinicId ? { clinicId } : {}) },
+      where: {
+        status: SyncStatus.RUNNING,
+        ...(clinicId ? { clinicId } : {}),
+        OR: [{ heartbeatAt: { lt: new Date(now - HEARTBEAT_STALE_MS) } }, { startedAt: { lt: new Date(now - MAX_RUN_MS) } }],
+      },
       data: { status: SyncStatus.FAILED, finishedAt: new Date(), error: 'Загрузка прервана: сервер был перезапущен или не ответил' },
     });
   }
@@ -102,7 +116,7 @@ export class SyncService implements OnApplicationBootstrap {
 
   async status(clinicId: string) {
     const i = await this.ensureIntegration(clinicId);
-    await this.failStale(30 * 60_000, clinicId);
+    await this.failStale(clinicId);
     const lastRun = await this.prisma.syncRun.findFirst({
       where: { clinicId },
       orderBy: { startedAt: 'desc' },
@@ -110,7 +124,11 @@ export class SyncService implements OnApplicationBootstrap {
     });
     const tz = clinicTimeZone(clinicId);
     const on = autoSyncEnabled() && !!i.apiKeyEnc;
+    const cur = await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { sourceCurrency: true, sourceCurrencyStatedAt: true, planCurrency: true, planCurrencyStatedAt: true } });
     return {
+      // the currency of the amounts as stated by the owner (null: not stated) and the choices
+      // two separately stated scopes: payments, invoices and balances (code) and treatment-plan totals (planCode); null = not stated
+      currency: { code: cur?.sourceCurrency ?? null, statedAt: cur?.sourceCurrencyStatedAt ?? null, planCode: cur?.planCurrency ?? null, planStatedAt: cur?.planCurrencyStatedAt ?? null, options: SOURCE_CURRENCIES },
       connected: !!i.apiKeyEnc,
       mode: i.apiKeyEnc ? 'cliniccards' : 'demo',
       lastSyncAt: i.lastSyncAt,
@@ -118,6 +136,24 @@ export class SyncService implements OnApplicationBootstrap {
       // shown as on only when the server runs it (AUTO_SYNC) and the clinic has a Cliniccards key
       autoSync: { enabled: on, hour: AUTO_SYNC_HOUR, timeZone: tz, nextAt: on ? autoSyncSlot(new Date(), tz).nextAt : null },
     };
+  }
+
+  // The owner states a currency for ONE scope (currency-stamp.ts): 'finance' = payments, invoices and patient balances; 'plans' = treatment-plan totals.
+  // First statement of a scope: every amount of that scope loaded so far (all unstamped) gets it. A different currency later: by default only the amounts
+  // loaded from now on (the clinic changed its accounting); with correct = true every amount of that scope is relabelled (the earlier statement was a
+  // mistake). The other scope is never touched. Both are written to the audit log with the scope and the old and new code.
+  async setCurrency(clinicId: string, userId: string, code: string, correct: boolean, scope: CurrencyScope = 'finance') {
+    if (!(SOURCE_CURRENCIES as readonly string[]).includes(code)) throw new BadRequestException('bad_currency');
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { sourceCurrency: true, planCurrency: true } });
+    const before = scope === 'plans' ? c.planCurrency : c.sourceCurrency;
+    const now = new Date();
+    await this.prisma.clinic.update({
+      where: { id: clinicId },
+      data: scope === 'plans' ? { planCurrency: code, planCurrencyStatedAt: now, planCurrencyStatedById: userId } : { sourceCurrency: code, sourceCurrencyStatedAt: now, sourceCurrencyStatedById: userId },
+    });
+    const stamped = await stampCurrency(this.prisma, clinicId, { scope, correct: correct && !!before && before !== code });
+    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'clinic.currency', details: { scope, before, after: code, correct: !!correct, stamped } } });
+    return this.status(clinicId);
   }
 
   // Checks the key with a request for the list of staff, then stores it encrypted
@@ -147,6 +183,9 @@ export class SyncService implements OnApplicationBootstrap {
   async run(clinicId: string, userId: string | null) {
     const integration = await this.ensureIntegration(clinicId);
     const run = await this.startRun(clinicId, integration.id);
+    // the sign of life while the load runs (also during the long writing stage, which has no step of its own)
+    const beat = setInterval(() => void this.prisma.syncRun.updateMany({ where: { id: run.id, status: SyncStatus.RUNNING }, data: { heartbeatAt: new Date() } }).catch(() => undefined), HEARTBEAT_MS);
+    beat.unref();
 
     try {
       const connector = this.connectorFor(integration);
@@ -372,6 +411,8 @@ export class SyncService implements OnApplicationBootstrap {
 
       // New cards: inquiries entered by the administrator are linked to them by phone
       await matchInquiries(this.prisma, clinicId);
+      // the amounts just loaded get the clinic's stated currency (nothing happens while it is not stated)
+      await stampCurrency(this.prisma, clinicId);
 
       const extra = {
         reminders: reminders.length,
@@ -402,6 +443,8 @@ export class SyncService implements OnApplicationBootstrap {
         data: { status: SyncStatus.FAILED, finishedAt: new Date(), error: (e as Error).message },
       });
       throw e;
+    } finally {
+      clearInterval(beat);
     }
   }
 
@@ -413,7 +456,7 @@ export class SyncService implements OnApplicationBootstrap {
 
   async lastRuns(clinicId: string) {
     // A load never lasts longer than 30 minutes: so a stuck record does not "run" forever and block a new start
-    await this.failStale(30 * 60_000, clinicId);
+    await this.failStale(clinicId);
     return this.prisma.syncRun.findMany({
       where: { clinicId },
       orderBy: { startedAt: 'desc' },

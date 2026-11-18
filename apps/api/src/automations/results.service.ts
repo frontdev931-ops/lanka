@@ -1,3 +1,4 @@
+import { MoneyTotal, sumByCurrency } from '../common/money';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLANS } from '../service/plans';
@@ -125,10 +126,11 @@ export class ResultsService {
         if (!cur || cur.getTime() > at) paidFrom.set(m.patientId, m.sentAt!);
       }
     }
-    let paid = 0;
+    // the payments of those patients, per currency stamp (amounts of different currencies are never added up; see common/money.ts)
+    let paid: MoneyTotal[] = [];
     if (paidFrom.size) {
-      const payments = await this.prisma.payment.findMany({ where: { clinicId, patientId: { in: [...paidFrom.keys()] }, paidAt: { gte: since } }, select: { patientId: true, paidAt: true, amount: true } });
-      for (const p of payments) if (p.patientId && p.paidAt.getTime() >= paidFrom.get(p.patientId)!.getTime()) paid += Number(p.amount);
+      const payments = await this.prisma.payment.findMany({ where: { clinicId, patientId: { in: [...paidFrom.keys()] }, paidAt: { gte: since } }, select: { patientId: true, paidAt: true, amount: true, currency: true } });
+      paid = sumByCurrency(payments.filter((p) => p.patientId && p.paidAt.getTime() >= paidFrom.get(p.patientId)!.getTime()));
     }
     return {
       days: period ? period.days : days,
@@ -141,7 +143,7 @@ export class ResultsService {
       remindedVisits: reminded,
       bookingRequestsDone: requests,
       aiReplies,
-      paid: Math.round(paid * 100) / 100,
+      paid,
       plan: clinic.plan,
       // what one month of the plan costs (0 for individual terms: no comparison is shown then)
       planPriceUah: PLANS[clinic.plan]?.priceUah ?? 0,

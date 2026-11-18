@@ -63,6 +63,12 @@ export class InquiriesService {
           utmSource: r.utmSource,
           utmCampaign: r.utmCampaign,
           landing: r.landing,
+          // the website integration (2026-11-17): the e-mail the visitor typed, the route (WEBSITE_FORM) and the form's own id
+          email: r.email,
+          via: r.via,
+          formId: r.formId,
+          // Meta Lead Ads: the platform, form and campaign ids and the answers to the form's own questions (text for the staff)
+          leadAds: r.via === 'META_LEAD_ADS' && r.sourceDetails ? leadAdsView(r.sourceDetails) : null,
           status: r.status,
           stage,
           patient: r.patient,
@@ -83,4 +89,9 @@ export class InquiriesService {
     await this.prisma.inquiry.delete({ where: { id } });
     return { ok: true };
   }
+}
+
+function leadAdsView(d: unknown) {
+  const x = (d ?? {}) as { platform?: string | null; formId?: string | null; campaignId?: string | null; adId?: string | null; organic?: boolean | null; answers?: { q: string; a: string }[] };
+  return { platform: x.platform ?? null, formId: x.formId ?? null, campaignId: x.campaignId ?? null, adId: x.adId ?? null, organic: x.organic ?? null, answers: Array.isArray(x.answers) ? x.answers.slice(0, 10) : [] };
 }

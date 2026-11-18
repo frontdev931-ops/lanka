@@ -34,6 +34,9 @@ export interface BookInput {
   sharedAccount?: boolean;
   // The dialog that asked for an automatic booking (the live-test restriction is checked against it, see AutoBookingGate)
   origin?: DialogOrigin;
+  // The identity of the operation when one patient may be booked at the same time more than once over time (the agent's move: the patient's
+  // confirmation). Its retries share one attempt; another confirmation, even to a time used before, is a new attempt (never answered by an old DONE).
+  operationId?: string;
 }
 export interface BookingResult {
   externalVisitId: string | null;
@@ -214,7 +217,7 @@ export class BookingService {
       return hit?.externalId ?? null;
     };
     const res = await this.run(clinicId, userId, {
-      key: this.key(clinicId, 'CREATE', patient.id, startsAt.toISOString(), d.cabinetId),
+      key: d.operationId ? this.key(clinicId, 'CREATE', patient.id, startsAt.toISOString(), d.cabinetId, d.operationId) : this.key(clinicId, 'CREATE', patient.id, startsAt.toISOString(), d.cabinetId),
       kind: 'CREATE',
       patientId: patient.id,
       requestId: d.requestId,
@@ -329,6 +332,15 @@ export class BookingService {
   // The visit as Cliniccards has it NOW, against what we expect: the same id, the same patient, the same time and doctor, still ahead and in a status that can be
   // cancelled. 'cancelled': it already is (nothing has to be written). Cliniccards has no conditional update, so a change made by staff between this read and
   // the PUT is not excluded; the read narrows that window to a moment, it does not close it.
+  // Is the visit in the clinic's system still the one we know (the same time, doctor, a status that can change)? Read right before a change that is
+  // made of several writes (the agent's move: a new visit, then the old one cancelled), so nothing is written for a visit someone already changed.
+  async stillAsKnown(clinicId: string, visitId: string, expect: { externalId: string; startsAt: Date; doctorId: string | null }): Promise<'ok' | 'changed' | 'unknown'> {
+    const v = await this.prisma.visit.findFirst({ where: { id: visitId, clinicId, status: { in: MOVABLE }, startsAt: { gt: new Date() } }, include: { patient: { select: { id: true, externalId: true } } } });
+    if (!v || v.externalId !== expect.externalId || v.startsAt.getTime() !== expect.startsAt.getTime() || (v.doctorId ?? null) !== (expect.doctorId ?? null)) return 'changed';
+    const now = await this.freshState(await this.connector(clinicId), v);
+    return now === 'ok' ? 'ok' : now === 'unknown' ? 'unknown' : 'changed';
+  }
+
   private async freshState(connector: ClinicConnector, v: { externalId: string; startsAt: Date; doctorId: string | null; patient: { externalId: string } }): Promise<'ok' | 'cancelled' | 'changed' | 'unknown'> {
     let rows: ExternalVisit[];
     try {

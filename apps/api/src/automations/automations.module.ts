@@ -7,6 +7,9 @@ import { FunnelEventsModule } from '../funnel-events/funnel-events.module';
 import { AgentApprovalService } from './agent-approval.service';
 import { AgentAutoGate } from './agent-auto-gate';
 import { AgentAutoService } from './agent-auto.service';
+import { AgentSettingsController } from './agent-settings.controller';
+import { OnboardingController } from './onboarding.controller';
+import { AgentSettingsService } from './agent-settings.service';
 import { AgentDraftsController } from './agent-drafts.controller';
 import { BookingFlowService } from './booking-flow.service';
 import { AutoReplyService } from './auto-reply.service';
@@ -55,8 +58,8 @@ import { TelegramService } from './telegram.service';
 
 @Module({
   imports: [AiModule, ReportsModule, BookingModule, IntegrationsModule, FunnelEventsModule],
-  controllers: [AgentDraftsController, AutomationsController, ConversationsController, MessagesController, RequestsController, CampaignsController, DigestController, ReviewsController, TelegramWebhookController, InstagramWebhookController, IntegrationEventsController, ChannelsController, MessengerWebhookController, WhatsAppWebhookController, WebChatSettingsController, WebChatPublicController, WaitlistController, CustomAutomationsController, MetaComplianceController, LeadsSettingsController, LeadsPublicController, MetaLoginPublicController],
-  providers: [AgentApprovalService, AgentAutoGate, AgentAutoService, BookingFlowService, MetaLoginApi, MetaLoginService, LeadsService, MetaComplianceService, CustomAutomationsService, WaitlistService, FacebookApi, FacebookAdapter, FacebookService, WhatsAppApi, WhatsAppAdapter, WhatsAppService, { provide: ViberProvider, useClass: NoViberProvider }, ViberService, ViberAdapter, WebAdapter, WebChatService, IntakeService, TelegramApi, TelegramService, InstagramApi, InstagramAdapter, TelegramAdapter, InstagramService, MessengerService, InboundService, PlannerService, OutboxService, ChatService, AutoReplyService, RequestsService, StaffNotifierService, CampaignsService, ResultsService, DigestService, ReviewsService, AutomationScheduler],
+  controllers: [AgentSettingsController, OnboardingController, AgentDraftsController, AutomationsController, ConversationsController, MessagesController, RequestsController, CampaignsController, DigestController, ReviewsController, TelegramWebhookController, InstagramWebhookController, IntegrationEventsController, ChannelsController, MessengerWebhookController, WhatsAppWebhookController, WebChatSettingsController, WebChatPublicController, WaitlistController, CustomAutomationsController, MetaComplianceController, LeadsSettingsController, LeadsPublicController, MetaLoginPublicController],
+  providers: [AgentSettingsService, AgentApprovalService, AgentAutoGate, AgentAutoService, BookingFlowService, MetaLoginApi, MetaLoginService, LeadsService, MetaComplianceService, CustomAutomationsService, WaitlistService, FacebookApi, FacebookAdapter, FacebookService, WhatsAppApi, WhatsAppAdapter, WhatsAppService, { provide: ViberProvider, useClass: NoViberProvider }, ViberService, ViberAdapter, WebAdapter, WebChatService, IntakeService, TelegramApi, TelegramService, InstagramApi, InstagramAdapter, TelegramAdapter, InstagramService, MessengerService, InboundService, PlannerService, OutboxService, ChatService, AutoReplyService, RequestsService, StaffNotifierService, CampaignsService, ResultsService, DigestService, ReviewsService, AutomationScheduler],
   exports: [TelegramService, OutboxService, PlannerService, StaffNotifierService, WaitlistService, CustomAutomationsService],
 })
 export class AutomationsModule {}

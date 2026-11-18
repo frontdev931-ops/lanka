@@ -67,15 +67,15 @@ const member = async (ownerToken: string, role: string) => {
 };
 
 describe('підписка та оплата', () => {
-  it('нова клініка чекає оплати; перша оплата = підключення ($99 за курсом) + місяць тарифу; після неї клініка активна', async () => {
+  it('нова клініка чекає оплати; перша оплата = підключення (4 990 грн) + місяць тарифу; після неї клініка активна', async () => {
     const c = await clinic();
     const o = (await http().get('/billing').set(auth(c.token)).expect(200)).body;
-    expect(o).toMatchObject({ configured: true, status: 'AWAITING_PAYMENT', setupPaid: false, setupUah: 3960, pack: { replies: 500, priceUah: 390 } });
+    expect(o).toMatchObject({ configured: true, status: 'AWAITING_PAYMENT', setupPaid: false, setupUah: 4990, pack: { replies: 500, priceUah: 390 } });
     expect(o.plans.map((p: { key: string; priceUah: number }) => [p.key, p.priceUah])).toEqual([['START', 1990], ['PRO', 3990]]);
 
     const { form, params, orderId, amountMinor } = await checkoutOrder(c.token);
     expect(form.signature).toBe(sign(form.data, PRIVATE));
-    expect(params).toMatchObject({ public_key: 'i0000000000', currency: 'UAH', action: 'pay', amount: 1990 + 3960 });
+    expect(params).toMatchObject({ public_key: 'i0000000000', currency: 'UAH', action: 'pay', amount: 1990 + 4990 });
     expect(params.server_url).toContain('/backend/billing/liqpay/callback');
 
     await pay(orderId, amountMinor).expect(200);
@@ -269,5 +269,151 @@ describe('функції за тарифом', () => {
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'DAILY' }).expect(200);
     const usage = (await http().get('/service/usage').set(auth(c.token))).body;
     expect(usage.features).toContain('ai_autoreply');
+  });
+
+  it('помічник керівника й автономний агент — лише «Про», також при прямому зверненні до API; чернетки для пацієнтів лишаються на «Старті»', async () => {
+    const c = await clinic();
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiEnabled: true } });
+    const st = (await http().get('/ai').set(auth(c.token)).expect(200)).body;
+    expect(st).toMatchObject({ assistantInPlan: false });
+    expect((await http().patch('/ai').set(auth(c.token)).send({ assistant: true }).expect(400)).body.message).toMatch(/тариф/i);
+    // even with the switch left on in the database (a clinic that moved from Pro to Start) the model is not called for the assistant
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiAssistantEnabled: true } });
+    expect((await http().post('/assistant/ask').set(auth(c.token)).send({ question: 'скільки пацієнтів прийшло цього місяця?', history: [] }).expect(400)).body.message).toMatch(/тариф/i);
+    await expect(ai.complete(c.clinicId, 'assistant', 's', [{ role: 'user', content: 'x' }], 50, 'assistant')).rejects.toMatchObject({ message: 'plan_feature' });
+    // a patient draft is the same on Start
+    await expect(ai.complete(c.clinicId, 'chat_draft', 's', [{ role: 'user', content: 'x' }], 50, 'chat')).resolves.toMatchObject({ text: 'ok' });
+    const usage = (await http().get('/service/usage').set(auth(c.token))).body;
+    expect(usage.features).not.toContain('ai_assistant');
+    expect(usage.features).not.toContain('patient_agent');
+    expect((await http().get('/ai/agent').set(auth(c.token)).expect(200)).body).toMatchObject({ inPlan: false, active: false });
+    expect((await http().post('/ai/agent/activate').set(auth(c.token)).expect(400)).body.message).toMatch(/тариф/i);
+
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'PRO' } });
+    // Pro alone switches nothing on
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).toMatchObject({ aiAgentAuto: false, aiAgentMode: false, sendingEnabled: false, agentAutoScope: 'DIALOGS' });
+    await http().patch('/ai').set(auth(c.token)).send({ assistant: true }).expect(200);
+    await expect(ai.complete(c.clinicId, 'assistant', 's', [{ role: 'user', content: 'x' }], 50, 'assistant')).resolves.toMatchObject({ text: 'ok' });
+  });
+
+  it('перша оплата «Про»: 3 990 + 4 990 грн підключення; далі лише тариф', async () => {
+    const c = await clinic();
+    const first = await checkoutOrder(c.token, 'PRO');
+    expect(first.params).toMatchObject({ currency: 'UAH', amount: 3990 + 4990 });
+    await pay(first.orderId, first.amountMinor).expect(200);
+    const next = await checkoutOrder(c.token, 'PRO');
+    expect(next.params.amount).toBe(3990);
+  });
+});
+
+// The standard purchase and setup path (2026-11-16): registration → payment → the signed server callback → entitlements → setup steps → the owner's
+// own agent activation. Only the signed callback changes anything; the browser's return address does nothing.
+describe('покупка й підключення', () => {
+  const ADMIN_MAIL = `svc${rnd()}@example.com`;
+  beforeAll(() => {
+    process.env.PLATFORM_ADMIN_EMAILS = ADMIN_MAIL;
+  });
+  afterAll(() => {
+    delete process.env.PLATFORM_ADMIN_EMAILS;
+    delete process.env.LIQPAY_SANDBOX;
+  });
+  const toServiceOwner = (part: string) => mail.outbox.filter((m) => m.to === ADMIN_MAIL && m.text.includes(part));
+
+  it('реєстрація → оплата «Про» → підпис LiqPay → права «Про»; повернення з браузера нічого не змінює; агент і розсилки самі не вмикаються; кроки підключення', async () => {
+    const c = await clinic();
+    const order = await checkoutOrder(c.token, 'PRO');
+    expect(order.params.amount).toBe(3990 + 4990);
+    // the person comes back from the payment page before LiqPay confirms: the page says the payment is being checked, nothing is paid
+    let o = (await http().get('/billing').set(auth(c.token)).expect(200)).body;
+    expect(o).toMatchObject({ status: 'AWAITING_PAYMENT', checking: true, setupPaid: false });
+    // an unsigned or wrongly signed callback changes nothing
+    await pay(order.orderId, order.amountMinor, 'success', {}, 'wrong-key').expect(400);
+    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).billingStatus).toBe('AWAITING_PAYMENT');
+
+    await pay(order.orderId, order.amountMinor).expect(200);
+    await pay(order.orderId, order.amountMinor).expect(200); // LiqPay repeats callbacks: applied once
+    const cl = await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } });
+    expect(cl).toMatchObject({ plan: 'PRO', billingStatus: 'ACTIVE', aiMonthlyLimit: 3000, aiAgentAuto: false, aiAgentMode: false, sendingEnabled: false, agentAutoScope: 'DIALOGS' });
+    expect(cl.setupPaidAt).not.toBeNull();
+    expect(await prisma.auditLog.count({ where: { clinicId: c.clinicId, action: 'billing.paid' } })).toBe(1);
+    o = (await http().get('/billing').set(auth(c.token)).expect(200)).body;
+    expect(o).toMatchObject({ status: 'ACTIVE', checking: false, setupPaid: true, setupUah: null, limits: { users: 30, messagesPerMonth: 10000, aiRepliesPerMonth: 3000 } });
+
+    // the next month: plan price only
+    expect((await checkoutOrder(c.token, 'PRO')).params.amount).toBe(3990);
+    // entitlements on the server: the assistant is allowed; the agent is in the plan but off and not ready
+    await http().patch('/ai').set(auth(c.token)).send({ assistant: true }).expect(200);
+    expect((await http().get('/ai/agent').set(auth(c.token)).expect(200)).body).toMatchObject({ inPlan: true, active: false, ready: false });
+    const steps = (await http().get('/onboarding').set(auth(c.token)).expect(200)).body;
+    const by = Object.fromEntries(steps.steps.map((s: { key: string; done: boolean }) => [s.key, s.done]));
+    expect(by).toMatchObject({ payment: true, cliniccards: false, currency: false, services: false, telegram: false, meta: false, agent: false });
+    expect(steps.complete).toBe(false);
+    // a manager sees the steps; an administrator does not
+    const manager = await member(c.token, 'MANAGER');
+    const admin = await member(c.token, 'ADMIN');
+    await http().get('/onboarding').set(auth(manager)).expect(200);
+    await http().get('/onboarding').set(auth(admin)).expect(403);
+  });
+
+  it('«Старт» не продається клініці, у якій більше співробітників, ніж він дозволяє', async () => {
+    const c = await clinic();
+    const first = await checkoutOrder(c.token, 'PRO');
+    await pay(first.orderId, first.amountMinor).expect(200);
+    for (let i = 0; i < 5; i++) await member(c.token, 'DOCTOR');
+    expect((await http().post('/billing/checkout').set(auth(c.token)).send({ plan: 'START' }).expect(400)).body.message).toMatch(/співробітник/);
+    await http().post('/billing/checkout').set(auth(c.token)).send({ plan: 'PRO' }).expect(200);
+  });
+
+  it('два вікна оплати до першого підтвердження й обидва оплачені: підключення позначено один раз, друга плата записана й надіслана власнику сервісу на повернення', async () => {
+    const c = await clinic();
+    const a = await checkoutOrder(c.token, 'START');
+    const b = await checkoutOrder(c.token, 'START');
+    expect(a.params.amount).toBe(1990 + 4990);
+    expect(b.params.amount).toBe(1990 + 4990);
+    await pay(a.orderId, a.amountMinor).expect(200);
+    const setupAt = (await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).setupPaidAt;
+    await pay(b.orderId, b.amountMinor).expect(200);
+    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).setupPaidAt).toEqual(setupAt);
+    expect(await prisma.auditLog.count({ where: { clinicId: c.clinicId, action: 'billing.setup_duplicate' } })).toBe(1);
+    expect(toServiceOwner(b.orderId)).toHaveLength(1);
+  });
+
+  it('повернення оплаченого й чужа сума: записано, власнику сервісу лист, оплачений період сам не змінюється', async () => {
+    const c = await clinic();
+    const o = await checkoutOrder(c.token, 'START');
+    await pay(o.orderId, o.amountMinor).expect(200);
+    const until = (await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).paidUntil;
+    await pay(o.orderId, o.amountMinor, 'reversed').expect(200);
+    expect((await prisma.billingPayment.findUniqueOrThrow({ where: { orderId: o.orderId } })).status).toBe('REVERSED');
+    expect(await prisma.auditLog.count({ where: { clinicId: c.clinicId, action: 'billing.reversed' } })).toBe(1);
+    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).paidUntil).toEqual(until);
+    expect(toServiceOwner(o.orderId)).toHaveLength(1);
+
+    const n = await checkoutOrder(c.token, 'START');
+    await pay(n.orderId, 100).expect(200);
+    expect((await prisma.billingPayment.findUniqueOrThrow({ where: { orderId: n.orderId } })).status).toBe('PENDING');
+    expect(await prisma.auditLog.count({ where: { clinicId: c.clinicId, action: 'billing.mismatch' } })).toBe(1);
+    expect(toServiceOwner(n.orderId)).toHaveLength(1);
+  });
+
+  it('тестовий режим LiqPay: лише поза production; статус sandbox у production не відкриває доступ', async () => {
+    const c = await clinic();
+    process.env.LIQPAY_SANDBOX = '1';
+    const s = await checkoutOrder(c.token, 'START');
+    expect(s.params.sandbox).toBe(1);
+    expect((await http().get('/billing').set(auth(c.token)).expect(200)).body.sandbox).toBe(true);
+    const env = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const p = await checkoutOrder(c.token, 'START');
+      expect(p.params.sandbox).toBeUndefined();
+      await pay(p.orderId, p.amountMinor, 'sandbox').expect(200);
+      expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).billingStatus).toBe('AWAITING_PAYMENT');
+    } finally {
+      process.env.NODE_ENV = env;
+      delete process.env.LIQPAY_SANDBOX;
+    }
+    await pay(s.orderId, s.amountMinor, 'sandbox').expect(200);
+    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).billingStatus).toBe('ACTIVE');
   });
 });

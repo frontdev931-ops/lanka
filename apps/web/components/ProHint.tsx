@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { Key, useI18n } from '../lib/i18n';
 import { Alert } from './ui';
 
-export type ProFeature = 'ai_autoreply' | 'multi_channel' | 'advanced_analytics' | 'daily_digest';
+export type ProFeature = 'ai_autoreply' | 'multi_channel' | 'advanced_analytics' | 'daily_digest' | 'ai_assistant' | 'patient_agent';
 
 // One request for all the hints of a page (the plan's features: GET /service/usage, owner and manager; another role gets no hint)
 let cached: Promise<string[] | null> | null = null;

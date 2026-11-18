@@ -145,6 +145,8 @@ describe('вхід через Facebook Login for Business', () => {
     expect(decrypt(m.apiKeyEnc!)).toBe(`page-token-${p.id}`);
     expect(decrypt(i.apiKeyEnc!)).toBe(`page-token-${p.id}`);
     expect(m.config).toMatchObject({ ownId: p.id, name: p.name, mode: 'FACEBOOK_LOGIN', tokenType: 'SYSTEM_USER' });
+    // Lead Ads: the permission and the leadgen subscription are kept for the settings (2026-11-17)
+    expect(m.config).toMatchObject({ leads: true, leadsSubscribed: true });
     expect(i.config).toMatchObject({ ownId: p.igId, name: p.igUsername, mode: 'FACEBOOK_LOGIN', pageId: p.id });
     expect(i.apiKeyEnc).not.toContain('page-token');
     // the lifetime: nothing to refresh on a schedule
@@ -164,6 +166,8 @@ describe('вхід через Facebook Login for Business', () => {
     flags.leadSubscribeFails = true;
     expect((await back(grant([page()]).code, await stateOf(c.token))).headers.location).toContain('meta=ok');
     flags.leadSubscribeFails = false;
+    // the settings say the page is not subscribed to its lead forms
+    expect((await http().get('/automations/leads/meta').set(auth(c.token)).expect(200)).body).toMatchObject({ state: 'not_subscribed', permission: true, subscribed: false });
     const d = await clinic();
     flags.subscribeDenied = true;
     expect((await back(grant([page()]).code, await stateOf(d.token))).headers.location).toContain('meta=subscribe');
@@ -285,6 +289,7 @@ describe('дозволи конфігурації: канали не залеж�
     await http().post('/messenger/webhook').set('Content-Type', 'application/json').set('X-Hub-Signature-256', `sha256=${createHmac('sha256', SECRET).update(body).digest('hex')}`).send(body).expect(200);
     // the lead is looked up through the Instagram connection of this page (the fake knows no such lead id, so it waits for a retry)
     expect(await prisma.inboundEvent.count({ where: { clinicId: c.clinicId, channel: 'LEADGEN' } })).toBe(1);
+    expect((await http().get('/automations/leads/meta').set(auth(c.token)).expect(200)).body).toMatchObject({ permission: true, subscribed: true, page: { id: p.id } });
   });
 
   it('вибір зі списку: у відповіді видно, що підключено', async () => {

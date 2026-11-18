@@ -1,3 +1,5 @@
+import { MoneyKind, finishCurrency } from '../reports/report-currency';
+import type { Cur } from '../common/money';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { clinicDate } from '../common/clinic-time';
@@ -151,7 +153,8 @@ export class ReportBuilderService {
     return false;
   }
 
-  async run(clinicId: string, role: Role, lang: Lang, spec: ReportSpec, title = '', dataUpdatedAt: Date | null = null): Promise<Report & { truncated: boolean; total: number }> {
+  // raw = true: the result before its currency labels (the network assistant joins branches and labels the joined rows once)
+  async run(clinicId: string, role: Role, lang: Lang, spec: ReportSpec, title = '', dataUpdatedAt: Date | null = null, raw = false): Promise<Report & { truncated: boolean; total: number }> {
     const { d, cols, limit } = this.validate(spec, role);
     let rows = await this.load(d, clinicId, spec);
     const truncated = rows.length >= FETCH_CAP;
@@ -168,30 +171,35 @@ export class ReportBuilderService {
       return String(raw);
     };
 
-    let columns: { key: string; label: string }[];
+    let columns: { key: string; label: string; money?: MoneyKind }[];
     let out: Record<string, string | number | null>[];
     const aggs = spec.aggregates ?? [];
+    // An amount of the clinic's accounts in the spec: every row then carries its currency stamp, and totals are split by it (never added across
+    // currencies). Within one dataset all such fields share the same stamp (a card's balances; a payment).
+    const moneyField = [...cols, ...aggs.filter((a) => a.fn !== 'count').map((a) => field(d, a.field!)!)].find((x) => x.moneyKind === 'source');
+    const stampOf = moneyField?.currencyOf;
 
     if (spec.groupBy || aggs.length) {
       const g = spec.groupBy ? field(d, spec.groupBy.field)! : null;
       const bucket = spec.groupBy?.bucket;
-      const groups = new Map<string, { label: string | number | null; rows: any[] }>();
-      if (!g) groups.set('', { label: null, rows });
-      else {
-        for (const r of rows) {
-          const raw = g.get(r);
-          let label = show(g, raw);
+      const groups = new Map<string, { label: string | number | null; currency: Cur; rows: any[] }>();
+      for (const r of rows) {
+        let label: string | number | null = null;
+        if (g) {
+          label = show(g, g.get(r));
           if (g.type === 'date' && typeof label === 'string' && bucket === 'month') label = label.slice(0, 7);
-          const k = String(label ?? '');
-          const e = groups.get(k) ?? { label, rows: [] };
-          e.rows.push(r);
-          groups.set(k, e);
         }
+        const currency = stampOf ? stampOf(r) : null;
+        const k = `${String(label ?? '')}\u0001${currency ?? ''}`;
+        const e = groups.get(k) ?? { label, currency, rows: [] };
+        e.rows.push(r);
+        groups.set(k, e);
       }
+      if (!g && !groups.size) groups.set('', { label: null, currency: null, rows: [] });
       const word = { count: l3('Кількість', 'Количество', 'Count'), sum: l3('Сума', 'Сумма', 'Sum'), avg: l3('Середнє', 'Среднее', 'Average'), min: l3('Мін', 'Мин', 'Min'), max: l3('Макс', 'Макс', 'Max') };
-      columns = [...(g ? [{ key: 'group', label: g.label[lang] }] : []), ...aggs.map((a, i) => ({ key: `a${i}`, label: a.fn === 'count' ? word.count[lang] : `${word[a.fn][lang]}: ${field(d, a.field!)!.label[lang]}` }))];
+      columns = [...(g ? [{ key: 'group', label: g.label[lang] }] : []), ...aggs.map((a, i) => ({ key: `a${i}`, label: a.fn === 'count' ? word.count[lang] : `${word[a.fn][lang]}: ${field(d, a.field!)!.label[lang]}`, ...(a.fn !== 'count' && field(d, a.field!)!.moneyKind ? { money: field(d, a.field!)!.moneyKind } : {}) }))];
       out = [...groups.values()].map((e) => {
-        const row: Record<string, string | number | null> = g ? { group: e.label } : {};
+        const row: Record<string, string | number | null> = { ...(g ? { group: e.label } : {}), ...(stampOf ? { currency: e.currency } : {}) };
         aggs.forEach((a, i) => {
           if (a.fn === 'count') return void (row[`a${i}`] = e.rows.length);
           const x = field(d, a.field!)!;
@@ -207,7 +215,7 @@ export class ReportBuilderService {
         return row;
       });
     } else {
-      columns = cols.map((x) => ({ key: x.key, label: x.label[lang] }));
+      columns = cols.map((x) => ({ key: x.key, label: x.label[lang], ...(x.moneyKind ? { money: x.moneyKind } : {}) }));
       // we sort by raw values (dates by date, numbers by number), then add labels
       let sorted = rows;
       const sx = spec.sort && field(d, spec.sort.field);
@@ -216,7 +224,7 @@ export class ReportBuilderService {
         const dir = spec.sort!.dir === 'desc' ? -1 : 1;
         sorted = [...rows].sort((a, b) => cmp(sx.get(a), sx.get(b)) * dir);
       }
-      out = sorted.map((r) => Object.fromEntries(cols.map((x) => [x.key, show(x, x.get(r))])));
+      out = sorted.map((r) => ({ ...Object.fromEntries(cols.map((x) => [x.key, show(x, x.get(r))])), ...(stampOf ? { currency: stampOf(r) } : {}) }));
     }
 
     if (spec.groupBy || aggs.length) {
@@ -228,7 +236,7 @@ export class ReportBuilderService {
 
     const total = out.length;
     const description = describe(spec, d, lang);
-    return {
+    const result = {
       id: 'custom',
       title: title || description.title,
       rule: description.rule,
@@ -242,6 +250,7 @@ export class ReportBuilderService {
       truncated: truncated || total > limit,
       total,
     };
+    return raw ? result : finishCurrency(result, lang);
   }
 }
 

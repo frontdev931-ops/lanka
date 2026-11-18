@@ -1,3 +1,5 @@
+import type { MoneyKind } from '../reports/report-currency';
+import type { Cur } from '../common/money';
 import { clinicDate } from '../common/clinic-time';
 import { Lang } from '../common/i18n';
 
@@ -11,6 +13,10 @@ export interface FieldDef {
   type: FieldType;
   // Money: seen only by management and the analyst
   money?: boolean;
+  // Money (report-currency.ts): 'source' = an amount of the clinic's accounts with a currency stamp (currencyOf reads it from the row);
+  // 'unconverted' = service prices (a visit amount, a plan item price), which may be in different currencies and are never labelled with one
+  moneyKind?: MoneyKind;
+  currencyOf?: (row: any) => Cur;
   // For an enum: code -> label
   values?: Record<string, L>;
   // A model column for selection on the database side (speed-up); filtering is still checked in code
@@ -73,9 +79,9 @@ export const DATASETS: DatasetDef[] = [
       { key: 'firstVisitAt', label: l('Перший візит', 'Первый визит', 'First visit'), type: 'date', db: 'firstVisitAt', get: (r) => r.firstVisitAt ?? null },
       { key: 'lastVisitAt', label: l('Останній візит', 'Последний визит', 'Last visit'), type: 'date', db: 'lastVisitAt', get: (r) => r.lastVisitAt ?? null },
       { key: 'visitsCount', label: l('Кількість візитів', 'Количество визитов', 'Visits'), type: 'number', get: (r) => r._count?.visits ?? 0 },
-      { key: 'balanceIssued', label: l('Виставлено', 'Выставлено', 'Invoiced'), type: 'number', money: true, db: 'balanceIssued', get: (r) => num(r.balanceIssued) },
-      { key: 'balancePaid', label: l('Сплачено', 'Оплачено', 'Paid'), type: 'number', money: true, db: 'balancePaid', get: (r) => num(r.balancePaid) },
-      { key: 'debt', label: l('Борг', 'Долг', 'Debt'), type: 'number', money: true, get: (r) => Math.max(0, (num(r.balanceIssued) ?? 0) - (num(r.balancePaid) ?? 0)) },
+      { key: 'balanceIssued', label: l('Виставлено', 'Выставлено', 'Invoiced'), type: 'number', money: true, moneyKind: 'source', currencyOf: (r) => r.balanceCurrency ?? null, db: 'balanceIssued', get: (r) => num(r.balanceIssued) },
+      { key: 'balancePaid', label: l('Сплачено', 'Оплачено', 'Paid'), type: 'number', money: true, moneyKind: 'source', currencyOf: (r) => r.balanceCurrency ?? null, db: 'balancePaid', get: (r) => num(r.balancePaid) },
+      { key: 'debt', label: l('Борг', 'Долг', 'Debt'), type: 'number', money: true, moneyKind: 'source', currencyOf: (r) => r.balanceCurrency ?? null, get: (r) => Math.max(0, (num(r.balanceIssued) ?? 0) - (num(r.balancePaid) ?? 0)) },
     ],
   },
   {
@@ -89,7 +95,7 @@ export const DATASETS: DatasetDef[] = [
       { key: 'doctorName', label: l('Лікар', 'Врач', 'Doctor'), type: 'string', db: 'doctorName', get: (r) => r.doctorName ?? null },
       { key: 'serviceName', label: l('Послуга', 'Услуга', 'Service'), type: 'string', db: 'serviceName', get: (r) => r.serviceName ?? null },
       { key: 'bookedAt', label: l('Запис створено', 'Запись создана', 'Booked on'), type: 'date', db: 'bookedAt', get: (r) => r.bookedAt ?? null },
-      { key: 'amount', label: l('Сума', 'Сумма', 'Amount'), type: 'number', money: true, db: 'amount', get: (r) => num(r.amount) },
+      { key: 'amount', label: l('Сума', 'Сумма', 'Amount'), type: 'number', money: true, moneyKind: 'unconverted', db: 'amount', get: (r) => num(r.amount) },
     ],
   },
   {
@@ -103,7 +109,7 @@ export const DATASETS: DatasetDef[] = [
       { key: 'status', label: l('Статус', 'Статус', 'Status'), type: 'enum', values: PLAN_STATUS, db: 'status', get: (r) => r.status },
       { key: 'createdAtExt', label: l('Додано в план', 'Добавлено в план', 'Added to plan'), type: 'date', db: 'createdAtExt', get: (r) => r.createdAtExt },
       { key: 'markedDoneAt', label: l('Виконано', 'Выполнено', 'Done on'), type: 'date', db: 'markedDoneAt', get: (r) => r.markedDoneAt ?? null },
-      { key: 'price', label: l('Ціна', 'Цена', 'Price'), type: 'number', money: true, db: 'price', get: (r) => num(r.price) },
+      { key: 'price', label: l('Ціна', 'Цена', 'Price'), type: 'number', money: true, moneyKind: 'unconverted', db: 'price', get: (r) => num(r.price) },
     ],
   },
   {
@@ -114,7 +120,7 @@ export const DATASETS: DatasetDef[] = [
     fields: [
       ...patientBits('p'),
       { key: 'paidAt', label: l('Дата платежу', 'Дата платежа', 'Payment date'), type: 'date', db: 'paidAt', get: (r) => r.paidAt },
-      { key: 'amount', label: l('Сума', 'Сумма', 'Amount'), type: 'number', money: true, db: 'amount', get: (r) => num(r.amount) },
+      { key: 'amount', label: l('Сума', 'Сумма', 'Amount'), type: 'number', money: true, moneyKind: 'source', currencyOf: (r) => r.currency ?? null, db: 'amount', get: (r) => num(r.amount) },
       { key: 'type', label: l('Тип платежу', 'Тип платежа', 'Payment type'), type: 'string', db: 'type', get: (r) => r.type ?? null },
     ],
   },

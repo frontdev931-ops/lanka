@@ -60,6 +60,11 @@ export class TelegramApi {
     return this.call<boolean>(token, 'setWebhook', { url, secret_token: secret, allowed_updates: ['message', 'callback_query'] });
   }
 
+  // The bot's current delivery state: a webhook address (another service may be using the bot) and how many updates wait undelivered
+  getWebhookInfo(token: string) {
+    return this.call<{ url?: string; pending_update_count?: number }>(token, 'getWebhookInfo');
+  }
+
   deleteWebhook(token: string) {
     return this.call<boolean>(token, 'deleteWebhook');
   }

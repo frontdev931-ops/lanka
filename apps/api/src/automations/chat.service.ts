@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgentAutoService } from './agent-auto.service';
+import { AgentAutoGate } from './agent-auto-gate';
 import { AutoReplyService } from './auto-reply.service';
 import { MessengerService, SendError } from './messenger.service';
 
@@ -13,6 +14,7 @@ export class ChatService {
     private messenger: MessengerService,
     private autoReply: AutoReplyService,
     private auto: AgentAutoService,
+    private gate: AgentAutoGate,
   ) {}
 
   // List of dialogues: by the last message of each chat, newest first; unread ones are counted separately
@@ -31,6 +33,7 @@ export class ChatService {
     ]);
     const nameMap = new Map(names.map((n) => [`${n.channel}:${n.chatId}`, n.contactName]));
     const unreadMap = new Map(unread.map((u) => [`${u.channel}:${u.chatId}`, u._count]));
+    const who = await this.whoAnswers(clinicId, last.map((m) => ({ channel: m.channel, chatId: m.chatId })));
     return last.map((m) => ({
       channel: m.channel,
       chatId: m.chatId,
@@ -40,7 +43,44 @@ export class ChatService {
       lastDirection: m.direction,
       lastAt: m.createdAt,
       unread: unreadMap.get(`${m.channel}:${m.chatId}`) ?? 0,
+      // who answers the next message of this dialogue by itself: 'AI' (the autonomous agent or the automatic reply) or 'STAFF'
+      answers: who.get(`${m.channel}:${m.chatId}`) ?? 'STAFF',
     }));
+  }
+
+  // Who answers next, for the list of dialogues. The same rules as the senders, read once for the list:
+  //   - a dialogue a person took over (ConversationState.owner HUMAN) is the staff's;
+  //   - the autonomous agent: AgentAutoGate allows it for the channel (scope CLINIC) or for this listed dialogue (scope DIALOGS);
+  //   - otherwise the older automatic reply (aiEnabled + aiAutoReply, not in agent mode), except during the pause after a person's answer;
+  //   - otherwise the staff (drafts are only suggestions).
+  // The senders check everything again at the moment of sending; this is a label, it decides nothing.
+  private async whoAnswers(clinicId: string, chats: { channel: string; chatId: string }[]): Promise<Map<string, 'AI' | 'STAFF'>> {
+    const out = new Map<string, 'AI' | 'STAFF'>();
+    if (!chats.length) return out;
+    const [c, human] = await Promise.all([
+      this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { aiEnabled: true, aiAutoReply: true, aiAgentMode: true, aiPauseMinutes: true, sendingEnabled: true } }),
+      this.prisma.conversationState.findMany({ where: { clinicId, owner: 'HUMAN' }, select: { channel: true, chatId: true } }),
+    ]);
+    if (!c) return out;
+    const humanSet = new Set(human.map((h) => `${h.channel}:${h.chatId}`));
+    const byChannel = new Map<string, Awaited<ReturnType<AgentAutoGate['denied']>>>();
+    for (const ch of new Set(chats.map((x) => x.channel))) byChannel.set(ch, await this.gate.denied(clinicId, ch, '__list__'));
+    const legacy = c.aiEnabled && c.aiAutoReply && !c.aiAgentMode && c.sendingEnabled;
+    const pauseMs = (c.aiPauseMinutes ?? 30) * 60_000;
+    const paused = new Set<string>();
+    if (legacy && pauseMs > 0) {
+      const recent = await this.prisma.chatMessage.findMany({ where: { clinicId, direction: 'OUT', authorUserId: { not: null }, error: null, createdAt: { gt: new Date(Date.now() - pauseMs) } }, distinct: ['channel', 'chatId'], select: { channel: true, chatId: true } });
+      const resumed = await this.prisma.chatBotResume.findMany({ where: { clinicId, resumedAt: { gt: new Date(Date.now() - pauseMs) } }, select: { channel: true, chatId: true } });
+      const back = new Set(resumed.map((r) => `${r.channel}:${r.chatId}`));
+      for (const r of recent) if (!back.has(`${r.channel}:${r.chatId}`)) paused.add(`${r.channel}:${r.chatId}`);
+    }
+    for (const x of chats) {
+      const key = `${x.channel}:${x.chatId}`;
+      const d = byChannel.get(x.channel);
+      const agent = d === null || (d === 'dialog_not_listed' && this.gate.listed(clinicId, x.channel, x.chatId) && (await this.gate.denied(clinicId, x.channel, x.chatId)) === null);
+      out.set(key, humanSet.has(key) ? 'STAFF' : agent ? 'AI' : legacy && !paused.has(key) ? 'AI' : 'STAFF');
+    }
+    return out;
   }
 
   // Open a dialogue: the latest messages, incoming ones are marked as read

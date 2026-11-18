@@ -155,7 +155,8 @@ export class MetaLoginService implements OnApplicationBootstrap, OnModuleDestroy
     } catch {
       throw new BadRequestException('meta_oauth_failed');
     }
-    const extra = { mode: FB_MODE, pageId, tokenType: tokenInfo.type, ...(tokenInfo.expiresAt ? { tokenExpiresAt: tokenInfo.expiresAt } : {}), connectedById: userId };
+    // `leads`: the clinic granted leads_retrieval (Lead Ads); shown in the settings with what is missing
+    const extra = { mode: FB_MODE, pageId, tokenType: tokenInfo.type, ...(tokenInfo.expiresAt ? { tokenExpiresAt: tokenInfo.expiresAt } : {}), connectedById: userId, leads: can.leads, leadsSubscribed: false };
     // Both channels are checked for conflicts before anything is written, so a conflict on one does not leave the other half-connected
     if (can.messenger) await this.facebook.attach(clinicId, { ownId: page.id, name: page.name, token: pageToken, config: extra });
     if (wantInstagram) await this.instagram.attach(clinicId, { ownId: page.igId!, name: page.igUsername, token: pageToken, config: { ...extra, igUsername: page.igUsername } });
@@ -171,7 +172,12 @@ export class MetaLoginService implements OnApplicationBootstrap, OnModuleDestroy
       this.log.warn(`Page ${pageId}: not subscribed (${subscribeWarning})`);
     }
     // Lead forms only with their own permission, and a failure there must not undo the connection
-    if (can.leads) await this.api.subscribe(pageToken, pageId, `${base},leadgen`).catch((e) => this.log.warn(`Lead forms not subscribed: ${(e as Error).message}`));
+    const leadsSubscribed = can.leads ? await this.api.subscribe(pageToken, pageId, `${base},leadgen`).then(() => true, (e) => (this.log.warn(`Lead forms not subscribed: ${(e as Error).message}`), false)) : false;
+    if (leadsSubscribed) {
+      for (const row of await this.prisma.integration.findMany({ where: { clinicId, provider: { in: [Provider.MESSENGER, Provider.INSTAGRAM] }, config: { path: ['pageId'], equals: pageId } } })) {
+        await this.prisma.integration.update({ where: { id: row.id }, data: { config: { ...(row.config as object), leadsSubscribed: true } } });
+      }
+    }
     if (subscribeWarning) {
       for (const row of await this.prisma.integration.findMany({ where: { clinicId, provider: { in: [Provider.MESSENGER, Provider.INSTAGRAM] }, config: { path: ['pageId'], equals: pageId } } })) {
         await this.prisma.integration.update({ where: { id: row.id }, data: { config: { ...(row.config as object), subscribeWarning } } });

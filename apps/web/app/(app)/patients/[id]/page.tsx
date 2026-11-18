@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { api } from '../../../../lib/api';
 import { useI18n } from '../../../../lib/i18n';
-import { fmtDate, fmtDateTime, fmtNumber, initials } from '../../../../lib/ui';
+import { fmtDate, fmtDateTime, fmtNumber, initials, fmtAmount } from '../../../../lib/ui';
 import { Alert, Badge, Card, Empty, Icon, Loading, resultTone, statusTone } from '../../../../components/ui';
 import { QrCode } from '../../../../components/QrCode';
 
@@ -19,6 +19,8 @@ interface Patient {
   removedAt?: string | null;
   balanceIssued?: string | null;
   balancePaid?: string | null;
+  // the stamp of the balance (null: the currency is not confirmed)
+  balanceCurrency?: string | null;
   consent: 'UNKNOWN' | 'GIVEN' | 'WITHDRAWN';
   consentNote: string | null;
   automationPaused: boolean;
@@ -106,7 +108,8 @@ export default function PatientPage() {
   const showMoney = p.balanceIssued !== undefined;
   const issued = Number(p.balanceIssued ?? 0);
   const paid = Number(p.balancePaid ?? 0);
-  const debt = issued - paid > 0 ? fmtNumber(Math.round((issued - paid) * 100) / 100) : null;
+  const amt = (n: number) => fmtAmount(n, p.balanceCurrency ?? null, t('billing.uah'), t('money.unknownShort'));
+  const debt = issued - paid > 0 ? amt(Math.round((issued - paid) * 100) / 100) : null;
   const extra = Object.entries(p.extra ?? {});
   const consentTone = p.consent === 'GIVEN' ? 'green' : p.consent === 'WITHDRAWN' ? 'red' : 'gray';
 
@@ -148,8 +151,8 @@ export default function PatientPage() {
           <div><dt>{t('pd.lastVisit')}</dt><dd>{fmtDate(p.lastVisitAt)}</dd></div>
           {showMoney && (
             <>
-              <div><dt>{t('pd.billed')}</dt><dd>{p.balanceIssued ? fmtNumber(issued) : '—'}</dd></div>
-              <div><dt>{t('pd.paid')}</dt><dd>{p.balancePaid ? fmtNumber(paid) : '—'}</dd></div>
+              <div><dt>{t('pd.billed')}</dt><dd>{p.balanceIssued ? amt(issued) : '—'}</dd></div>
+              <div><dt>{t('pd.paid')}</dt><dd>{p.balancePaid ? amt(paid) : '—'}</dd></div>
               <div><dt>{t('pd.debt')}</dt><dd>{debt ? <Badge tone="amber">{debt}</Badge> : '0'}</dd></div>
             </>
           )}

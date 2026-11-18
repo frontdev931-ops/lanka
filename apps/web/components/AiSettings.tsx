@@ -8,6 +8,7 @@ import { ProHint } from './ProHint';
 import { Switch } from './Switch';
 import { useConfirm } from './ConfirmDialog';
 import { SendingOffNotice } from './SendingSettings';
+import { AgentAutoCard, AgentStatus } from './AgentAutoCard';
 
 interface AiStatus {
   available: boolean;
@@ -37,11 +38,13 @@ interface AiStatus {
 //      so a clinic with it off is shown as such and nothing is rewritten on load.
 //   - Booking from the conversation: whether a visit is created by itself after the patient confirmed (aiAutoBooking; the schedule settings are below it).
 // The shared parts are only noted here: the monthly AI allowance (shared with the manager's assistant; in Payment) and the sending switch (in General).
-export function AiSettings({ onOpenGeneral, onOpenBilling }: { onOpenGeneral?: () => void; onOpenBilling?: () => void }) {
+export function AiSettings({ onOpenGeneral, onOpenBilling, isOwner = false }: { onOpenGeneral?: () => void; onOpenBilling?: () => void; isOwner?: boolean }) {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();
   const [ai, setAi] = useState<AiStatus | null>(null);
   const [telegram, setTelegram] = useState(false);
+  // the clinic's own activation of the autonomous agent (AgentAutoCard reports every change, so the texts below follow it)
+  const [agentSt, setAgentSt] = useState<AgentStatus | null>(null);
   const [perChat, setPerChat] = useState('');
   const [pause, setPause] = useState('');
   const [busy, setBusy] = useState(false);
@@ -59,6 +62,13 @@ export function AiSettings({ onOpenGeneral, onOpenBilling }: { onOpenGeneral?: (
     api<{ telegram: { connected: boolean } }>('/automations').then((o) => setTelegram(o.telegram.connected)).catch(() => undefined);
   }, []);
   useEffect(load, [load]);
+  const agentChanged = useCallback(
+    (s: AgentStatus) => {
+      setAgentSt(s);
+      load();
+    },
+    [load],
+  );
   useEffect(() => {
     if (!info) return;
     const id = setTimeout(() => setInfo(''), 6000);
@@ -90,7 +100,10 @@ export function AiSettings({ onOpenGeneral, onOpenBilling }: { onOpenGeneral?: (
     if (key === 'drafts' && legacy === 'off' && !(await ask(t('mode.confirm.draft'), { title: t('aiset.drafts') }))) return;
     patchAi({ enabled: true, autoReply: key === 'auto' });
   };
-  const badge = agent ? (ai.agentAuto ? t('aiset.agentAutoBadge') : t('aiset.agentDraftsBadge')) : legacy === 'off' ? t('aiset.offBadge') : legacy === 'auto' ? t('aiset.auto') : t('aiset.drafts');
+  // on for the whole clinic by the owner (scope CLINIC) and really allowed now; the older restricted test mode keeps its own wording
+  const clinicWide = !!agentSt?.active && !agentSt.paused;
+  const autoShown = ai.agentAuto && (clinicWide || !!agentSt?.testMode || !agentSt);
+  const badge = agent ? (clinicWide ? t('aiset.agentClinicBadge') : autoShown ? t('aiset.agentAutoBadge') : t('aiset.agentDraftsBadge')) : legacy === 'off' ? t('aiset.offBadge') : legacy === 'auto' ? t('aiset.auto') : t('aiset.drafts');
 
   return (
     <>
@@ -99,12 +112,14 @@ export function AiSettings({ onOpenGeneral, onOpenBilling }: { onOpenGeneral?: (
       {info && <Alert tone="success">{info}</Alert>}
       {!ai.available && <Alert tone="warn">{t('ai.notConfigured')}</Alert>}
 
+      <AgentAutoCard canEdit={isOwner} onChanged={agentChanged} />
+
       <Card title={t('aiset.repliesTitle')} actions={<Badge tone={!agent && legacy === 'off' ? 'gray' : 'green'}>{badge}</Badge>}>
         {agent ? (
           <>
-            <p className="rule" style={{ marginTop: 0 }}><b>{ai.agentAuto ? t('aiset.agentAuto') : t('aiset.agentDrafts')}</b></p>
-            {ai.agentAuto && <p className="rule">{t('aiset.agentAutoLimited')}</p>}
-            <p className="muted" style={{ fontSize: 13 }}>{t('aiset.agentOwner')}</p>
+            <p className="rule" style={{ marginTop: 0 }}><b>{clinicWide ? t('aiset.agentClinic') : autoShown ? t('aiset.agentAuto') : t('aiset.agentDrafts')}</b></p>
+            {autoShown && !clinicWide && <p className="rule">{t('aiset.agentAutoLimited')}</p>}
+            {autoShown && !clinicWide && <p className="muted" style={{ fontSize: 13 }}>{t('aiset.agentOwner')}</p>}
             {!ai.enabled && (
               <Alert tone="warn">
                 {t('aiset.agentAiOff')}{' '}
@@ -113,7 +128,7 @@ export function AiSettings({ onOpenGeneral, onOpenBilling }: { onOpenGeneral?: (
             )}
             {ai.autoReplyHeldByAgent && <p className="muted" style={{ fontSize: 13 }}>{t('aiset.heldByAgent')}</p>}
             <ul className="terms-list" aria-label={t('aiset.channelsTitle')}>
-              <li>{t('aiset.chMeta')}: {ai.agentAuto ? t('aiset.chAutoAllowed') : t('aiset.chDrafts')}</li>
+              <li>{t('aiset.chMeta')}: {clinicWide ? t('aiset.chAutoClinic') : autoShown ? t('aiset.chAutoAllowed') : t('aiset.chDrafts')}</li>
               {telegram && <li>{t('aiset.telegramNoAuto')}</li>}
             </ul>
           </>
@@ -169,8 +184,8 @@ export function AiSettings({ onOpenGeneral, onOpenBilling }: { onOpenGeneral?: (
           <b>{t('aiset.bookingTitle')}</b>
           {agent ? (
             <>
-              <p className="rule" style={{ margin: '4px 0' }}>{ai.agentAuto ? t('aiset.agentBookingAuto') : t('aiset.agentBookingDrafts')}</p>
-              <p className="muted" style={{ fontSize: 13, margin: 0 }}>{t('aiset.autoBookingAgent')}</p>
+              <p className="rule" style={{ margin: '4px 0' }}>{clinicWide ? t('aiset.agentBookingClinic') : autoShown ? t('aiset.agentBookingAuto') : t('aiset.agentBookingDrafts')}</p>
+              {!clinicWide && <p className="muted" style={{ fontSize: 13, margin: 0 }}>{t('aiset.autoBookingAgent')}</p>}
             </>
           ) : (
             <Switch checked={ai.autoBooking} disabled={busy || !ai.autoBookingSupported} label={t('ai.autoBooking')} hint={ai.autoBookingSupported ? t('ai.autoBookingHint') : t('ai.autoBookingUnsupported')} onChange={(on) => patchAi({ autoBooking: on })} />

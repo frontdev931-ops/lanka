@@ -57,7 +57,7 @@ export class AiService {
   }
 
   async status(clinicId: string) {
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiAgentMode: true, aiAgentAuto: true, aiMonthlyLimit: true, aiAutoBooking: true, aiAutoReply: true, aiRepliesPerChatDay: true, aiPauseMinutes: true, sendingEnabled: true, aiAssistantEnabled: true, aiPurchased: true, periodStartsAt: true } });
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true, aiEnabled: true, aiAgentMode: true, aiAgentAuto: true, aiMonthlyLimit: true, aiAutoBooking: true, aiAutoReply: true, aiRepliesPerChatDay: true, aiPauseMinutes: true, sendingEnabled: true, aiAssistantEnabled: true, aiPurchased: true, periodStartsAt: true } });
     // Only billable replies count; retries of one request are free
     const since = { clinicId, ok: true, billable: true, createdAt: { gte: periodStart(c) } };
     const [used, tokens] = await Promise.all([this.prisma.aiUsage.count({ where: since }), this.prisma.aiUsage.aggregate({ where: since, _sum: { inputTokens: true, outputTokens: true } })]);
@@ -74,7 +74,9 @@ export class AiService {
       agentAuto: c.aiAgentMode && c.aiAgentAuto,
       repliesPerChatDay: c.aiRepliesPerChatDay,
       pauseMinutes: c.aiPauseMinutes,
+      // the manager's assistant works only where the plan includes it (Pro); the clinic's own switch stays as it was saved
       assistant: c.aiAssistantEnabled,
+      assistantInPlan: hasFeature(c.plan, 'ai_assistant'),
       sendingEnabled: c.sendingEnabled,
       autoBookingSupported: bookingWriteSupported(),
       // The temporary server restriction of automatic booking to chosen dialogs (AUTOBOOKING_TEST_ONLY / AUTOBOOKING_TEST_DIALOGS)
@@ -90,6 +92,7 @@ export class AiService {
   async update(clinicId: string, patch: { enabled?: boolean; monthlyLimit?: number; autoBooking?: boolean; autoReply?: boolean; assistant?: boolean; repliesPerChatDay?: number; pauseMinutes?: number }) {
     if (patch.enabled && !this.llm.configured) throw new BadRequestException('ai_not_configured');
     if (patch.assistant && !this.llm.configured) throw new BadRequestException('ai_not_configured');
+    if (patch.assistant && !hasFeature((await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } })).plan, 'ai_assistant')) throw new BadRequestException('plan_feature');
     if (patch.autoReply && !this.llm.configured) throw new BadRequestException('ai_not_configured');
     if (patch.autoReply) {
       const cur = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, plan: true } });
@@ -108,6 +111,8 @@ export class AiService {
   async complete(clinicId: string, kind: string, system: string, messages: { role: 'user' | 'assistant'; content: string }[], maxTokens?: number, scope: 'chat' | 'assistant' = 'chat', billable = true, opts: { schema?: Record<string, unknown>; contacts?: Contacts } = {}): Promise<LlmResult> {
     const st = await this.status(clinicId);
     // chat: replies to patients and drafts; assistant: the manager's assistant (each has its own switch)
+    // the manager's assistant is a Pro feature: checked here, the only place that calls the model, so no route can go round it
+    if (scope === 'assistant' && !st.assistantInPlan) throw new BadRequestException('plan_feature');
     if (!st.available || !(scope === 'assistant' ? st.assistant : st.enabled)) throw new BadRequestException('ai_disabled');
     // Included replies first, then bought ones; with neither left the caller hands the conversation to a person
     // Demo copies share a daily budget so that the public demo cannot run up the AI bill

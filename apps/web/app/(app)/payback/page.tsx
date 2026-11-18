@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api } from '../../../lib/api';
-import { fmtMoney, fmtNumber } from '../../../lib/ui';
+import { MoneyTotal, fmtNumber, fmtTotals } from '../../../lib/ui';
 import { useI18n } from '../../../lib/i18n';
 import { Alert, Card, Icon, Loading, PageHeader } from '../../../components/ui';
 
@@ -17,7 +17,8 @@ interface Payback {
   remindedVisits: number;
   bookingRequestsDone: number;
   aiReplies: number;
-  paid: number;
+  // per currency stamp (never one number across currencies)
+  paid: MoneyTotal[];
   plan: string;
   planPriceUah: number;
 }
@@ -57,6 +58,7 @@ export default function PaybackPage() {
     </section>
   );
 
+  const paidText = data ? fmtTotals(data.paid, t('billing.uah'), t('money.unknown')) : '';
   return (
     <>
       <PageHeader
@@ -77,7 +79,7 @@ export default function PaybackPage() {
         <>
           <div className="stats">
             {stat(t('pb.booked'), fmtNumber(data.booked), t('pb.bookedSub', { n: data.attended }), 'calendar')}
-            {stat(t('pb.paid'), fmtMoney(data.paid, t('billing.uah')), t('pb.paidSub'), 'trend')}
+            {stat(t('pb.paid'), paidText, t('pb.paidSub'), 'trend')}
             {stat(t('pb.reminded'), fmtNumber(data.remindedVisits), t('pb.remindedSub'), 'check')}
             {stat(t('pb.requests'), fmtNumber(data.bookingRequestsDone), t('pb.requestsSub'), 'message')}
             {stat(t('pb.ai'), fmtNumber(data.aiReplies), t('pb.aiSub'), 'sparkles')}
@@ -86,9 +88,9 @@ export default function PaybackPage() {
 
           <Card title={t('pb.costTitle')}>
             {data.planPriceUah > 0 ? (
-              <p className="rule" style={{ marginTop: 0 }}>{t('pb.cost', { sum: fmtNumber(data.planPriceUah), paid: fmtMoney(data.paid, t('billing.uah')), n: data.days })}</p>
+              <p className="rule" style={{ marginTop: 0 }}>{t('pb.cost', { sum: fmtNumber(data.planPriceUah), paid: paidText, n: data.days })}</p>
             ) : (
-              <p className="rule" style={{ marginTop: 0 }}>{t('pb.costCustom', { paid: fmtMoney(data.paid, t('billing.uah')), n: data.days })}</p>
+              <p className="rule" style={{ marginTop: 0 }}>{t('pb.costCustom', { paid: paidText, n: data.days })}</p>
             )}
             <p className="muted" style={{ fontSize: 13 }}>{t('pb.rule', { n: data.attributionDays })}</p>
             <p className="muted" style={{ fontSize: 13 }}>

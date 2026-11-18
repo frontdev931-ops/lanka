@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Options, Param, Patch, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, HttpCode, Options, Param, Patch, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { IsArray, IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 import type { Request, Response } from 'express';
@@ -22,8 +22,8 @@ export class LeadsSettingsController {
 
   @Get()
   @Roles(Role.OWNER, Role.MANAGER)
-  get(@CurrentUser() u: AuthUser) {
-    return this.leads.settings(u.clinicId);
+  async get(@CurrentUser() u: AuthUser) {
+    return { ...(await this.leads.settings(u.clinicId)), canManageSecret: u.role === Role.OWNER };
   }
 
   @Patch()
@@ -42,9 +42,33 @@ export class LeadsSettingsController {
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'leads.key_rotated' } });
     return r;
   }
+  // Meta Lead Ads: the state of the clinic's ad forms (connection, permission, subscription, last lead, leads not fetched yet)
+  @Get('meta')
+  @Roles(Role.OWNER, Role.MANAGER)
+  meta(@CurrentUser() u: AuthUser) {
+    return this.leads.leadAdsStatus(u.clinicId);
+  }
+
+  // The server secret: the owner only. The answer shows it once; later only its last four characters.
+  @Post('secret')
+  @Roles(Role.OWNER)
+  @HttpCode(200)
+  async secret(@CurrentUser() u: AuthUser) {
+    const r = await this.leads.newSecret(u.clinicId);
+    await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'leads.secret_created' } });
+    return r;
+  }
+
+  @Delete('secret')
+  @Roles(Role.OWNER)
+  async revoke(@CurrentUser() u: AuthUser) {
+    const r = await this.leads.revokeSecret(u.clinicId);
+    await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'leads.secret_revoked' } });
+    return r;
+  }
 }
 
-// The public address that site forms and form plugins post to. No sign-in: the secret key in the address decides.
+// The public addresses for website forms. A browser posts to /leads/<public form key> from a listed site; a server posts to /leads/v1/enquiries with its secret.
 @Controller('leads')
 export class LeadsPublicController {
   constructor(private leads: LeadsService) {}
@@ -58,6 +82,14 @@ export class LeadsPublicController {
       res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
       res.setHeader('Access-Control-Max-Age', '600');
     }
+  }
+
+  // A website's server (server-to-server): Authorization: Bearer <secret>; an optional Idempotency-Key header makes a retry the same enquiry.
+  // No CORS headers: a browser must never hold the secret.
+  @Post('v1/enquiries')
+  @HttpCode(200)
+  serverSubmit(@Body() body: Record<string, unknown>, @Headers('authorization') authz: string | undefined, @Headers('idempotency-key') idem: string | undefined, @Req() req: Request) {
+    return this.leads.submitServer(authz, idem, req.ip ?? req.socket.remoteAddress ?? 'unknown', body ?? {});
   }
 
   @Options(':key')

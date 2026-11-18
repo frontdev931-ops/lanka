@@ -22,12 +22,17 @@ export interface LiqpayParams {
   result_url?: string;
   server_url?: string;
   language?: string;
+  // LiqPay's test mode: the payment page takes test cards and nothing is charged (LIQPAY_SANDBOX=1, never in production)
+  sandbox?: 1;
 }
 
-export function buildCheckout(params: Omit<LiqpayParams, 'version' | 'public_key' | 'action' | 'currency'>, keys: { publicKey: string; privateKey: string }) {
-  const data = Buffer.from(JSON.stringify({ version: 3, public_key: keys.publicKey, action: 'pay', currency: 'UAH', ...params })).toString('base64');
+export function buildCheckout(params: Omit<LiqpayParams, 'version' | 'public_key' | 'action' | 'currency' | 'sandbox'>, keys: { publicKey: string; privateKey: string }) {
+  const data = Buffer.from(JSON.stringify({ version: 3, public_key: keys.publicKey, action: 'pay', currency: 'UAH', ...params, ...(liqpaySandbox() ? { sandbox: 1 } : {}) })).toString('base64');
   return { url: LIQPAY_CHECKOUT, data, signature: sign(data, keys.privateKey) };
 }
+
+// The sandbox is for checking the payment path with LiqPay's own test mode before the first real payment. Refused in production.
+export const liqpaySandbox = () => process.env.LIQPAY_SANDBOX === '1' && process.env.NODE_ENV !== 'production';
 
 export interface LiqpayCallback {
   order_id?: string;

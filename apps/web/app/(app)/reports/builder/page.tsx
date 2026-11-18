@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, downloadPost } from '../../../../lib/api';
 import { useI18n } from '../../../../lib/i18n';
-import { fmtDateTime, fmtNumber } from '../../../../lib/ui';
+import { currencyCell, fmtDateTime, fmtNumber } from '../../../../lib/ui';
 import { Alert, Badge, Card, Empty, Icon, Loading, PageHeader } from '../../../../components/ui';
 import { useConfirm } from '../../../../components/ConfirmDialog';
 import { MiniBars } from '../../../../components/MiniBars';
@@ -215,7 +215,7 @@ export default function ReportBuilderPage() {
             {ds?.fields.map((f) => (
               <label key={f.key} className="check-row" style={{ margin: 0, minHeight: 36 }}>
                 <input type="checkbox" checked={columns.includes(f.key)} onChange={(e) => setColumns((c) => (e.target.checked ? [...c, f.key] : c.filter((x) => x !== f.key)))} />
-                <span>{f.label}{f.money ? ' ₴' : ''}</span>
+                <span>{f.label}{f.money ? ` · ${t('money.mark')}` : ''}</span>
               </label>
             ))}
           </fieldset>
@@ -356,7 +356,7 @@ export default function ReportBuilderPage() {
                     {result.rows.map((r, i) => (
                       <tr key={i}>
                         {result.columns.map((c) => (
-                          <td key={c.key}>{typeof r[c.key] === 'number' ? fmtNumber(r[c.key] as number) : r[c.key] ?? '—'}</td>
+                          <td key={c.key}>{c.key === 'currency' ? currencyCell(r[c.key], t('money.unknownShort'), t('money.several')) : typeof r[c.key] === 'number' ? fmtNumber(r[c.key] as number) : r[c.key] ?? '—'}</td>
                         ))}
                       </tr>
                     ))}

@@ -21,7 +21,7 @@ jest.setTimeout(60_000);
 // Nothing goes to Cliniccards or Telegram: the load itself and the connector are replaced, Telegram is a fake.
 const tg = {
   sent: [] as { chatId: string; text: string }[],
-  getMe: async () => ({ id: 1, username: 'sync_test_bot' }),
+  getMe: async () => ({ id: 1, username: 'sync_test_bot' }), getWebhookInfo: async () => ({ url: '', pending_update_count: 0 }),
   sendMessage: async (_t: string, chatId: string | number, text: string) => void tg.sent.push({ chatId: String(chatId), text }),
   answerCallbackQuery: async () => undefined,
   getUpdates: async () => [],
@@ -203,6 +203,36 @@ describe('щоденне автоматичне оновлення Cliniccards',
     await auto.tick(kyiv('2026-12-25 03:00:00'), { clinicIds: ids });
     expect(mine(calls, a.clinicId)).toBe(1);
     expect((await state(a.clinicId)).autoSyncRetryAt?.getTime()).toBe(kyiv('2026-12-25 03:30:00').getTime());
+  });
+
+  it('кілька серверів: запуск одного не обриває живе завантаження іншого; без сигналу понад 2 хвилини або старше 30 хвилин — обірване', async () => {
+    const a = await clinic();
+    const integrationId = (await prisma.integration.findFirstOrThrow({ where: { clinicId: a.clinicId, provider: 'CLINICCARDS' } })).id;
+    const mk = (over: object) => prisma.syncRun.create({ data: { clinicId: a.clinicId, integrationId, ...over } });
+    const ago = (ms: number) => new Date(Date.now() - ms);
+    // another server's load: started 10 minutes ago, alive 15 seconds ago
+    const alive = await mk({ startedAt: ago(10 * 60_000), heartbeatAt: ago(15_000) });
+    const b = await clinic();
+    const bInt = (await prisma.integration.findFirstOrThrow({ where: { clinicId: b.clinicId, provider: 'CLINICCARDS' } })).id;
+    const silent = await prisma.syncRun.create({ data: { clinicId: b.clinicId, integrationId: bInt, startedAt: ago(10 * 60_000), heartbeatAt: ago(3 * 60_000) } });
+    const d = await clinic();
+    const dInt = (await prisma.integration.findFirstOrThrow({ where: { clinicId: d.clinicId, provider: 'CLINICCARDS' } })).id;
+    // records made before the signal existed: a recent one is left, an old one is closed
+    const legacyNew = await prisma.syncRun.create({ data: { clinicId: d.clinicId, integrationId: dInt, startedAt: ago(5 * 60_000) } });
+    const e = await clinic();
+    const eInt = (await prisma.integration.findFirstOrThrow({ where: { clinicId: e.clinicId, provider: 'CLINICCARDS' } })).id;
+    const legacyOld = await prisma.syncRun.create({ data: { clinicId: e.clinicId, integrationId: eInt, startedAt: ago(31 * 60_000) } });
+
+    // this server starts
+    await sync.onApplicationBootstrap();
+    const st = async (id: string) => (await prisma.syncRun.findUniqueOrThrow({ where: { id } })).status;
+    expect(await st(alive.id)).toBe('RUNNING');
+    expect(await st(silent.id)).toBe('FAILED');
+    expect(await st(legacyNew.id)).toBe('RUNNING');
+    expect(await st(legacyOld.id)).toBe('FAILED');
+    // the live load still blocks a second start for its clinic
+    await http().post('/integrations/cliniccards/sync').set(auth(a.token)).expect(409);
+    await prisma.syncRun.updateMany({ where: { id: { in: [alive.id, legacyNew.id] } }, data: { status: 'FAILED', finishedAt: new Date() } });
   });
 
   it('стан у налаштуваннях: увімкнено лише якщо сервер це робить і є ключ; остання помилка зрозумілим видом', async () => {

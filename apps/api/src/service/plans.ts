@@ -6,20 +6,30 @@ export interface Limits {
 }
 
 // Things a plan may or may not include. The server checks them where the feature is used.
-export type Feature = 'ai_autoreply' | 'multi_channel' | 'advanced_analytics' | 'daily_digest';
+// ai_assistant: the manager's assistant (questions about the clinic's data, AI-built report specs). patient_agent: the right to turn on the autonomous
+// patient agent (the clinic's owner still has to set it up and switch it on; the plan alone turns nothing on).
+export type Feature = 'ai_autoreply' | 'multi_channel' | 'advanced_analytics' | 'daily_digest' | 'ai_assistant' | 'patient_agent';
 
 export const PLANS: Record<string, { label: string; limits: Limits; priceUah: number; features: Feature[] }> = {
-  START: { label: 'Start', limits: { users: 10, messagesPerMonth: 2000, aiRepliesPerMonth: 500 }, priceUah: 1990, features: [] },
-  PRO: { label: 'Pro', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 3990, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest'] },
+  START: { label: 'Start', limits: { users: 5, messagesPerMonth: 2000, aiRepliesPerMonth: 500 }, priceUah: 1990, features: [] },
+  PRO: { label: 'Pro', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 3990, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent'] },
+  // A branch of a paid network: the Pro capabilities and Pro allowances, per branch (no shared pool); paid by the network (NETWORK_PRICE below)
+  NETWORK: { label: 'Network', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 0, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent'] },
   // Individual terms: only the overrides apply (a missing one falls back to the Pro level); everything is included
-  CUSTOM: { label: 'Custom', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 0, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest'] },
+  CUSTOM: { label: 'Custom', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 0, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent'] },
 };
 
 export const PLAN_KEYS = Object.keys(PLANS);
 // Plans a clinic can buy by itself
 export const SELLABLE_PLANS = ['START', 'PRO'];
 
-export const SETUP_FEE_USD = 99;
+// The one-time standard onboarding of a clinic, a fixed sum in hryvnias (paid with the first month)
+export const SETUP_FEE_UAH = 4990;
+// The network offer (2026-11-16): 7 990 UAH a month includes two branches, each further branch 2 990 UAH a month; the first onboarding is the standard
+// one (SETUP_FEE_UAH); a further comparable branch's onboarding is quoted individually, from BRANCH_SETUP_MIN_UAH (never charged without a quote)
+export const NETWORK_PRICE = { baseUah: 7990, includedBranches: 2, extraBranchUah: 2990 };
+export const BRANCH_SETUP_MIN_UAH = 2990;
+export const networkMonthlyUah = (branches: number) => NETWORK_PRICE.baseUah + Math.max(0, branches - NETWORK_PRICE.includedBranches) * NETWORK_PRICE.extraBranchUah;
 // One pack of extra AI replies
 export const AI_PACK = { replies: 500, priceUah: 390 };
 // After the paid month ends the clinic keeps access this many days, then real data is closed (kept, not deleted)

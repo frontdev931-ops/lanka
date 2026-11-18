@@ -15,6 +15,6 @@ import { LlmClient } from './llm.client';
   imports: [ReportsModule, ReportBuilderModule, KbModule, BookingModule],
   controllers: [AiController, AssistantController],
   providers: [LlmClient, AiService, ChatAssistantService, AgentDraftService, AssistantService],
-  exports: [AiService, ChatAssistantService, AgentDraftService],
+  exports: [AiService, ChatAssistantService, AgentDraftService, AssistantService],
 })
 export class AiModule {}

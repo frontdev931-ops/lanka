@@ -1,3 +1,6 @@
+import { AgentAutoGate } from './agent-auto-gate';
+import { ModuleRef } from '@nestjs/core';
+import { IntakeService } from './intake.service';
 import { BadRequestException, Injectable, Logger, NotFoundException, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import { Provider } from '@prisma/client';
 import { randomBytes, timingSafeEqual } from 'crypto';
@@ -45,6 +48,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     private waitlist: WaitlistService,
     private flow: BookingFlowService,
     private funnel: FunnelEventsService,
+    private moduleRef: ModuleRef,
   ) {
     this.inbound.register('TELEGRAM', async (clinicId, payload) => {
       const i = await this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.TELEGRAM } } });
@@ -79,6 +83,20 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     } catch {
       throw new BadRequestException('bad_bot_token');
     }
+    // A bot already in use is never taken over silently (2026-11-16): connecting removes or replaces its webhook, and polling starts from the
+    // oldest waiting update, so LANKA would process (and could answer) messages meant for another service or old users. When the bot has a webhook
+    // (other than LANKA's own address of this clinic) or undelivered updates, nothing is stored or changed: the person sees why and decides first.
+    const prevCfg = (await this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.TELEGRAM } } }))?.config as { secret?: string } | null;
+    const ours = prevCfg?.secret ? `${(process.env.WEB_ORIGIN ?? '').replace(/\/$/, '')}/backend/telegram/webhook/${prevCfg.secret}` : null;
+    let info: { url?: string; pending_update_count?: number };
+    try {
+      info = await this.api.getWebhookInfo(token);
+    } catch {
+      throw new BadRequestException('bad_bot_token');
+    }
+    const foreignHook = !!info.url && info.url !== ours;
+    if (foreignHook) throw new BadRequestException({ message: 'bot_webhook_in_use', username: me.username });
+    if (!info.url && (info.pending_update_count ?? 0) > 0) throw new BadRequestException({ message: 'bot_pending_updates', username: me.username, pending: info.pending_update_count });
     const secret = randomBytes(24).toString('base64url');
     const prev = (await this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.TELEGRAM } } }))?.config as { staffChat?: unknown } | null;
     const config = { username: me.username, secret, offset: 0, ...(prev?.staffChat ? { staffChat: prev.staffChat } : {}) };
@@ -106,6 +124,15 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     if (i.apiKeyEnc) await this.api.deleteWebhook(decrypt(i.apiKeyEnc)).catch(() => undefined);
     await this.prisma.integration.delete({ where: { id: i.id } });
     return { connected: false };
+  }
+
+  private async agentMode(clinicId: string): Promise<boolean> {
+    return !!(await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { aiAgentMode: true } }))?.aiAgentMode;
+  }
+
+  // IntakeService is resolved lazily: it is in the same module and the agent services it uses do not depend on Telegram
+  private intake(): IntakeService {
+    return this.moduleRef.get(IntakeService, { strict: false });
   }
 
   // A one-time link for a specific patient: the chat is linked exactly to their card
@@ -228,6 +255,13 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     // An ordinary message: we save it as incoming. One polite reply per day, so the person knows it will be seen.
     const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: 'TELEGRAM', externalId: chatId }, select: { patientId: true } });
     const contactName = [m.from?.first_name, m.from?.last_name].filter(Boolean).join(' ') || (username ? `@${username}` : null);
+    // The agent (2026-11-16): with the clinic's agent mode on, a patient's message goes the same way as in Instagram and Messenger (IntakeService:
+    // saved once, the booking flow, then the agent: drafts for staff, or its own answer where the owner switched it on and AgentAutoGate allows it).
+    // A comment on a low rating stays with the rating flow below.
+    const ratingPending = ch?.patientId ? await this.prisma.review.count({ where: { clinicId, patientId: ch.patientId, comment: null, awaitingUntil: { gt: new Date() } } }) : 0;
+    if (!ratingPending && (await this.agentMode(clinicId))) {
+      return void (await this.intake().handle(clinicId, { channel: 'TELEGRAM', chatId, mid: `tg:${update.update_id}`, text, name: contactName }));
+    }
     await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel: 'TELEGRAM', chatId, contactName, direction: 'IN', text: text.slice(0, 4000) } });
     await this.funnel.record(clinicId, { channel: 'TELEGRAM', chatId, kind: 'INQUIRY', refKey: 'first', linked: !!ch?.patientId });
     // A comment on a low rating: we save it with the review, update the administrator's request, the AI does not reply
@@ -271,6 +305,11 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
       await this.prisma.chatMessage.create({ data: { clinicId, patientId: ch?.patientId ?? null, channel: 'TELEGRAM', chatId, direction: 'IN', text: docAnswer[1] === 'yes' ? 'Так' : docAnswer[1] === 'no' ? 'Ні' : 'Обрав лікаря' } });
       return void (await this.flow.onDoctorAnswer({ clinicId, channel: 'TELEGRAM', chatId, patientId: ch?.patientId ?? null, contactName: null }, docAnswer[1] as 'pick' | 'yes' | 'no' | 'any' | 'wish', docAnswer[2]));
     }
+    // The agent mode: the buttons of the booking flow and of the agent (times, doctor, confirmation, cancelling and moving a visit) go to IntakeService,
+    // as in the other channels; the reminder, waiting-list and rating buttons above keep their own handling
+    if (cq.data && (await this.agentMode(clinicId))) {
+      return void (await this.intake().handle(clinicId, { channel: 'TELEGRAM', chatId, mid: `tgcb:${cq.id}`, text: '', payload: cq.data }));
+    }
     const book = /^book(yes|no)\|([A-Za-z0-9]{10,40})(?:\|([A-Za-z0-9]{6,24}))?$/.exec(cq.data ?? '');
     if (book) {
       const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: 'TELEGRAM', externalId: chatId }, select: { patientId: true } });
@@ -313,7 +352,11 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
     if (!ch) return;
     const when = `${clinicDate(visit.startsAt).slice(5).split('-').reverse().join('.')} ${clinicHm(visit.startsAt)}`;
     if (yes) await this.prisma.visit.update({ where: { id: visit.id }, data: { patientConfirmedAt: new Date() } });
-    else await this.requests.upsert(clinicId, { channel: 'TELEGRAM', chatId, patientId: visit.patientId, kind: 'RESCHEDULE', summary: `Пацієнт просить перенести запис ${when} (відповідь на нагадування).` });
+    // "I want to move it" while the agent may answer this chat by itself (the owner's switch, AgentAutoGate): the agent takes it as the patient's request to
+    // move this visit and offers times (the move itself: new visit first, then the old one cancelled). Otherwise a request for the administrator, as before.
+    else if ((await this.moduleRef.get(AgentAutoGate, { strict: false }).denied(clinicId, 'TELEGRAM', chatId)) === null) {
+      return void (await this.intake().handle(clinicId, { channel: 'TELEGRAM', chatId, mid: `tgmove:${visit.id}:${Date.now()}`, text: `Хочу перенести запис ${when}` }));
+    } else await this.requests.upsert(clinicId, { channel: 'TELEGRAM', chatId, patientId: visit.patientId, kind: 'RESCHEDULE', summary: `Пацієнт просить перенести запис ${when} (відповідь на нагадування).` });
     const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { sendingEnabled: true } });
     if (!clinic.sendingEnabled || ch.optedOutAt) return;
     const lastIn = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel: 'TELEGRAM', chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, select: { text: true } });

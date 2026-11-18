@@ -55,7 +55,16 @@ export class AssistantService {
     }
   }
 
-  async ask(clinicId: string, role: Role, lang: Lang, question: string, history: { q: string; a: string }[] = []): Promise<AssistantResult> {
+  // run: how a spec becomes a report. By default this clinic's report builder; the network assistant passes its own (the same spec run in each
+  // authorized branch and joined), so the model still only writes the spec and explains totals.
+  async ask(
+    clinicId: string,
+    role: Role,
+    lang: Lang,
+    question: string,
+    history: { q: string; a: string }[] = [],
+    run?: (spec: ReportSpec, title: string) => Promise<{ title: string; columns: { key: string; label: string }[]; rows: unknown[]; total: number }>,
+  ): Promise<AssistantResult> {
     const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiAssistantEnabled: true } });
     if (!clinic.aiAssistantEnabled) throw new BadRequestException('assistant_disabled');
 
@@ -85,7 +94,8 @@ export class AssistantService {
       } else {
         try {
           const spec = j.spec as ReportSpec;
-          const report = await this.builder.run(clinicId, role, lang, { ...spec, limit: 500 }, typeof j.title === 'string' ? j.title.slice(0, 120) : '', updatedAt);
+          const title = typeof j.title === 'string' ? j.title.slice(0, 120) : '';
+          const report = run ? await run({ ...spec, limit: 500 }, title) : await this.builder.run(clinicId, role, lang, { ...spec, limit: 500 }, title, updatedAt);
           return { answer: await this.explain(clinicId, lang, question, answer, spec, report), title: report.title, spec, report };
         } catch (e) {
           const detail = (e as { response?: { detail?: string } }).response?.detail ?? (e as Error).message;

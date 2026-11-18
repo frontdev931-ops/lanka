@@ -13,7 +13,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 jest.setTimeout(90_000);
 
 const sent: { chatId: string; text: string }[] = [];
-const tg = { getMe: async () => ({ id: 1, username: 'auto_bot' }), sendMessage: async (_t: string, chatId: string | number, text: string) => void sent.push({ chatId: String(chatId), text }), answerCallbackQuery: async () => true, getUpdates: async () => [], setWebhook: async () => true, deleteWebhook: async () => true };
+const tg = { getMe: async () => ({ id: 1, username: 'auto_bot' }), getWebhookInfo: async () => ({ url: '', pending_update_count: 0 }), sendMessage: async (_t: string, chatId: string | number, text: string) => void sent.push({ chatId: String(chatId), text }), answerCallbackQuery: async () => true, getUpdates: async () => [], setWebhook: async () => true, deleteWebhook: async () => true };
 const TOKEN = '123456789:AAFakeTokenForTestsOnly_abcdefghijklmnop';
 let app: INestApplication;
 let prisma: PrismaService;

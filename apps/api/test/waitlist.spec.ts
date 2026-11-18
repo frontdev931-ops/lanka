@@ -15,7 +15,7 @@ jest.setTimeout(90_000);
 
 const sent: { chatId: string; text: string; extra?: { reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } } }[] = [];
 const tg = {
-  getMe: async () => ({ id: 1, username: 'wl_bot' }),
+  getMe: async () => ({ id: 1, username: 'wl_bot' }), getWebhookInfo: async () => ({ url: '', pending_update_count: 0 }),
   sendMessage: async (_t: string, chatId: string | number, text: string, extra?: never) => void sent.push({ chatId: String(chatId), text, extra }),
   answerCallbackQuery: async () => true,
   getUpdates: async () => [],

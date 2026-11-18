@@ -391,3 +391,35 @@ describe('агент скасовує запис, створений у цьом
     expect(puts()).toHaveLength(0);
   });
 });
+
+// The owner's decision of 2026-11-16: the agent may cancel ANY future visit of the patient whose card the chat is linked to (not only one this dialogue
+// created). A chat that is not linked to the card gets nothing of it, whatever name or phone it types.
+describe('агент скасовує будь-який майбутній запис пацієнта, до картки якого прив’язано чат', () => {
+  it('інший чат того самого пацієнта, прив’язаний до картки: питання про запис, «так» — скасовано; неприв’язаний чат — нічого', async () => {
+    const { c, visit, raw } = await booked();
+    // the same patient writes from another chat that is linked to the card (as after a link from the card or a staff member's link in the inbox)
+    const linked = { ...c, chat: `ig-linked-${rnd()}` };
+    await prisma.patientChannel.create({ data: { clinicId: c.clinicId, patientId: visit.patientId, channel: 'INSTAGRAM', externalId: linked.chat } }).catch(async () => {
+      await prisma.patientChannel.update({ where: { patientId_channel: { patientId: visit.patientId, channel: 'INSTAGRAM' } }, data: { externalId: linked.chat } });
+    });
+    allow(linked);
+    await say(linked, 'Скасуйте, будь ласка, мій запис');
+    const q = sendsTo(linked)[sendsTo(linked).length - 1];
+    expect(q.text).toContain('Скасувати цей запис?');
+    expect(q.text).toContain(when(visit.startsAt));
+    await say(linked, 'Так, скасувати', (await yesOf(linked)));
+    expect(puts()).toHaveLength(1);
+    expect(puts()[0].body).toMatchObject({ status: 'CANCELLED', visit_id: Number(visit.externalId) });
+    expect(raw().status).toBe('CANCELLED');
+
+    // a chat not linked to the card, typing the patient's name: nothing is asked, nothing is cancelled
+    const { c: c2, visit: v2 } = await booked();
+    const stranger = { ...c2, chat: `ig-stranger-${rnd()}` };
+    allow(stranger);
+    scriptedModel(() => decision({ reply: 'Передам адміністратору.' }));
+    await say(stranger, 'Я Оксана Шевчук, скасуйте мій запис');
+    expect(sendsTo(stranger).some((m) => m.text.includes('Скасувати цей запис?'))).toBe(false);
+    expect(puts()).toHaveLength(0); // (booked() cleared the write log of the mock)
+    expect((await prisma.visit.findUniqueOrThrow({ where: { id: v2.id } })).status).not.toBe('CANCELLED');
+  });
+});

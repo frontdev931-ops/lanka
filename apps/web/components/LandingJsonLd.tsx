@@ -36,7 +36,8 @@ export default function LandingJsonLd({ lang }: { lang: Locale }) {
       operatingSystem: 'Web',
       inLanguage: lang,
       publisher: { '@id': `${SITE_URL}/#organization` },
-      offers: L.pricing.plans.map((p) => ({
+      // the network offer is individual work that is not ready yet: it stays out of the structured prices
+      offers: L.pricing.plans.filter((p) => !p.note).map((p) => ({
         '@type': 'Offer',
         name: p.name,
         price: p.price.replace(/\D/g, ''),

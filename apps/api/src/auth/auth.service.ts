@@ -172,6 +172,7 @@ export class AuthService {
       billing: { status: m.clinic.billingStatus, plan: m.clinic.plan, paidUntil: m.clinic.paidUntil, graceDays: GRACE_DAYS, demo: m.clinic.isDemo, blocked: billingEnforced() && accessBlocked(m.clinic) },
       platformAdmin: await isPlatformAdmin(this.prisma, userId),
       role: m.role,
+      clinicId,
       clinicName: m.clinic.name,
       clinicLogo: m.clinic.logo,
       termsAccepted: m.clinic.termsVersion === TERMS_VERSION,

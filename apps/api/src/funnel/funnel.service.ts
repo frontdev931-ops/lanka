@@ -1,3 +1,4 @@
+import { Cur, MoneyTotal, sumByCurrency } from '../common/money';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { clinicDate, clinicMonth, localToUtc } from '../common/clinic-time';
@@ -58,6 +59,8 @@ interface P {
   createdAt: Date;
   lastVisitAt: Date | null;
   paid: number;
+  // the stamp of the card's balance (common/money.ts)
+  paidCurrency: Cur;
   firstBookedAt?: Date;
   firstVisitedAt?: Date;
   firstDoneAt?: Date;
@@ -68,7 +71,8 @@ interface P {
   lastStatus?: string;
   lastStatusEnded?: boolean;
   direction: string;
-  openPlanSum: number;
+  // what is left of the open plans, from the plan totals with their currency stamps (item prices may be in other currencies: never added up)
+  openPlan: MoneyTotal[];
   // stages
   booked: boolean;
   came: boolean;
@@ -85,6 +89,9 @@ const median = (a: number[]) => {
 };
 const days = (a?: Date, b?: Date) => (a && b ? Math.round((b.getTime() - a.getTime()) / DAY) : undefined);
 
+// What the patients paid (their card balances), per currency stamp
+const paidOf = (list: { paid: number; paidCurrency: Cur }[]) => sumByCurrency(list.map((p) => ({ currency: p.paidCurrency, amount: p.paid })));
+
 @Injectable()
 export class FunnelService {
   constructor(private prisma: PrismaService) {}
@@ -96,7 +103,7 @@ export class FunnelService {
     return localToUtc(`${d.toISOString().slice(0, 7)}-01 00:00:00`);
   }
 
-  private readonly patientSelect = { id: true, fullName: true, phone: true, source: true, createdAtExt: true, lastVisitAt: true, balancePaid: true } as const;
+  private readonly patientSelect = { id: true, fullName: true, phone: true, source: true, createdAtExt: true, lastVisitAt: true, balancePaid: true, balanceCurrency: true } as const;
 
   // Loads the cohort (cards created in the period) and computes each patient's stages
   private async load(clinicId: string, months: number): Promise<P[]> {
@@ -116,15 +123,22 @@ export class FunnelService {
 
   private async compute(
     clinicId: string,
-    patients: { id: string; fullName: string; phone: string | null; source: string | null; createdAtExt: Date | null; lastVisitAt: Date | null; balancePaid: unknown }[],
+    patients: { id: string; fullName: string; phone: string | null; source: string | null; createdAtExt: Date | null; lastVisitAt: Date | null; balancePaid: unknown; balanceCurrency: string | null }[],
   ): Promise<P[]> {
     const now = new Date();
     if (!patients.length) return [];
     const ids = patients.map((p) => p.id);
     const [visits, items] = await Promise.all([
       this.prisma.visit.findMany({ where: { clinicId, patientId: { in: ids } }, select: { patientId: true, status: true, startsAt: true, endsAt: true, bookedAt: true } }),
-      this.prisma.planItem.findMany({ where: { clinicId, patientId: { in: ids } }, select: { patientId: true, status: true, markedDoneAt: true, groupName: true, price: true } }),
+      this.prisma.planItem.findMany({ where: { clinicId, patientId: { in: ids } }, select: { patientId: true, planId: true, status: true, markedDoneAt: true, groupName: true, price: true } }),
     ]);
+    const openPlanIds = [...new Set(items.filter((i) => i.status === 'NEW' || i.status === 'PLANNED_TO_DO').map((i) => i.planId))];
+    const planLeft = new Map(
+      (await this.prisma.treatmentPlan.findMany({ where: { clinicId, externalId: { in: openPlanIds } }, select: { externalId: true, total: true, totalDone: true, currency: true } })).map((t) => [
+        t.externalId,
+        { currency: t.currency, amount: Math.max(0, Number(t.total) - Number(t.totalDone)) },
+      ]),
+    );
     const vBy = new Map<string, typeof visits>();
     for (const v of visits) (vBy.get(v.patientId) ?? vBy.set(v.patientId, []).get(v.patientId)!).push(v);
     const iBy = new Map<string, typeof items>();
@@ -144,7 +158,7 @@ export class FunnelService {
         if (d) sums.set(d, (sums.get(d) ?? 0) + Number(i.price ?? 0));
       }
       const direction = [...sums].sort((a, b) => b[1] - a[1])[0]?.[0] ?? NO_DIRECTION;
-      const openPlanSum = its.filter((i) => i.status === 'NEW' || i.status === 'PLANNED_TO_DO').reduce((s, i) => s + Number(i.price ?? 0), 0);
+      const openPlan = sumByCurrency([...new Set(its.filter((i) => i.status === 'NEW' || i.status === 'PLANNED_TO_DO').map((i) => i.planId))].map((id) => planLeft.get(id)).filter((x): x is MoneyTotal => !!x));
 
       const visitedDays = new Set(visited.map((v) => clinicDate(v.startsAt))).size;
       const lastVisited = visited.length ? visited[visited.length - 1].startsAt : undefined;
@@ -167,6 +181,7 @@ export class FunnelService {
         createdAt: p.createdAtExt ?? new Date(0),
         lastVisitAt: p.lastVisitAt,
         paid,
+        paidCurrency: p.balanceCurrency,
         firstBookedAt: vs.map((v) => v.bookedAt).filter((d): d is Date => !!d).sort((a, b) => a.getTime() - b.getTime())[0],
         firstVisitedAt: visited[0]?.startsAt,
         firstDoneAt: doneTreat.map((i) => i.markedDoneAt!).sort((a, b) => a.getTime() - b.getTime())[0],
@@ -177,7 +192,7 @@ export class FunnelService {
         lastStatus: last?.status,
         lastStatusEnded: last ? (last.endsAt ?? new Date(last.startsAt.getTime() + 30 * 60_000)).getTime() < now.getTime() - 2 * 3600_000 : undefined,
         direction,
-        openPlanSum,
+        openPlan,
         booked,
         came,
         started,
@@ -255,20 +270,21 @@ export class FunnelService {
     const groupBy = (key: (p: P) => string, base: P[]) => {
       const m = new Map<string, P[]>();
       for (const p of base) (m.get(key(p)) ?? m.set(key(p), []).get(key(p))!).push(p);
-      return [...m].sort((a, b) => b[1].length - a[1].length).map(([name, list]) => ({ name, ...this.stageCounts(list), paidSum: Math.round(list.reduce((s, p) => s + p.paid, 0)) }));
+      return [...m].sort((a, b) => b[1].length - a[1].length).map(([name, list]) => ({ name, ...this.stageCounts(list), paidSum: paidOf(list) }));
     };
     const bySource = groupBy((p) => p.source, all.filter((p) => !f.direction || p.direction === f.direction));
     const byDirection = groupBy((p) => p.direction, all.filter((p) => !f.source || p.source === f.source)).filter((r) => r.name !== NO_DIRECTION);
 
     const leaks = Object.fromEntries(REASONS.map((r) => [r, this.whoStopped(ps, r).length]));
     // Money of the selected cohort (only for roles that may see money): what was paid and how much planned treatment is still open
-    const sum = (list: P[], pick: (p: P) => number) => Math.round(list.reduce((a, p) => a + pick(p), 0));
+    // per currency: amounts with different stamps are never added up
+    const open = (list: P[]) => sumByCurrency(list.flatMap((p) => p.openPlan));
     const money = withMoney
       ? {
-          paid: sum(ps, (p) => p.paid),
+          paid: paidOf(ps),
           payers: ps.filter((p) => p.paid > 0).length,
-          openPlanNotStarted: sum(ps.filter((p) => p.came && !p.started), (p) => p.openPlanSum),
-          openPlanStarted: sum(ps.filter((p) => p.started), (p) => p.openPlanSum),
+          openPlanNotStarted: open(ps.filter((p) => p.came && !p.started)),
+          openPlanStarted: open(ps.filter((p) => p.started)),
         }
       : null;
     return {
@@ -330,7 +346,7 @@ export class FunnelService {
         createdAt: clinicDate(p.createdAt),
         lastEvidenceAt: p.lastVisited ? clinicDate(p.lastVisited) : null,
         lastStatus: p.lastStatus ?? null,
-        openPlanSum: Math.round(p.openPlanSum),
+        openPlan: p.openPlan,
       })),
     };
   }

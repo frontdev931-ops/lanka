@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, downloadCsv, isUnauthorized } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
-import { fmtDate, fmtDateTime, fmtNumber } from '../../../lib/ui';
+import { fmtDate, fmtDateTime, fmtNumber, currencyCell } from '../../../lib/ui';
 import { dayLabel } from '../../../lib/period';
 import { Alert, Badge, Card, Empty, Icon, Loading, PageHeader, statusTone } from '../../../components/ui';
 import { SyncBar } from '../../../components/SyncBar';
@@ -47,7 +47,7 @@ const NUMERIC = new Set([
   'daysSince', 'patients', 'active', 'visits', 'revenue', 'openItems', 'openSum', 'balanceIssued', 'balancePaid', 'debt',
   'invoiced', 'paid', 'paymentsCount', 'freeMinutes', 'lifetimePaid',
 ]);
-// Sums of money: shown with a thousands separator
+// Sums of money: shown with a thousands separator; the currency is in the column label given by the server (or in the "Currency" column)
 const MONEY = new Set(['revenue', 'openSum', 'balanceIssued', 'balancePaid', 'debt', 'invoiced', 'paid', 'lifetimePaid']);
 
 export default function ReportsPage() {
@@ -219,7 +219,12 @@ export default function ReportsPage() {
     if (key === 'kind') return <Badge tone={v === 'DID_NOT_COME' ? 'red' : v === 'CANCELLED' ? 'amber' : 'blue'}>{label('kind', String(v))}</Badge>;
     if (key === 'fullName' || key === 'source') return <span className="cell-main">{String(v)}</span>;
     if (/At$/.test(key)) return fmtDate(String(v));
-    if (MONEY.has(key)) return key === 'debt' ? <b style={{ color: 'var(--red)' }}>{fmtNumber(Number(v))}</b> : fmtNumber(Number(v));
+    if (key === 'currency') return currencyCell(v, t('money.unknownShort'), t('money.several'));
+    // a row with amounts in several currencies carries text per currency ("1 200 грн; 50 USD"); the server already put the currency into the labels
+    if (MONEY.has(key)) {
+      const shown = typeof v === 'string' ? v : fmtNumber(Number(v));
+      return key === 'debt' ? <b style={{ color: 'var(--red)' }}>{shown}</b> : shown;
+    }
     if (key === 'windows') return <span style={{ whiteSpace: 'normal' }}>{String(v)}</span>;
     return String(v);
   }
@@ -383,7 +388,7 @@ export default function ReportsPage() {
               <thead>
                 <tr>
                   {report.columns.map((c) => (
-                    <th key={c.key} className={NUMERIC.has(c.key) ? 'num' : ''}>{c.label}{MONEY.has(c.key) ? `, ${t('billing.uah')}` : ''}</th>
+                    <th key={c.key} className={NUMERIC.has(c.key) ? 'num' : ''}>{c.label}</th>
                   ))}
                 </tr>
               </thead>

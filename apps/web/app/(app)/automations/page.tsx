@@ -28,6 +28,8 @@ interface Msg {
   scheduledFor: string;
   sentAt: string | null;
   error: string | null;
+  // a failure that certainly did not reach the patient: staff may send it again
+  retryable?: boolean;
 }
 interface MsgList {
   total: number;
@@ -67,6 +69,8 @@ export default function MessagesPage() {
   const [status, setStatus] = useState<string>('PENDING_APPROVAL');
   const [msgs, setMsgs] = useState<MsgList | null>(null);
   const [page, setPage] = useState(1);
+  // the history's channel filter ('' = all)
+  const [channel, setChannel] = useState('');
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
@@ -100,8 +104,8 @@ export default function MessagesPage() {
   const loadMsgs = useCallback(() => {
     if (!isQueue(view)) return;
     setMsgs(null);
-    api<MsgList>(`/messages?status=${status}&page=${page}`).then(setMsgs).catch((e) => setError((e as Error).message));
-  }, [status, page, view]);
+    api<MsgList>(`/messages?status=${status}&page=${page}${channel ? `&channel=${channel}` : ''}`).then(setMsgs).catch((e) => setError((e as Error).message));
+  }, [status, page, view, channel]);
   useEffect(loadOverview, [loadOverview]);
   useEffect(loadMsgs, [loadMsgs]);
   useEffect(() => {
@@ -205,6 +209,14 @@ export default function MessagesPage() {
                     {t(`au.st.${s}` as never)} · {data.queue[s] ?? 0}
                   </button>
                 ))}
+                <label className="field" style={{ margin: 0 }}>
+                  <span className="sr-only">{t('msgw.colChannel')}</span>
+                  <select className="input" value={channel} onChange={(e) => { setChannel(e.target.value); setPage(1); }}>
+                    <option value="">{t('msgw.allChannels')}</option>
+                    <option value="TELEGRAM">Telegram</option>
+                    <option value="INSTAGRAM">Instagram</option>
+                  </select>
+                </label>
               </div>
             )}
             {!msgs ? (
@@ -243,6 +255,18 @@ export default function MessagesPage() {
                             <div className="toolbar" style={{ flexWrap: 'nowrap' }}>
                               {m.status === 'PENDING_APPROVAL' && (
                                 <button className="btn btn-sm" disabled={busy} onClick={() => act(() => api('/messages/approve', { method: 'POST', body: JSON.stringify({ ids: [m.id] }) }))}>{t('au.approve')}</button>
+                              )}
+                              {m.retryable && (
+                                <button
+                                  className="btn btn-sm"
+                                  disabled={busy}
+                                  onClick={async () => {
+                                    if (!(await ask(t('msgw.retryConfirm'), { title: t('msgw.retry'), confirmLabel: t('msgw.retry') }))) return;
+                                    act(() => api(`/messages/${m.id}/retry`, { method: 'POST' }), t('msgw.retried'));
+                                  }}
+                                >
+                                  {t('msgw.retry')}
+                                </button>
                               )}
                               {(m.status === 'PENDING_APPROVAL' || m.status === 'APPROVED') && (
                                 <button className="btn btn-sm" disabled={busy} onClick={() => act(() => api('/messages/cancel', { method: 'POST', body: JSON.stringify({ ids: [m.id] }) }))}>{t('au.cancel')}</button>

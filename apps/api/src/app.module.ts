@@ -1,3 +1,4 @@
+import { NetworkModule } from './network/network.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER } from '@nestjs/core';
@@ -27,6 +28,7 @@ import { AutomationsModule } from './automations/automations.module';
 
 @Module({
   imports: [
+    NetworkModule,
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     AuthModule,

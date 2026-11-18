@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { Alert, Badge, Card, Loading } from './ui';
 import { ChannelsCard } from './ChannelsCard';
+import { LeadAdsCard } from './LeadAdsCard';
 import { LeadsCard } from './LeadsCard';
 import { MetaLoginCard } from './MetaLoginCard';
 import { QrCode } from './QrCode';
@@ -13,7 +14,7 @@ import { useConfirm } from './ConfirmDialog';
 import { LineTabs } from './LineTabs';
 import { ProHint } from './ProHint';
 
-const CH_TABS = ['telegram', 'meta'] as const;
+const CH_TABS = ['telegram', 'meta', 'website'] as const;
 type ChTab = (typeof CH_TABS)[number];
 
 interface Overview {
@@ -22,8 +23,8 @@ interface Overview {
 }
 
 // Settings → "Channels", in two tabs: Telegram (the bot, the staff chat and the manager's digest), and Instagram and Facebook (one shared Facebook login above
-// them, as the server connects both with it). The tab is kept in the address (?ch=meta); the return from a Facebook or Instagram login opens the second one. Every state comes from the server (`/automations`), never from a local toggle. Channels not offered yet (WhatsApp, Viber, the website chat,
-// lead forms) appear only when one is already connected or on, so it can still be managed.
+// them, as the server connects both with it). The tab is kept in the address (?ch=meta); the return from a Facebook or Instagram login opens the second one. Every state comes from the server (`/automations`), never from a local toggle. Channels not offered yet (WhatsApp, Viber) appear only when one is already connected or on.
+// The website tab holds form intake and settings for any already enabled widget.
 export function ChannelSettings() {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();
@@ -39,6 +40,7 @@ export function ChannelSettings() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     if (q.get('ch') === 'meta' || q.has('ig') || q.has('meta')) setCh('meta');
+    else if (q.get('ch') === 'website') setCh('website');
   }, []);
   const pickCh = (k: ChTab) => {
     setCh(k);
@@ -221,13 +223,18 @@ export function ChannelSettings() {
         )}
       </Card>
 
+      <LeadAdsCard />
+
       <ChannelsCard />
       </div>
       )}
 
-      {/* the website chat and lead forms are not offered yet: shown under both tabs only while one is on */}
-      <WebChatCard onlyIfEnabled />
-      <LeadsCard onlyIfEnabled />
+      {ch === 'website' && (
+        <>
+          <LeadsCard />
+          <WebChatCard />
+        </>
+      )}
     </>
   );
 }

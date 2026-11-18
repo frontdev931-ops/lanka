@@ -15,6 +15,18 @@ export interface QuickReply {
   payload: string;
 }
 
+export interface MetaLead {
+  id?: string;
+  created_time?: string;
+  field_data?: { name: string; values?: string[] }[];
+  form_id?: string;
+  platform?: string;
+  ad_id?: string;
+  adset_id?: string;
+  campaign_id?: string;
+  is_organic?: boolean;
+}
+
 export class MetaApiError extends Error {
   constructor(
     message: string,
@@ -61,9 +73,16 @@ export abstract class GraphMessagingApi {
 export class FacebookApi extends GraphMessagingApi {
   protected readonly host = 'https://graph.facebook.com';
 
-  // A lead from an advertising form of the page (Lead Ads); needs the leads_retrieval permission of the page token
-  getLead(token: string, leadgenId: string) {
-    return this.call<{ field_data?: { name: string; values?: string[] }[]; form_id?: string; platform?: string }>(token, 'GET', `${encodeURIComponent(leadgenId)}?fields=field_data,form_id,platform`);
+  // A lead from an advertising form of the page (Lead Ads); needs the leads_retrieval permission of the page token. The ad, ad set and campaign ids and
+  // "organic" are fields of the lead itself; if Meta refuses them for this token (a field error), the lead is read again with the basic fields only.
+  async getLead(token: string, leadgenId: string): Promise<MetaLead> {
+    const path = (fields: string) => `${encodeURIComponent(leadgenId)}?fields=${fields}`;
+    try {
+      return await this.call<MetaLead>(token, 'GET', path('id,created_time,field_data,form_id,platform,ad_id,adset_id,campaign_id,is_organic'));
+    } catch (e) {
+      if (e instanceof MetaApiError && e.code === 100 && /field/i.test(e.message)) return this.call<MetaLead>(token, 'GET', path('field_data,form_id,platform'));
+      throw e;
+    }
   }
 
   // The page the token belongs to

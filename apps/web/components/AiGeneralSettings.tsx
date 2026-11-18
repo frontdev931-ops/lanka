@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { Alert, Badge, Card } from './ui';
+import { ProHint } from './ProHint';
 import { Switch } from './Switch';
 import { useConfirm } from './ConfirmDialog';
 
@@ -13,6 +14,8 @@ interface AiStatus {
   monthlyLimit: number;
   used: number;
   assistant: boolean;
+  // the plan includes the manager's assistant (Pro)
+  assistantInPlan: boolean;
 }
 
 // The AI settings outside patients' conversations, each in one place:
@@ -76,6 +79,14 @@ export function AiGeneralSettings() {
   const { ask, dialog } = useConfirm();
   const { ai, busy, error, patchAi } = useAi();
   if (!ai) return error ? <Alert tone="error">{error}</Alert> : null;
+  // Start: the assistant is not part of the plan, so there is no working switch, only what Pro adds
+  if (!ai.assistantInPlan)
+    return (
+      <Card title={t('as.cardTitle')} actions={<Badge tone="gray">{t('ag.badge.pro')}</Badge>}>
+        <p className="muted" style={{ marginTop: 0 }}>{t('as.hint')}</p>
+        <ProHint feature="ai_assistant" />
+      </Card>
+    );
   return (
     <>
       {dialog}

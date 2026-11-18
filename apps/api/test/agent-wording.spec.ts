@@ -54,7 +54,25 @@ describe('час: побажання клієнта, години роботи, 
     expect(preferencePhrase(parseTimePreference('Удобнее после 19:00')!, 'ru')).toBe('после 19:00');
     expect(parseTimePreference('Скільки коштує консультація?')).toBeNull();
     // a wish is never a slot: nothing here produces a clock time as an offer
-    expect(parseTimePreference('Чи є щось після шостої вечора?')).toMatchObject({ afterMin: 17 * 60, afterKind: 'evening' });
+    // an hour in words is that hour (2026-11-16; before it was read as "evening" = after 17:00)
+    expect(parseTimePreference('Чи є щось після шостої вечора?')).toMatchObject({ afterMin: 18 * 60, afterKind: 'time' });
+  });
+  it('година словами, «о 19», «після 6»: читається як година клініки; «на 2 зуби» — не час', () => {
+    expect(parseTimePreference('Можна після шостої?')).toMatchObject({ afterMin: 18 * 60 });
+    expect(parseTimePreference('Удобно после шести')).toMatchObject({ afterMin: 18 * 60 });
+    expect(parseTimePreference('після 6')).toMatchObject({ afterMin: 18 * 60 });
+    expect(parseTimePreference('після 6 ранку')).toMatchObject({ afterMin: 6 * 60 });
+    expect(parseTimePreference('після 10')).toMatchObject({ afterMin: 10 * 60 });
+    expect(parseTimePreference('до восьмої ранку')).toMatchObject({ beforeMin: 8 * 60 });
+    expect(parseTimePreference('Зручно до п’ятої')).toMatchObject({ beforeMin: 17 * 60 });
+    const at = parseTimePreference('А можна о 19?')!;
+    expect(at).toMatchObject({ afterMin: 19 * 60, beforeMin: 20 * 60, afterKind: 'at' });
+    expect(preferencePhrase(at, 'uk')).toBe('о 19:00');
+    expect(parseTimePreference('Запишіть на 15:30')).toMatchObject({ afterMin: 15 * 60 + 30, beforeMin: 16 * 60 + 30 });
+    expect(preferencePhrase(parseTimePreference('Можно в шесть вечера в пятницу', '2026-11-16')!, 'ru')).toBe('в 18:00 на 20.11');
+    expect(parseTimePreference('Можна о шостій?')).toMatchObject({ afterMin: 18 * 60 });
+    expect(parseTimePreference('Потрібно полікувати на 2 зуби')).toBeNull();
+    expect(parseTimePreference('Скільки коштує о 3 зуби?')).toBeNull();
   });
 });
 

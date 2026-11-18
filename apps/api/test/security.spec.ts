@@ -511,7 +511,7 @@ describe('воронка пациента', () => {
     const short = (await http().get('/funnel?months=1').set(auth(owner.token)).expect(200)).body;
     expect(short.counts.card).toBe(0); // the cards were created 60 days ago: they do not fall into the last month
     const bySource = (await http().get('/funnel').set(auth(owner.token)).expect(200)).body.bySource as { name: string; card: number; paidSum: number }[];
-    expect(bySource.find((r) => r.name === 'Instagram')).toMatchObject({ card: 4, paidSum: 5000 });
+    expect(bySource.find((r) => r.name === 'Instagram')).toMatchObject({ card: 4, paidSum: [{ currency: null, amount: 5000 }] });
   });
 
   it('чужая клиника данных не видит; врач воронку не открывает', async () => {

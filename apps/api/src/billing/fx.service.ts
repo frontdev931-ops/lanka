@@ -1,3 +1,4 @@
+// Not used since 2026-11-12: the onboarding fee is a fixed sum in hryvnias (SETUP_FEE_UAH in service/plans.ts). Kept for a future price in another currency.
 import { Injectable, Logger } from '@nestjs/common';
 
 // UAH per 1 USD, for the one-off setup fee in dollars. Source: the National Bank of Ukraine open data; USD_UAH_RATE overrides it

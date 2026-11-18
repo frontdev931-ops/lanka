@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Elementor consultation form fixture</title>
+</head>
+<body class="home">
+  <main>
+    <h1>Elementor consultation form fixture</h1>
+    <section data-id="4229aa4d">
+      <form class="elementor-form">
+        <input type="hidden" name="form_id" value="4229aa4d">
+        <label>Name <input name="form_fields[name]" required></label>
+        <label>Phone <input type="tel" name="form_fields[email]" required></label>
+        <label>Message <textarea name="form_fields[message]"></textarea></label>
+        <label>Unmapped field <input name="form_fields[other]"></label>
+        <button type="submit">Send</button>
+        <output aria-live="polite"></output>
+      </form>
+    </section>
+    <section data-id="ba0657">
+      <form class="elementor-form">
+        <button type="submit">Send from the other form</button>
+        <output aria-live="polite"></output>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    // The subset of jQuery events and submit lifecycle used by Elementor Forms 3.31.0.
+    window.jQuery = (form) => ({
+      on(events, listener) {
+        for (const event of events.split(' ')) form.addEventListener(event.split('.')[0], listener);
+      },
+    });
+    for (const form of document.querySelectorAll('form.elementor-form')) {
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (form.classList.contains('elementor-form-waiting')) return;
+        form.classList.add('elementor-form-waiting');
+        const status = form.querySelector('output');
+        status.textContent = '';
+        const result = await fetch('/original-submit', {
+          method: 'POST', body: new URLSearchParams(new FormData(form)),
+        }).then((response) => response.json(), () => ({ success: false }));
+        form.classList.remove('elementor-form-waiting');
+        if (result.success) {
+          form.dispatchEvent(new Event('submit_success', { bubbles: true }));
+          form.reset();
+        }
+        status.textContent = result.success ? 'Original form accepted' : 'Original form rejected';
+      });
+    }
+  </script>
+  <script defer src="__LANKA_URL__/lanka-forms.js" data-form-key="__FORM_KEY__"></script>
+  <script defer src="__LANKA_URL__/lanka-forms-elementor.js"
+          data-form-selector='body.home [data-id="4229aa4d"] form.elementor-form'
+          data-form-id="4229aa4d"
+          data-lanka-fields="name=form_fields[name]; phone=form_fields[email]; message=form_fields[message]"></script>
+</body>
+</html>

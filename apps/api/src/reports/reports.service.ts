@@ -5,7 +5,9 @@ import { clinicDate, clinicHm, clinicMonth, localToUtc, startOfClinicDay } from 
 import { readWorkHours } from '../clinic/work-hours';
 import { COLUMN_LABEL, LANKA_MOVES_TEXT, Lang, PERIOD_PHRASE, REPORT_RULE, REPORT_TEXT, ReportId, VALUE_LABEL } from '../common/i18n';
 import { Period, periodDate } from './period';
-import { cellLabel } from './report-export';
+import { cellLabel, headLabel } from './report-export';
+import { MIXED, MoneyKind, RowCur, finishCurrency, CurrencyInfo } from './report-currency';
+import { Cur, MoneyTotal, formatTotals, sumByCurrency } from '../common/money';
 import { lankaMoves } from './lanka-moves';
 
 // Cliniccards statuses: the visit took place / the appointment is no longer valid.
@@ -24,6 +26,24 @@ const DAY = 86_400_000;
 export type Cell = string | number | boolean | null;
 export type Row = Record<string, Cell>;
 
+// Money columns of the ready reports (common/money.ts, report-currency.ts). source: amounts of the clinic's accounts (balances, debt, payments,
+// invoices, the remainder from plan totals), labelled with the stamped currency. unconverted: `revenue` of the sources report, a sum of visit amounts
+// built from service prices, which may be in different currencies.
+const MONEY_COLUMNS: Record<string, MoneyKind> = { balanceIssued: 'source', balancePaid: 'source', debt: 'source', openSum: 'source', lifetimePaid: 'source', invoiced: 'source', paid: 'source', revenue: 'unconverted' };
+const col = (lang: Lang, key: string) => ({ key, label: COLUMN_LABEL[lang][key] ?? key, ...(MONEY_COLUMNS[key] ? { money: MONEY_COLUMNS[key] } : {}) });
+
+// The money cells of one row: when every amount of the row has one stamp, numbers and that stamp; when they differ, each cell is the text of its
+// totals per currency ("1 200 грн; 50 USD") and the row is MIXED. A cell with no amount is 0 (or null when `none` says the amount is not known).
+function moneyCells<K extends string>(cells: Record<K, MoneyTotal[] | null>, fallback: Cur, lang: Lang): Record<K, Cell> & { currency: RowCur } {
+  const stamps = new Set<Cur>();
+  for (const list of Object.values(cells) as (MoneyTotal[] | null)[]) for (const t of list ?? []) stamps.add(t.currency);
+  const entries = Object.entries(cells) as [K, MoneyTotal[] | null][];
+  if (stamps.size > 1) return { ...(Object.fromEntries(entries.map(([k, list]) => [k, list === null ? null : formatTotals(list, lang)])) as Record<K, Cell>), currency: MIXED };
+  const code = stamps.size ? [...stamps][0] : fallback;
+  return { ...(Object.fromEntries(entries.map(([k, list]) => [k, list === null ? null : Math.round(list.reduce((a, t) => a + t.amount, 0))])) as Record<K, Cell>), currency: code };
+}
+const num0 = (v: Cell) => (typeof v === 'number' ? v : 0);
+
 export interface Report {
   id: string;
   title: string;
@@ -35,7 +55,9 @@ export interface Report {
   maxDays: number | null;
   dataUpdatedAt: Date | null;
   generatedAt: string;
-  columns: { key: string; label: string }[];
+  columns: { key: string; label: string; money?: MoneyKind }[];
+  // the currency of the report's amounts (report-currency.ts)
+  currency?: CurrencyInfo;
   canCreateTasks: boolean;
   // A reason shown instead of data that would only be a guess (for example no reliable schedule for the free times), or null
   notice?: string | null;
@@ -52,7 +74,7 @@ export interface ReportSection {
   summary: { label: string; value: number }[];
   // e.g. the legacy audit entries that are not counted
   note: string | null;
-  columns: { key: string; label: string }[];
+  columns: { key: string; label: string; currency?: boolean }[];
   // already in the report's language (no client labelling)
   rows: Row[];
 }
@@ -115,7 +137,18 @@ export class ReportsService {
 
   // period: a chosen range of days (from the home page or a link); it is used by the reports whose rows are tied to a date of a visit
   // (PERIOD_REPORTS), the others keep their "last N days"
+  // Whether a role may open a ready report (the network report asks it per branch)
+  allowedFor(id: string, role: Role): boolean {
+    const meta = META.find((m) => m.id === id);
+    return !!meta && allowed(meta, role);
+  }
+
   async build(clinicId: string, id: string, days: number | undefined, lang: Lang, role?: Role, maxDays?: number, period?: Period | null): Promise<Report> {
+    return finishCurrency(await this.buildRaw(clinicId, id, days, lang, role, maxDays, period), lang);
+  }
+
+  // The report before its currency labels (report-currency.ts): the network report joins several branches and labels the joined rows once
+  async buildRaw(clinicId: string, id: string, days: number | undefined, lang: Lang, role?: Role, maxDays?: number, period?: Period | null): Promise<Report> {
     const meta = META.find((m) => m.id === id);
     if (!meta) throw new NotFoundException('report_not_found');
     if (!allowed(meta, role)) throw new ForbiddenException('report_forbidden');
@@ -129,7 +162,7 @@ export class ReportsService {
       select: { lastSyncAt: true },
     });
     const max = meta.defaultMaxDays ? Math.max(maxDays ?? meta.defaultMaxDays, d + 1) : undefined;
-    const rows = await this.rows(meta.id, clinicId, d, max, win);
+    const rows = await this.rows(meta.id, clinicId, d, max, win, lang);
     return {
       id,
       title: REPORT_TEXT[meta.id].title[lang],
@@ -144,7 +177,7 @@ export class ReportsService {
       // a reason shown instead of times that would only be guesses
       notice: id === 'free-slots' && !rows.length && (await this.freeSlotsNotice(clinicId, undefined, d)) ? NO_SCHEDULE_NOTICE[lang] : null,
       // Free windows by cabinet hours are not tied to a doctor: the "Doctor" column is then not needed
-      columns: meta.columns.filter((key) => !(id === 'free-slots' && key === 'doctor' && rows.every((r) => !r.doctor))).map((key) => ({ key, label: COLUMN_LABEL[lang][key] ?? key })),
+      columns: meta.columns.filter((key) => !(id === 'free-slots' && key === 'doctor' && rows.every((r) => !r.doctor))).map((key) => col(lang, key)),
       rows,
       ...(meta.id === 'missed-visits' ? { rule: `${REPORT_RULE[meta.id][lang](d, max, phrase)}. ${LANKA_MOVES_TEXT[lang].mainNote}`, sections: [await this.lankaMovesSection(clinicId, d, lang, win, phrase)] } : {}),
     };
@@ -171,7 +204,7 @@ export class ReportsService {
         { label: t.visits, value: m.visits },
       ],
       note: m.legacy ? t.legacy(m.legacy) : null,
-      columns: cols.map((key) => ({ key, label: COLUMN_LABEL[lang][key] ?? key })),
+      columns: cols.map((key) => col(lang, key)),
       rows: ops.map((o) => ({
         opWhen: at(o.at),
         visitRef: o.visit ?? t.notRecorded,
@@ -183,7 +216,7 @@ export class ReportsService {
     };
   }
 
-  private rows(id: ReportId, clinicId: string, days: number, maxDays: number | undefined, win: Window): Promise<Row[]> {
+  private rows(id: ReportId, clinicId: string, days: number, maxDays: number | undefined, win: Window, lang: Lang): Promise<Row[]> {
     switch (id) {
       case 'no-next-visit':
         return this.noNextVisit(clinicId, win);
@@ -192,9 +225,9 @@ export class ReportsService {
       case 'unclosed-visits':
         return this.unclosedVisits(clinicId, win);
       case 'lapsed-patients':
-        return this.lapsed(clinicId, days, maxDays ?? 730);
+        return this.lapsed(clinicId, days, maxDays ?? 730, lang);
       case 'unfinished-treatment':
-        return this.unfinishedTreatment(clinicId, days);
+        return this.unfinishedTreatment(clinicId, days, lang);
       case 'debtors':
         return this.debtors(clinicId);
       case 'revenue':
@@ -208,7 +241,7 @@ export class ReportsService {
 
   // Treatment started (a plan item was completed in the period), but incomplete items remain in the same plan;
   // patients with a future valid appointment are not included.
-  private async unfinishedTreatment(clinicId: string, days: number): Promise<Row[]> {
+  private async unfinishedTreatment(clinicId: string, days: number, lang: Lang): Promise<Row[]> {
     const now = new Date();
     const since = new Date(now.getTime() - days * DAY);
     const items = await this.prisma.planItem.findMany({
@@ -241,16 +274,18 @@ export class ReportsService {
     }
     if (!byPatient.size) return [];
 
-    // We take the remaining treatment from the plan totals (in the clinic's currency, with a fixed rate and discount):
-    // item prices may be in another currency, and they must not be added up
+    // The remaining treatment comes ONLY from the plan totals (the clinic's main currency of Cliniccards, with the plan's fixed rate and discount),
+    // with the currency stamped on the plan. Item prices may be in another currency: they are never added up into this sum. A plan without a total
+    // adds nothing; a patient whose open plans have no total at all has no sum (null), not 0.
     const planIds = [...new Set([...plans.values()].map((p) => p.planId))];
     const totals = new Map(
-      (await this.prisma.treatmentPlan.findMany({ where: { clinicId, externalId: { in: planIds } } })).map((t) => [t.externalId, Math.max(0, Number(t.total) - Number(t.totalDone))]),
+      (await this.prisma.treatmentPlan.findMany({ where: { clinicId, externalId: { in: planIds } } })).map((t) => [t.externalId, { currency: t.currency, amount: Math.max(0, Number(t.total) - Number(t.totalDone)) }]),
     );
-    for (const a of byPatient.values()) a.openSum = 0;
+    const openOf = new Map<string, MoneyTotal[]>();
     for (const p of plans.values()) {
       if (!p.open || !p.lastDone) continue;
-      byPatient.get(p.patientId)!.openSum += totals.get(p.planId) ?? p.openSum;
+      const tot = totals.get(p.planId);
+      if (tot) openOf.set(p.patientId, [...(openOf.get(p.patientId) ?? []), tot]);
     }
 
     const ids = [...byPatient.keys()];
@@ -269,12 +304,13 @@ export class ReportsService {
     return patients
       .map((p) => {
         const a = byPatient.get(p.id)!;
+        const open = openOf.get(p.id);
         return {
           patientId: p.id,
           fullName: p.fullName,
           phone: p.phone,
           openItems: a.open,
-          openSum: Math.round(a.openSum),
+          ...moneyCells({ openSum: open ? sumByCurrency(open) : null }, null, lang),
           lastDoneAt: date(a.lastDone),
           daysSince: Math.floor((now.getTime() - a.lastDone.getTime()) / DAY),
         };
@@ -289,7 +325,8 @@ export class ReportsService {
       .map((p) => {
         const issued = Number(p.balanceIssued ?? 0);
         const paid = Number(p.balancePaid ?? 0);
-        return { patientId: p.id, fullName: p.fullName, phone: p.phone, balanceIssued: issued, balancePaid: paid, debt: Math.round((issued - paid) * 100) / 100, lastVisitAt: date(p.lastVisitAt) };
+        // the three amounts of one card share its balance stamp
+        return { patientId: p.id, fullName: p.fullName, phone: p.phone, balanceIssued: issued, balancePaid: paid, debt: Math.round((issued - paid) * 100) / 100, currency: p.balanceCurrency, lastVisitAt: date(p.lastVisitAt) };
       })
       .filter((r) => (r.debt as number) > 0.01)
       .sort((a, b) => (b.debt as number) - (a.debt as number));
@@ -298,25 +335,26 @@ export class ReportsService {
   private async revenue(clinicId: string, days: number): Promise<Row[]> {
     const since = new Date(Date.now() - days * DAY);
     const [invoices, payments] = await Promise.all([
-      this.prisma.invoice.findMany({ where: { clinicId, issuedAt: { gte: since } }, select: { issuedAt: true, amount: true } }),
-      this.prisma.payment.findMany({ where: { clinicId, paidAt: { gte: since } }, select: { paidAt: true, amount: true } }),
+      this.prisma.invoice.findMany({ where: { clinicId, issuedAt: { gte: since } }, select: { issuedAt: true, amount: true, currency: true } }),
+      this.prisma.payment.findMany({ where: { clinicId, paidAt: { gte: since } }, select: { paidAt: true, amount: true, currency: true } }),
     ]);
-    const months = new Map<string, { invoiced: number; paid: number; paymentsCount: number }>();
-    const slot = (d: Date) => {
-      const key = clinicMonth(d);
-      const m = months.get(key) ?? { invoiced: 0, paid: 0, paymentsCount: 0 };
+    // one row per month AND currency: amounts with different stamps are never added up
+    const months = new Map<string, { month: string; currency: Cur; invoiced: number; paid: number; paymentsCount: number }>();
+    const slot = (d: Date, currency: Cur) => {
+      const key = `${clinicMonth(d)}|${currency ?? ''}`;
+      const m = months.get(key) ?? { month: clinicMonth(d), currency, invoiced: 0, paid: 0, paymentsCount: 0 };
       months.set(key, m);
       return m;
     };
-    for (const i of invoices) slot(i.issuedAt).invoiced += Number(i.amount);
+    for (const i of invoices) slot(i.issuedAt, i.currency).invoiced += Number(i.amount);
     for (const p of payments) {
-      const m = slot(p.paidAt);
+      const m = slot(p.paidAt, p.currency);
       m.paid += Number(p.amount);
       m.paymentsCount++;
     }
-    return [...months.entries()]
-      .sort(([a], [b]) => b.localeCompare(a))
-      .map(([month, m]) => ({ month, invoiced: Math.round(m.invoiced), paid: Math.round(m.paid), paymentsCount: m.paymentsCount }));
+    return [...months.values()]
+      .sort((a, b) => b.month.localeCompare(a.month) || String(a.currency ?? '~').localeCompare(String(b.currency ?? '~')))
+      .map((m) => ({ month: m.month, invoiced: Math.round(m.invoiced), paid: Math.round(m.paid), paymentsCount: m.paymentsCount, currency: m.currency }));
   }
 
   // Free time. If Cliniccards has doctor shifts: the shift minus the doctor's appointments minus the reserved time
@@ -525,7 +563,7 @@ export class ReportsService {
 
   // Patients who have not been for a long time: the last visit between days and maxDays days ago (very old ones hardly ever return).
   // Order of calls: first those with unfinished treatment (by sum), then by the sum of payments over all time.
-  private async lapsed(clinicId: string, days: number, maxDays: number): Promise<Row[]> {
+  private async lapsed(clinicId: string, days: number, maxDays: number, lang: Lang): Promise<Row[]> {
     const now = new Date();
     const cutoff = new Date(now.getTime() - days * DAY);
     const oldest = new Date(now.getTime() - maxDays * DAY);
@@ -547,16 +585,15 @@ export class ReportsService {
         lastVisitAt: date(p.lastVisitAt),
         daysSince: Math.floor((now.getTime() - p.lastVisitAt!.getTime()) / DAY),
         source: p.source,
-        openSum: open.get(p.id) ?? 0,
-        lifetimePaid: Math.round(Number(p.balancePaid ?? 0)),
+        ...moneyCells({ openSum: sumByCurrency(open.get(p.id) ?? []), lifetimePaid: [{ currency: p.balanceCurrency, amount: Number(p.balancePaid ?? 0) }] }, p.balanceCurrency, lang),
       }))
-      .sort((a, b) => Number(b.openSum > 0) - Number(a.openSum > 0) || b.openSum - a.openSum || b.lifetimePaid - a.lifetimePaid || b.daysSince - a.daysSince);
+      .sort((a, b) => Number(num0(b.openSum) > 0) - Number(num0(a.openSum) > 0) || num0(b.openSum) - num0(a.openSum) || num0(b.lifetimePaid) - num0(a.lifetimePaid) || b.daysSince - a.daysSince);
   }
 
-  // How much is left to do under patients' treatment plans: the plan total in the clinic's currency (with rate and discount),
-  // and if there are no plan totals, the sum of prices of the incomplete items. Only patients who have incomplete items.
-  private async openTreatment(clinicId: string, patientIds: string[]): Promise<Map<string, number>> {
-    const out = new Map<string, number>();
+  // How much is left to do under patients' treatment plans: the plan totals with their currency stamps (the clinic's main currency of Cliniccards, with
+  // the plan's rate and discount). Item prices may be in another currency, so a plan without a total adds nothing. Only patients with incomplete items.
+  private async openTreatment(clinicId: string, patientIds: string[]): Promise<Map<string, MoneyTotal[]>> {
+    const out = new Map<string, MoneyTotal[]>();
     if (!patientIds.length) return out;
     const items = await this.prisma.planItem.findMany({
       where: { clinicId, patientId: { in: patientIds }, status: { in: ['NEW', 'PLANNED_TO_DO'] } },
@@ -569,9 +606,12 @@ export class ReportsService {
       byPlan.set(i.planId, p);
     }
     const totals = new Map(
-      (await this.prisma.treatmentPlan.findMany({ where: { clinicId, externalId: { in: [...byPlan.keys()] } } })).map((t) => [t.externalId, Math.max(0, Number(t.total) - Number(t.totalDone))]),
+      (await this.prisma.treatmentPlan.findMany({ where: { clinicId, externalId: { in: [...byPlan.keys()] } } })).map((t) => [t.externalId, { currency: t.currency, amount: Math.max(0, Number(t.total) - Number(t.totalDone)) }]),
     );
-    for (const [planId, p] of byPlan) out.set(p.patientId, (out.get(p.patientId) ?? 0) + Math.round(totals.get(planId) ?? p.itemsSum));
+    for (const [planId, p] of byPlan) {
+      const tot = totals.get(planId);
+      if (tot) out.set(p.patientId, [...(out.get(p.patientId) ?? []), tot]);
+    }
     return out;
   }
 
@@ -610,7 +650,7 @@ export class ReportsService {
       return label;
     };
     const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
-    const head = report.columns.map((c) => esc(c.label)).join(';');
+    const head = report.columns.map((c) => esc(headLabel(c, lang))).join(';');
     const lines = report.rows.map((r) => report.columns.map((c) => esc(text(c.key, r[c.key]))).join(';'));
     // a separate section after an empty line: its title, rule, totals and its own table (never mixed into the rows above)
     const parts = (report.sections ?? []).flatMap((sec) => [
@@ -619,7 +659,7 @@ export class ReportsService {
       esc(sec.rule),
       ...sec.summary.map((x) => `${esc(x.label)};${x.value}`),
       ...(sec.note ? [esc(sec.note)] : []),
-      sec.columns.map((c) => esc(c.label)).join(';'),
+      sec.columns.map((c) => esc(headLabel(c, lang))).join(';'),
       ...sec.rows.map((r) => sec.columns.map((c) => esc(text(c.key, r[c.key]))).join(';')),
     ]);
     return '﻿' + [head, ...lines, ...parts].join('\r\n');

@@ -33,11 +33,12 @@ const NAV: (NavItem | { sep: true })[] = [
 ];
 
 // The tabs of a section, shown above the page on exactly these addresses (not on a patient's card or in the report builder). only: the roles that may open the tab.
-type SectionTab = { href: string; label: Key; only?: string[] };
+// needs: 'network' = shown only to a member of a network of clinics
+type SectionTab = { href: string; label: Key; only?: string[]; needs?: 'network' };
 const LEAD = ['OWNER', 'MANAGER'];
 const SECTIONS: { label: Key; tabs: SectionTab[] }[] = [
   { label: 'nav.patients', tabs: [{ href: '/patients', label: 'sec.cards' }, { href: '/inquiries', label: 'nav.inquiries' }, { href: '/waitlist', label: 'nav.waitlist' }] },
-  { label: 'nav.reportsAll', tabs: [{ href: '/reports', label: 'nav.reports' }, { href: '/quality', label: 'nav.quality' }, { href: '/payback', label: 'sec.payback', only: LEAD }, { href: '/insights', label: 'sec.scheduled', only: LEAD }] },
+  { label: 'nav.reportsAll', tabs: [{ href: '/reports', label: 'nav.reports' }, { href: '/quality', label: 'nav.quality' }, { href: '/payback', label: 'sec.payback', only: LEAD }, { href: '/insights', label: 'sec.scheduled', only: LEAD }, { href: '/network', label: 'sec.network', needs: 'network' }] },
   { label: 'nav.aiAdmin', tabs: [{ href: '/knowledge', label: 'nav.knowledge' }, { href: '/ai-admin', label: 'sec.mode', only: LEAD }, { href: '/ai-admin/booking', label: 'sec.booking', only: LEAD }] },
 ];
 
@@ -57,6 +58,7 @@ interface Me {
   email?: string;
   pendingEmail?: string | null;
   role: string;
+  clinicId?: string;
   clinicName: string;
   clinicLogo?: string | null;
   avatar?: string | null;
@@ -105,6 +107,10 @@ export default function Shell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [newRequests, setNewRequests] = useState(0);
   const [aiLimit, setAiLimit] = useState(false);
+  const [assistantInPlan, setAssistantInPlan] = useState(false);
+  // the person's clinics (a network's branches, or several clinics): the switcher in the user box; a member of a network gets the "Network" tab
+  const [clinics, setClinics] = useState<{ id: string; name: string; role: string }[]>([]);
+  const [inNetwork, setInNetwork] = useState(false);
   // most of the monthly AI allowance is used and nothing is bought: a notice in advance (closed for this browser session with the cross)
   const [aiLow, setAiLow] = useState<{ used: number; limit: number } | null>(null);
   useStackedTables();
@@ -117,6 +123,16 @@ export default function Shell({ children }: { children: ReactNode }) {
         if (isUnauthorized(e)) router.replace('/login');
       });
   }, [router]);
+
+  useEffect(() => {
+    if (!me) return;
+    api<{ id: string; name: string; role: string }[]>('/auth/clinics').then(setClinics).catch(() => {});
+    api<unknown[]>('/billing/networks').then((n) => setInNetwork(n.length > 0)).catch(() => {});
+  }, [me]);
+  const switchClinic = async (clinicId: string) => {
+    await api('/auth/switch', { method: 'POST', body: JSON.stringify({ clinicId }) });
+    window.location.href = '/dashboard';
+  };
 
   // The Cliniccards card in Settings reports that the data load is finished: the clinic's logo may have changed
   useEffect(() => {
@@ -143,9 +159,13 @@ export default function Shell({ children }: { children: ReactNode }) {
   // The shared monthly AI allowance is used up: a notice for the owner and the manager on every page (the live state of the server, so it works without
   // Telegram and disappears by itself after a top-up or in a new period). Asked again on every page change; shown only where an AI feature is on.
   useEffect(() => {
-    if (!me || (me.role !== 'OWNER' && me.role !== 'MANAGER') || me.billing?.blocked || me.suspended) return;
-    api<{ available: boolean; enabled: boolean; assistant: boolean; limitReached?: boolean; used: number; monthlyLimit: number; purchased: number }>('/ai')
+    if (!me || me.role === 'DOCTOR' || me.billing?.blocked || me.suspended) return;
+    const lead = me.role === 'OWNER' || me.role === 'MANAGER';
+    api<{ available: boolean; enabled: boolean; assistant: boolean; assistantInPlan?: boolean; limitReached?: boolean; used: number; monthlyLimit: number; purchased: number }>('/ai')
       .then((a) => {
+        // the manager's assistant is a Pro feature: without it the pinned button is not shown at all
+        setAssistantInPlan(a.assistantInPlan !== false);
+        if (!lead) return;
         const on = a.available && (a.enabled || a.assistant);
         setAiLimit(on && !!a.limitReached);
         let closed = false;
@@ -164,7 +184,8 @@ export default function Shell({ children }: { children: ReactNode }) {
     if (!me) return;
     if (me.twoFactorRequired && !path.startsWith('/settings')) router.replace('/settings');
     // Real data opens after payment: until then the only page is the payment tab of Settings (the settings page shows only that tab then)
-    else if (me.billing?.blocked && !path.startsWith('/settings')) router.replace('/settings?tab=billing');
+    // a branch of an unpaid network is paid on the network page, which therefore stays open too
+    else if (me.billing?.blocked && !path.startsWith('/settings') && !path.startsWith('/network')) router.replace('/settings?tab=billing');
   }, [me, path, router]);
 
   const [profile, setProfile] = useState(false);
@@ -183,8 +204,8 @@ export default function Shell({ children }: { children: ReactNode }) {
   const section = SECTIONS.find((s) => s.tabs.some((x) => x.href === path));
   // "Ask AI" (the manager's assistant over the clinic's data) is a button pinned on every page instead of a sidebar item. Not for a doctor (the server
   // refuses the role), not on its own page, and not in the inbox, where it would cover the reply field on a phone.
-  const askAi = !!me && me.role !== 'DOCTOR' && !me.suspended && !me.billing?.blocked && !path.startsWith('/assistant') && !path.startsWith('/inbox');
-  const sectionTabs = section?.tabs.filter((x) => !x.only || (me && x.only.includes(me.role))) ?? [];
+  const askAi = !!me && assistantInPlan && me.role !== 'DOCTOR' && !me.suspended && !me.billing?.blocked && !path.startsWith('/assistant') && !path.startsWith('/inbox');
+  const sectionTabs = section?.tabs.filter((x) => (!x.only || (me && x.only.includes(me.role))) && (x.needs !== 'network' || inNetwork)) ?? [];
 
   return (
     <div className="app">
@@ -228,6 +249,16 @@ export default function Shell({ children }: { children: ReactNode }) {
               <span>{me ? label('role', me.role) : ''}</span>
             </div>
           </button>
+          {clinics.length > 1 && me && (
+            <label className="field clinic-switch">
+              <span>{t('net.switch')}</span>
+              <select className="input" value={me.clinicId ?? ''} onChange={(e) => void switchClinic(e.target.value)}>
+                {clinics.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <button className="btn btn-sm" onClick={signOut}>
             <Icon name="logout" size={15} /> {t('common.logout')}
           </button>

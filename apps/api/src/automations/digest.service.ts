@@ -1,3 +1,4 @@
+import { MoneyTotal, formatMoney, formatTotals, sumByCurrency } from '../common/money';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Provider } from '@prisma/client';
 import { lankaMoves } from '../reports/lanka-moves';
@@ -23,7 +24,8 @@ export interface DigestNumbers {
   lankaMoves: number;
   booked: number;
   newPatients: number;
-  paid: number;
+  // payments of the period per currency stamp (never one number across currencies; common/money.ts)
+  paid: MoneyTotal[];
   upcoming: number;
   upcomingConfirmed: number;
   requestsNew: number;
@@ -34,7 +36,7 @@ export interface DigestNumbers {
   unclosed: number;
   reviews: { count: number; avg: number | null; low: number };
   syncDaysAgo: number | null;
-  prev: { visited: number; noShow: number; cancelled: number; lankaMoves: number; booked: number; newPatients: number; paid: number };
+  prev: { visited: number; noShow: number; cancelled: number; lankaMoves: number; booked: number; newPatients: number; paid: MoneyTotal[] };
 }
 
 const T: Record<Lang, Record<string, string>> = {
@@ -119,11 +121,11 @@ export class DigestService {
         this.prisma.visit.groupBy({ by: ['status'], where: { clinicId, startsAt: { gte: a, lt: b } }, _count: true }),
         this.prisma.visit.count({ where: { clinicId, bookedAt: { gte: a, lt: b } } }),
         this.prisma.patient.count({ where: { clinicId, removedAt: null, createdAtExt: { gte: a, lt: b } } }),
-        this.prisma.payment.aggregate({ where: { clinicId, paidAt: { gte: a, lt: b } }, _sum: { amount: true } }),
+        this.prisma.payment.groupBy({ by: ['currency'], where: { clinicId, paidAt: { gte: a, lt: b } }, _sum: { amount: true } }),
         lankaMoves(this.prisma, clinicId, a, b),
       ]);
       const c = (...st: string[]) => byStatus.filter((x) => st.includes(x.status)).reduce((s, x) => s + x._count, 0);
-      return { visited: c('VISITED'), noShow: c('DID_NOT_COME'), cancelled: c('CANCELLED', 'MOVED'), lankaMoves: moves.operations.length, booked, newPatients: pats, paid: Number(pay._sum.amount ?? 0) };
+      return { visited: c('VISITED'), noShow: c('DID_NOT_COME'), cancelled: c('CANCELLED', 'MOVED'), lankaMoves: moves.operations.length, booked, newPatients: pats, paid: sumByCurrency(pay.map((x) => ({ currency: x.currency, amount: x._sum.amount }))) };
     };
     const [cur, prev, upcoming, upcomingConfirmed, reqNew, reqOpen, sent, failed, replies, unclosed, integ, revs] = await Promise.all([
       count(from, to),
@@ -168,7 +170,11 @@ export class DigestService {
     if (n.lankaMoves || n.prev.lankaMoves) lines.push(f(t.moves, { v: n.lankaMoves, p: was(n.lankaMoves, n.prev.lankaMoves) }));
     lines.push(f(t.booked, { v: n.booked, p: was(n.booked, n.prev.booked) }));
     lines.push(f(t.pats, { v: n.newPatients, p: was(n.newPatients, n.prev.newPatients) }));
-    lines.push(f(t.paid, { v: fmt(n.paid), p: was(n.paid, n.prev.paid, true) }));
+    // each currency with the previous period of the SAME currency; an unconfirmed currency is said as such
+    const paidLine = n.paid.length
+      ? n.paid.map((x) => `${formatMoney(x, lang)} (${t.was} ${fmt(n.prev.paid.find((y) => y.currency === x.currency)?.amount ?? 0)})`).join('; ')
+      : `0 (${t.was} ${n.prev.paid.length ? formatTotals(n.prev.paid, lang) : '0'})`;
+    lines.push(f(t.paid, { v: paidLine, p: '' }));
     lines.push(f(t.upcoming, { v: n.upcoming, c: n.upcomingConfirmed }), '', t.bot);
     lines.push(f(t.req, { n: n.requestsNew, o: n.requestsOpen }));
     lines.push(f(t.msgs, { s: n.sent, r: n.replies }));

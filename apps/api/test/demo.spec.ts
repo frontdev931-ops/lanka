@@ -6,13 +6,15 @@ import { AppModule } from '../src/app.module';
 import { TelegramApi } from '../src/automations/telegram.api';
 import { MailService } from '../src/auth/mail.service';
 import { DemoService } from '../src/demo/demo.service';
+import { OutboxService } from '../src/automations/outbox.service';
+import { PlannerService } from '../src/automations/planner.service';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
 
 jest.setTimeout(90_000);
 
 const sent: string[] = [];
-const tg = { sendMessage: async (_t: string, chat: string) => void sent.push(String(chat)), getMe: async () => ({ id: 1, username: 'x' }), answerCallbackQuery: async () => true, getUpdates: async () => [], setWebhook: async () => true, deleteWebhook: async () => true };
+const tg = { sendMessage: async (_t: string, chat: string) => void sent.push(String(chat)), getMe: async () => ({ id: 1, username: 'x' }), getWebhookInfo: async () => ({ url: '', pending_update_count: 0 }), answerCallbackQuery: async () => true, getUpdates: async () => [], setWebhook: async () => true, deleteWebhook: async () => true };
 const llm = { configured: true, complete: async () => ({ text: JSON.stringify({ intent: 'booking', reply: 'Добрий день! Допоможу з записом.', summary: 'Хоче чистку', options: [] }), inputTokens: 5, outputTokens: 5 }) };
 let app: INestApplication;
 let prisma: PrismaService;
@@ -77,6 +79,61 @@ describe('демо-клініка', () => {
     expect(await prisma.chatMessage.count({ where: { clinicId: d.clinicId, direction: 'OUT' } })).toBe(1);
     // the AI helps with a draft, with the small allowance of the copy
     expect((await d.post('/conversations/TELEGRAM/demo-chat-2/draft').expect(200)).body.reply).toContain('Допоможу');
+  });
+
+  it('шлях пацієнта в демо: воронка звернень, окупність і історія нагадувань рахуються тим самим кодом із рядків копії; повтор нічого не додає; нічого не надсилається', async () => {
+    const d = await start();
+    const counts = async () => ({
+      inquiries: await prisma.inquiry.count({ where: { clinicId: d.clinicId } }),
+      messages: await prisma.outboundMessage.count({ where: { clinicId: d.clinicId } }),
+      visits: await prisma.visit.count({ where: { clinicId: d.clinicId } }),
+      payments: await prisma.payment.count({ where: { clinicId: d.clinicId } }),
+      patients: await prisma.patient.count({ where: { clinicId: d.clinicId } }),
+      rules: await prisma.automationRule.count({ where: { clinicId: d.clinicId } }),
+    });
+    const first = await counts();
+
+    // the funnel of inquiries has real stages and several sources, with the lost and the returning ones apart
+    const f = (await d.get('/funnel/inquiries?months=3').expect(200)).body;
+    expect(f.counts.total).toBe(22);
+    expect(f.returning).toBe(2);
+    expect(f.counts.card).toBe(16);
+    expect(f.counts.booked).toBe(14);
+    expect(f.counts.came).toBe(11);
+    expect(f.counts.came).toBeGreaterThan(f.counts.started);
+    expect(f.counts.lost).toBe(2);
+    expect(await prisma.inquiry.count({ where: { clinicId: d.clinicId, utmCampaign: { not: null } } })).toBe(4);
+
+    // payback: counted from the messages, the later appointments and the payments of the copy
+    const pb = (await d.get('/messages/payback?days=30').expect(200)).body;
+    expect(pb).toMatchObject({ booked: 5, attended: 3, remindedVisits: 3 + 4, paid: [{ currency: 'UAH', amount: 1200 + 1500 + 1800 }] });
+    expect(pb.sent).toBe(8 + 3 + 4);
+
+    // the reminder is on and has a history with both outcomes and the reason of a cancellation
+    const rule = await prisma.automationRule.findUniqueOrThrow({ where: { clinicId_key: { clinicId: d.clinicId, key: 'visit-reminder' } } });
+    expect(rule.enabled).toBe(true);
+    const cancelled = (await d.get('/messages?status=CANCELLED').expect(200)).body;
+    expect(cancelled.rows.length).toBe(1);
+    expect(cancelled.rows[0].error).toContain('запис');
+
+    // a repeat of the seeding adds nothing
+    await demo.seedJourney(d.clinicId);
+    await demo.seedJourney(d.clinicId);
+    expect(await counts()).toEqual(first);
+
+    // the scheduler's work for this copy sends nothing anywhere and calls no model
+    const before = sent.length;
+    await app.get(PlannerService).plan(d.clinicId, { dryRun: false });
+    await prisma.outboundMessage.updateMany({ where: { clinicId: d.clinicId, status: 'PENDING_APPROVAL' }, data: { status: 'APPROVED', scheduledFor: new Date(Date.now() - 1000) } });
+    await app.get(OutboxService).process(new Date(), { clinicId: d.clinicId });
+    expect(sent.length).toBe(before);
+
+    // a real clinic is never seeded
+    const real = await http().post('/auth/register').send({ acceptTerms: true, clinicName: 'Справжня', name: 'Анна', email: `seed${Math.random().toString(36).slice(2, 8)}@example.com`, password: 'correct-horse-battery' }).expect(201);
+    const realId = (await prisma.membership.findFirstOrThrow({ where: { user: { email: real.body.user?.email ?? undefined }, clinic: { name: 'Справжня' } }, orderBy: { clinic: { createdAt: 'desc' } } })).clinicId;
+    await expect(demo.seedJourney(realId)).rejects.toMatchObject({ message: 'demo_only' });
+    expect(await prisma.inquiry.count({ where: { clinicId: realId } })).toBe(0);
+    expect(await prisma.outboundMessage.count({ where: { clinicId: realId } })).toBe(0);
   });
 
   it('загальний денний бюджет ШІ на демо обмежує витрати', async () => {

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, downloadPost } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
-import { fmtDateTime, fmtNumber } from '../../../lib/ui';
+import { currencyCell, fmtDateTime, fmtNumber } from '../../../lib/ui';
 import { Alert, Badge, Card, Icon, Loading, PageHeader } from '../../../components/ui';
 import { MiniBars } from '../../../components/MiniBars';
 
@@ -28,6 +28,7 @@ interface Turn {
 interface AiStatus {
   available: boolean;
   assistant: boolean;
+  assistantInPlan: boolean;
 }
 
 const EXAMPLES = ['as.ex1', 'as.ex2', 'as.ex3', 'as.ex4'] as const;
@@ -89,7 +90,12 @@ export default function AssistantPage() {
       <PageHeader title={t('as.title')} subtitle={t('as.subtitle')} />
       {error && <Alert tone="error">{error}</Alert>}
 
-      {!status.assistant ? (
+      {!status.assistantInPlan ? (
+        <Card>
+          <Alert tone="info">{t('as.proOnly')}</Alert>
+          <Link className="btn btn-primary" href="/reports">{t('nav.reports')}</Link>
+        </Card>
+      ) : !status.assistant ? (
         <Card>
           <Alert tone="warn">{status.available ? t('as.off') : t('ai.notConfigured')}</Alert>
           <Link className="btn btn-primary" href="/settings">{t('as.goSettings')}</Link>
@@ -131,7 +137,7 @@ export default function AssistantPage() {
                           {turn.report.rows.slice(0, 25).map((r, k) => (
                             <tr key={k}>
                               {turn.report!.columns.map((c) => (
-                                <td key={c.key}>{typeof r[c.key] === 'number' ? fmtNumber(r[c.key] as number) : r[c.key] ?? '—'}</td>
+                                <td key={c.key}>{c.key === 'currency' ? currencyCell(r[c.key], t('money.unknownShort'), t('money.several')) : typeof r[c.key] === 'number' ? fmtNumber(r[c.key] as number) : r[c.key] ?? '—'}</td>
                               ))}
                             </tr>
                           ))}

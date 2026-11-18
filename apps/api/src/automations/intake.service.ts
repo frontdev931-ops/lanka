@@ -13,6 +13,8 @@ import { parseTypedTime } from './typed-time';
 const STOP = /^\/?(stop|зупинити|остановить)$/i;
 export const SLOT = /^slot\|(\d{4})-(\d{2})-(\d{2})\|(\d{2}:\d{2})(?:\|(.{1,24}))?$/u;
 const RECEIVED = 'Дякуємо, повідомлення отримано. Адміністратор клініки відповість найближчим часом.';
+// The website chat promises no time: the answer appears in the same window when the clinic's staff read it (2026-11-17)
+const RECEIVED_WEB = 'Дякуємо, повідомлення отримано й передано адміністраторам клініки. Відповідь з’явиться в цьому вікні, щойно вони його прочитають; вікно можна закрити й повернутися пізніше.';
 const STOPPED = 'Гаразд, більше не писатимемо першими. Якщо знадобиться запис, просто напишіть нам.';
 
 // One incoming message from a person in a chat, the same shape for every channel except Telegram (which has its own flows)
@@ -156,7 +158,7 @@ export class IntakeService {
     // acknowledgement would also hide the patient's question from the draft: the draft answers the last message of the patient).
     if (!clinic.sendingEnabled || clinic.aiAgentMode) return;
     const recent = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel, chatId, direction: 'OUT', authorUserId: null, createdAt: { gt: new Date(Date.now() - 86_400_000) } }, select: { id: true } });
-    if (!recent) await this.reply(clinicId, channel, ch?.patientId ?? null, chatId, RECEIVED);
+    if (!recent) await this.reply(clinicId, channel, ch?.patientId ?? null, chatId, channel === 'WEB' ? RECEIVED_WEB : RECEIVED);
   }
 
   private async buttonLabel(clinicId: string, channel: string, chatId: string, payload: string): Promise<string | null> {

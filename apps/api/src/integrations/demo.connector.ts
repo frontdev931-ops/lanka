@@ -4,6 +4,7 @@ import {
   ExternalInvoice,
   ExternalPatient,
   ExternalPayment,
+  ExternalPlan,
   ExternalPlanItem,
   ExternalShift,
   ExternalVisit,
@@ -39,6 +40,8 @@ export class DemoConnector implements ClinicConnector {
     phone: `+38050000${String(1000 + i)}`,
     source: DemoConnector.SOURCES[i % DemoConnector.SOURCES.length],
     lastVisitAt: new Date(Date.now() - (5 + i * 4) * DAY),
+    // the card was created a few days before the first visit, so the patient funnel (by the month of the card) has its stages in the demo
+    createdAt: new Date(Date.now() - (8 + i * 5) * DAY),
     // every fifth has a debt
     balanceIssued: 1000 + (i % 5) * 400,
     balancePaid: i % 5 === 0 ? 400 : 1000 + (i % 5) * 400,
@@ -82,6 +85,18 @@ export class DemoConnector implements ClinicConnector {
   }
 
   // Treatment plan: for every fourth patient some items are done and some are waiting
+  // Plan totals of the made-up plans: the sum of their items (the demo has one currency); done = the items marked done
+  async fetchPlans(): Promise<ExternalPlan[]> {
+    const by = new Map<string, ExternalPlan>();
+    for (const i of await this.fetchTreatment()) {
+      const p = by.get(i.planId) ?? { externalId: i.planId, total: 0, totalDone: 0, createdAt: i.createdAt };
+      p.total += i.price ?? 0;
+      if (i.status === 'DONE') p.totalDone += i.price ?? 0;
+      by.set(i.planId, p);
+    }
+    return [...by.values()];
+  }
+
   async fetchTreatment() {
     const items: ExternalPlanItem[] = [];
     this.patients.forEach((p, i) => {

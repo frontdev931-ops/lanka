@@ -53,8 +53,9 @@ export interface ConversationVisit {
   time: string;
 }
 
-// The future visits that THIS dialogue created: a booking request of the chat that the system confirmed, with the id of the visit it wrote (BookingRequest →
-// externalVisitId), and our copy of that visit still cancellable. Nothing here is found by a name or a phone; another visit of the same patient is not on the list.
+// The future visits the agent may ask about, cancel or move in THIS dialogue: the ones this dialogue created (a booking request of the chat that the system
+// confirmed, with the id of the visit it wrote: BookingRequest → externalVisitId) and, since 2026-11-16, every future visit of the patient whose card the chat
+// is linked to (below). Our copy of the visit must still be cancellable. Nothing here is found by a name or a phone.
 export async function conversationVisits(prisma: PrismaService, clinicId: string, channel: string, chatId: string): Promise<ConversationVisit[]> {
   const reqs = await prisma.bookingRequest.findMany({
     where: { clinicId, channel, chatId, kind: 'BOOKING', status: 'DONE', confirmedAt: { not: null }, externalVisitId: { not: null } },
@@ -66,6 +67,23 @@ export async function conversationVisits(prisma: PrismaService, clinicId: string
     const v = await prisma.visit.findFirst({ where: { clinicId, externalId: r.externalVisitId!, startsAt: { gt: new Date() }, status: { in: CANCELLABLE } }, select: { id: true, externalId: true, startsAt: true, endsAt: true, doctorId: true, doctorName: true, status: true } });
     if (!v || out.some((x) => x.visitId === v.id)) continue;
     out.push({ requestId: r.id, visitId: v.id, externalVisitId: v.externalId, startsAt: v.startsAt, doctorId: v.doctorId ?? null, doctor: r.confirmedDoctor ?? null, service: r.confirmedService ?? r.service, status: v.status, minutes: Math.round(((v.endsAt ?? new Date(v.startsAt.getTime() + 30 * 60_000)).getTime() - v.startsAt.getTime()) / 60_000), date: dmy(v.startsAt), time: clinicHm(v.startsAt) });
+  }
+  // The owner's decision of 2026-11-16: also every other future visit of the patient whose card THIS chat is linked to (a one-time link from the card, the
+  // patient's own shared phone number in Telegram, or a staff member's link in the inbox; never a match by a name or a phone typed in the chat).
+  // Their anchor (requestId) is the visit's own id: no booking request is needed to ask about, cancel or move them.
+  // Not for the website chat (2026-11-17): its visitor is anonymous and its session is a browser token, not a verified identity, so even a chat a staff
+  // member linked to a card gets no access to that patient's other visits (only the visits this very dialogue booked)
+  const linked = channel === 'WEB' ? [] : await prisma.patientChannel.findMany({ where: { clinicId, channel, externalId: chatId, optedOutAt: null }, select: { patientId: true } });
+  if (linked.length) {
+    const visits = await prisma.visit.findMany({
+      where: { clinicId, patientId: { in: linked.map((l) => l.patientId) }, startsAt: { gt: new Date() }, status: { in: CANCELLABLE }, patient: { removedAt: null } },
+      orderBy: { startsAt: 'asc' },
+      select: { id: true, externalId: true, startsAt: true, endsAt: true, doctorId: true, doctorName: true, serviceName: true, status: true },
+    });
+    for (const v of visits) {
+      if (out.some((x) => x.visitId === v.id)) continue;
+      out.push({ requestId: v.id, visitId: v.id, externalVisitId: v.externalId, startsAt: v.startsAt, doctorId: v.doctorId ?? null, doctor: v.doctorName ?? null, service: v.serviceName ?? null, status: v.status, minutes: Math.round(((v.endsAt ?? new Date(v.startsAt.getTime() + 30 * 60_000)).getTime() - v.startsAt.getTime()) / 60_000), date: dmy(v.startsAt), time: clinicHm(v.startsAt) });
+    }
   }
   return out;
 }

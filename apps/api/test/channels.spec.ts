@@ -1,3 +1,4 @@
+import { conversationVisits } from '../src/ai/booking-status';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { createHmac } from 'crypto';
@@ -314,9 +315,17 @@ describe('чат на сайті клініки', () => {
     expect((await visit(c.key, 'messages').set('Authorization', `Bearer ${other}`).expect(200)).body.messages).toHaveLength(0);
   });
 
-  it('ШІ відповідає і в чаті сайту: той самий помічник, ті самі межі', async () => {
+  it('ШІ відповідає і в чаті сайту: той самий помічник, ті самі межі — лише коли власник явно дозволив ШІ в чаті сайту', async () => {
     const c = await enabled();
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiEnabled: true, aiAutoReply: true } });
+    // the clinic's automatic reply is on, but the website chat was not included: the staff answer it, the model is not called
+    const quiet = await session(c.key);
+    llm.next = JSON.stringify({ intent: 'question', reply: 'НЕ МАЄ БУТИ', summary: 'x', options: [] });
+    const r0 = await say(c.key, quiet, 'Добрий день').expect(200);
+    expect(r0.body.messages.map((m: { text: string }) => m.text).join(' ')).not.toContain('НЕ МАЄ БУТИ');
+    expect(r0.body.messages[0].text).toContain('Відповідь з’явиться в цьому вікні');
+    await http().patch('/automations/webchat').set(auth(c.token)).send({ aiAnswers: true }).expect(200);
+    expect((await visit(c.key, 'config').expect(200)).body).toMatchObject({ ai: true });
     const token = await session(c.key);
     llm.next = JSON.stringify({ intent: 'booking', reply: 'Добрий день! Допоможемо із записом.', summary: 'Запис', options: [] });
     const r = await say(c.key, token, 'Хочу записатися на чистку').expect(200);
@@ -341,6 +350,62 @@ describe('чат на сайті клініки', () => {
     await visit(b.key, 'config').expect(404);
     await prisma.clinic.update({ where: { id: a.clinicId }, data: { suspendedAt: new Date() } });
     await visit(a.key, 'config').expect(403);
+  });
+
+  it('«покликати співробітника»: діалог переходить людині, одна заявка, ШІ більше не відповідає; відповідь співробітника бачить лише цей відвідувач', async () => {
+    const c = await enabled();
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiEnabled: true, aiAutoReply: true, aiWebAuto: true } });
+    const token = await session(c.key, { name: 'Ольга' });
+    const h = await http().post(`/webchat/${c.key}/handoff`).set('Origin', SITE).set('Authorization', `Bearer ${token}`).expect(200);
+    expect(h.body.messages[0].text).toContain('Передали ваше прохання');
+    expect(h.body.messages[0].text).not.toMatch(/хвилин|годин|minutes/);
+    await http().post(`/webchat/${c.key}/handoff`).set('Origin', SITE).set('Authorization', `Bearer ${token}`).expect(200);
+    expect(await prisma.bookingRequest.count({ where: { clinicId: c.clinicId, channel: 'WEB', kind: 'HANDOFF' } })).toBe(1);
+    const chatId = (await prisma.chatMessage.findFirstOrThrow({ where: { clinicId: c.clinicId, channel: 'WEB', direction: 'IN' } })).chatId;
+    expect((await prisma.conversationState.findUniqueOrThrow({ where: { clinicId_channel_chatId: { clinicId: c.clinicId, channel: 'WEB', chatId } } })).owner).toBe('HUMAN');
+    llm.next = JSON.stringify({ intent: 'question', reply: 'ШІ НЕ МАЄ ВІДПОВІДАТИ', summary: 'x', options: [] });
+    const r = await say(c.key, token, 'Чекаю на людину').expect(200);
+    expect(JSON.stringify(r.body)).not.toContain('ШІ НЕ МАЄ ВІДПОВІДАТИ');
+    // the inbox shows the dialogue with the website label and whose turn it is; the staff answer reaches this visitor only
+    const list = (await http().get('/conversations').set(auth(c.token)).expect(200)).body as { channel: string; chatId: string; answers: string }[];
+    expect(list.find((x) => x.chatId === chatId)).toMatchObject({ channel: 'WEB', answers: 'STAFF' });
+    await http().post(`/conversations/WEB/${chatId}/reply`).set(auth(c.token)).send({ text: 'Добрий день, це адміністраторка Марія' }).expect(200);
+    expect((await visit(c.key, 'messages').set('Authorization', `Bearer ${token}`).expect(200)).body.messages.map((m: { text: string }) => m.text)).toContain('Добрий день, це адміністраторка Марія');
+    const other = await session(c.key);
+    expect(JSON.stringify((await visit(c.key, 'messages').set('Authorization', `Bearer ${other}`).expect(200)).body)).not.toContain('Марія');
+    // and another clinic's staff cannot read or answer it
+    const b = await enabled();
+    await http().post(`/conversations/WEB/${chatId}/reply`).set(auth(b.token)).send({ text: 'x' }).expect((res) => expect([400, 403, 404]).toContain(res.status));
+    expect(JSON.stringify((await http().get('/conversations').set(auth(b.token)).expect(200)).body)).not.toContain(chatId);
+  });
+
+  it('вигляд і стан: колір і бік перевіряються; «налаштовано» ≠ «перевірено» до першого повідомлення; ШІ в чаті вмикає лише власник; без «Про» чат недоступний', async () => {
+    const c = await enabled();
+    await http().patch('/automations/webchat').set(auth(c.token)).send({ color: 'red' }).expect(400);
+    await http().patch('/automations/webchat').set(auth(c.token)).send({ position: 'TOP' }).expect(400);
+    const s1 = (await http().patch('/automations/webchat').set(auth(c.token)).send({ color: '#AA3366', position: 'LEFT' }).expect(200)).body;
+    expect(s1).toMatchObject({ color: '#aa3366', position: 'LEFT', verifiedAt: null, aiAnswers: false });
+    expect((await visit(c.key, 'config').expect(200)).body).toMatchObject({ color: '#aa3366', position: 'LEFT', ai: false });
+    const manager = await member(c.token, 'MANAGER');
+    await http().patch('/automations/webchat').set(auth(manager)).send({ greeting: 'Привіт' }).expect(200);
+    await http().patch('/automations/webchat').set(auth(manager)).send({ aiAnswers: true }).expect(403);
+    expect((await http().get('/automations/webchat').set(auth(manager)).expect(200)).body).toMatchObject({ canChooseAi: false });
+    const token = await session(c.key);
+    await say(c.key, token, 'Перевірка').expect(200);
+    expect((await http().get('/automations/webchat').set(auth(c.token)).expect(200)).body.verifiedAt).toBeTruthy();
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'START' } });
+    await visit(c.key, 'config').expect(403);
+  });
+
+  it('чат сайту, навіть прив’язаний співробітником до картки, не бачить інших записів пацієнта', async () => {
+    const c = await enabled();
+    const token = await session(c.key);
+    await say(c.key, token, 'Добрий день').expect(200);
+    const chatId = (await prisma.chatMessage.findFirstOrThrow({ where: { clinicId: c.clinicId, channel: 'WEB', direction: 'IN' } })).chatId;
+    const p = await prisma.patient.create({ data: { clinicId: c.clinicId, externalId: `p${rnd()}`, fullName: 'Коваль Іван', phoneNorm: '380509998800' } });
+    await prisma.patientChannel.create({ data: { clinicId: c.clinicId, patientId: p.id, channel: 'WEB', externalId: chatId } });
+    await prisma.visit.create({ data: { clinicId: c.clinicId, patientId: p.id, externalId: `v${rnd()}`, startsAt: new Date(Date.now() + 86_400_000), status: 'PLANNED' } });
+    expect(await conversationVisits(prisma, c.clinicId, 'WEB', chatId)).toHaveLength(0);
   });
 
   it('новий ключ скасовує старий код вставки та відкриті сесії', async () => {

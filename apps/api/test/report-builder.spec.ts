@@ -84,7 +84,7 @@ describe('конструктор отчётов', () => {
     const res = (await http().post('/report-builder/run').set(auth(o.token)).send({ spec }).expect(200)).body;
     expect(res.rows.map((r: { patientName: string }) => r.patientName)).toEqual(['Мельник Оксана', 'Антоненко Іван']); // from old to new, the other clinic's patient is not included
     expect(res.rows[1].debt).toBe(2000);
-    expect(res.columns.map((c: { label: string }) => c.label)).toEqual(['Пацієнт', 'Джерело звернення', 'Останній візит', 'Борг']);
+    expect(res.columns.map((c: { label: string }) => c.label)).toEqual(['Пацієнт', 'Джерело звернення', 'Останній візит', 'Борг (валюта не підтверджена)']);
     expect(res.rule).toContain('Набір даних: Пацієнти');
     expect(res.rule).toContain('Останній візит ≤ 180 дн. тому');
     expect(res.dataUpdatedAt).toBeNull();
@@ -98,7 +98,7 @@ describe('конструктор отчётов', () => {
       { group: 'Лікар Перший', a0: 2, a1: 2000 },
       { group: 'Лікар Другий', a0: 1, a1: 500 },
     ]);
-    expect(byDoctor.columns.map((c: { label: string }) => c.label)).toEqual(['Лікар', 'Кількість', 'Сума: Сума']);
+    expect(byDoctor.columns.map((c: { label: string }) => c.label)).toEqual(['Лікар', 'Кількість', 'Сума: Сума (ціни послуг, без конвертації)']);
     const byStatus = (await http().post('/report-builder/run').set(auth(o.token)).set('Accept-Language', 'en').send({ spec: { dataset: 'visits', groupBy: { field: 'status' }, aggregates: [{ fn: 'count' }] } }).expect(200)).body;
     expect(byStatus.rows.find((r: { group: string }) => r.group === 'No-show')).toMatchObject({ a0: 1 });
     const byMonth = (await http().post('/report-builder/run').set(auth(o.token)).send({ spec: { dataset: 'payments', groupBy: { field: 'paidAt', bucket: 'month' }, aggregates: [{ fn: 'sum', field: 'amount' }, { fn: 'max', field: 'paidAt' }] } }).expect(200)).body;
@@ -133,14 +133,22 @@ describe('конструктор отчётов', () => {
     await wb.xlsx.load(xl.body);
     const ws = wb.worksheets[0];
     expect(ws.getRow(1).getCell(1).value).toBe('Мої пацієнти');
-    expect(ws.getRow(5).getCell(3).value).toBe('Виставлено');
+    expect(ws.getRow(5).getCell(3).value).toBe('Виставлено (валюта не підтверджена)'); // the clinic has not stated the currency of its Cliniccards amounts
     expect(ws.getRow(6).getCell(1).value).toBe('=Формула Петро'); // text, not a formula
     expect(ws.getRow(6).getCell(3).value).toBe(1000); // a number stays a number
     const pdf = await http().post('/report-builder/export').set(auth(o.token)).send({ ...body, format: 'pdf' }).buffer(true).parse(binary).expect(200);
     expect(pdf.body.subarray(0, 5).toString()).toBe('%PDF-');
     const csv = await http().post('/report-builder/export').set(auth(o.token)).send({ ...body, format: 'csv' }).expect(200);
     expect(csv.text).toContain(`"'=Формула Петро"`);
-    expect(await prisma.auditLog.count({ where: { clinicId: o.clinicId, action: 'report.exported' } })).toBe(3);
+    expect(csv.text.split('\r\n')[0]).toContain('"Виставлено (валюта не підтверджена)"');
+    // a price of a plan item and the sum of a visit may be in another currency: no currency in the header, also for their totals
+    const mixed = await http().post('/report-builder/export').set(auth(o.token)).send({ spec: { dataset: 'treatment', columns: ['name', 'price'] }, title: 'Послуги', format: 'csv' }).expect(200);
+    expect(mixed.text.split('\r\n')[0]).not.toMatch(/грн|UAH/);
+    const visitsSum = await http().post('/report-builder/export').set(auth(o.token)).send({ spec: { dataset: 'visits', groupBy: { field: 'status' }, aggregates: [{ fn: 'sum', field: 'amount' }] }, title: 'Візити', format: 'csv' }).expect(200);
+    expect(visitsSum.text.split('\r\n')[0]).not.toMatch(/грн|UAH/);
+    const paySum = await http().post('/report-builder/export').set(auth(o.token)).set('Accept-Language', 'en').send({ spec: { dataset: 'payments', aggregates: [{ fn: 'sum', field: 'amount' }, { fn: 'count' }] }, title: 'Payments', format: 'csv' }).expect(200);
+    expect(paySum.text.split('\r\n')[0]).toBe('\ufeff"Sum: Amount (currency not confirmed)";"Count"');
+    expect(await prisma.auditLog.count({ where: { clinicId: o.clinicId, action: 'report.exported' } })).toBe(6);
     await http().post('/report-builder/export').set(auth(o.token)).send({ ...body, format: 'docx' }).expect(400);
   });
 

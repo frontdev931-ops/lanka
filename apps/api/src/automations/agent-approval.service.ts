@@ -1,3 +1,4 @@
+import { cancelStaleReminders } from './visit-reminders';
 import { BadRequestException, ConflictException, HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AgentDraft as AgentDraftRow, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
@@ -323,8 +324,13 @@ export class AgentApprovalService {
     if (!allowed.length) return 'no_test_service';
     if (snap.step) {
       const req = await this.prisma.bookingRequest.findFirst({ where: { id: snap.step.requestId, clinicId }, select: { service: true, autoState: true } });
-      if (!req || !allowed.some((x) => x.title === req.service)) return 'other_service';
-      if (req.autoState === 'UNKNOWN' || req.autoState === 'RUNNING') return 'unfinished_action';
+      // a question about, a cancellation or a move of a visit of the patient linked to this chat that no booking of this dialogue made (2026-11-16): it has no
+      // request, so the agent's service set is not asked here (a move still checks the new time by the clinic's rules for that visit and refuses otherwise)
+      const linkedVisitChange = !req && CANCEL_STEPS.includes(snap.step.kind);
+      if (!linkedVisitChange) {
+        if (!req || !allowed.some((x) => x.title === req.service)) return 'other_service';
+        if (req.autoState === 'UNKNOWN' || req.autoState === 'RUNNING') return 'unfinished_action';
+      }
     } else if (choice === 'SEND_TIMES' && !allowed.some((x) => x.id === snap.exec.serviceId)) return 'other_service';
     return null;
   }
@@ -523,31 +529,43 @@ export class AgentApprovalService {
 
   // The write: BookingService.reschedule moves the same visit (fresh reading of the visit, the schedule rules again with only this visit left out, the place free,
   // one attempt key per visit and time, reconciliation of a lost answer). SENT: moved; the message about it is a separate step of the caller.
+  // A move, as the owner decided on 2026-11-16: the NEW visit is created first (BookingService.book: its write gates, one attempt per patient and time,
+  // the read-back), and only after it exists the OLD one is cancelled (BookingService.cancel: the visit must still be the one the patient was asked
+  // about). So whatever fails, the patient is never left without a visit: a failed or unknown creation leaves the old visit as it was; a failed or
+  // unknown cancellation leaves both, and the staff get a request to cancel the old one by hand. The move is recorded as `booking.rescheduled`
+  // (one entry per confirmation), so "Перенесено через LANKA" counts it as before.
   private async moveVisit(row: AgentDraftRow, snap: Snapshot): Promise<ApprovalResult> {
     const st = snap.step!;
     const v = st.visit!;
     const to = st.to!;
     const set = (data: Prisma.AgentDraftUncheckedUpdateManyInput) => this.prisma.agentDraft.updateMany({ where: { id: row.id, status: 'APPROVING' }, data: { ...data, requestId: st.requestId } });
-    const own = await this.prisma.visit.findFirst({ where: { id: v.visitId, clinicId: row.clinicId }, select: { startsAt: true, endsAt: true } });
-    const minutes = own ? Math.round(((own.endsAt ?? new Date(own.startsAt.getTime() + 30 * 60_000)).getTime() - own.startsAt.getTime()) / 60_000) : 30;
-    try {
-      const r = await this.booking.reschedule(row.clinicId, null, v.visitId, {
-        startsAt: new Date(to.startsAt),
-        cabinetId: to.cabinetId,
-        // the operation is the patient's confirmation: its retries reuse one attempt, another confirmation (even to the same time) is another move
-        operationId: st.askId,
-        origin: { channel: row.channel, chatId: row.chatId },
-        expect: { externalId: v.externalVisitId, startsAt: new Date(v.startsAt), doctorId: v.doctorId },
-        verify: async () => {
-          const p = await this.flow.movePlacement(row.clinicId, { externalId: v.externalVisitId, doctorId: v.doctorId, service: v.service, minutes }, new Date(to.startsAt));
-          if (!p.ok) throw p.busy ? new ConflictException('booking_slot_taken') : new BadRequestException(`move_not_possible: ${p.note}`);
-        },
-      });
-      await set({ status: 'SENT', error: null });
-      return { ok: true, outcome: 'SENT', ...(r.duplicate ? { already: true } : {}), booking: { visit: r.externalVisitId, notice: null, requestId: st.requestId }, draft: null };
-    } catch (e) {
+    const origin = { channel: row.channel, chatId: row.chatId };
+    const old = await this.prisma.visit.findFirst({ where: { id: v.visitId, clinicId: row.clinicId }, select: { patientId: true, startsAt: true, endsAt: true, doctorId: true, cabinetId: true, externalId: true } });
+    const minutes = old ? Math.round(((old.endsAt ?? new Date(old.startsAt.getTime() + 30 * 60_000)).getTime() - old.startsAt.getTime()) / 60_000) : 30;
+    const refuse = async (code: string): Promise<ApprovalResult> => {
+      await set({ status: 'SUPERSEDED', error: code.slice(0, 200) });
+      const busy = ['booking_slot_taken', 'booking_slot_blocked', 'booking_patient_busy'].includes(code);
+      return { ok: false, outcome: 'REFUSED', code: code === 'booking_in_progress' ? 'in_progress' : busy ? 'slot_unavailable' : code === 'visit_changed' || code === 'visit_not_changeable' ? 'visit_changed' : 'not_possible', reasons: [code], draft: null };
+    };
+    const codeOf = (e: unknown) => {
       const res = e instanceof HttpException ? e.getResponse() : null;
-      const code = String(typeof res === 'string' ? res : ((res as { message?: unknown } | null)?.message as string | undefined) ?? (e as Error).message);
+      return String(typeof res === 'string' ? res : ((res as { message?: unknown } | null)?.message as string | undefined) ?? (e as Error).message);
+    };
+    // the old visit must still be the one the patient was asked about
+    if (!old || old.externalId !== v.externalVisitId || old.startsAt.getTime() !== new Date(v.startsAt).getTime() || (old.doctorId ?? null) !== (v.doctorId ?? null)) return refuse('visit_changed');
+    if (!old.doctorId) return refuse('booking_doctor_needed');
+    // the visit as Cliniccards has it now must still be that one: nothing is created for a visit someone already changed there
+    const fresh = await this.booking.stillAsKnown(row.clinicId, v.visitId, { externalId: v.externalVisitId, startsAt: new Date(v.startsAt), doctorId: v.doctorId }).catch(() => 'unknown' as const);
+    if (fresh !== 'ok') return refuse(fresh === 'unknown' ? 'booking_check_failed' : 'visit_changed');
+    // 1. the new time is still possible by the clinic's rules (the doctor's hours, the service, the cabinet)
+    const p = await this.flow.movePlacement(row.clinicId, { externalId: v.externalVisitId, doctorId: v.doctorId, service: v.service, minutes }, new Date(to.startsAt));
+    if (!p.ok) return refuse(p.busy ? 'booking_slot_taken' : `move_not_possible: ${p.note}`);
+    // 2. the new visit
+    let created: { externalVisitId: string | null; duplicate: boolean };
+    try {
+      created = await this.booking.book(row.clinicId, null, { patientId: old.patientId, startsAt: new Date(to.startsAt), durationMin: minutes, cabinetId: to.cabinetId ?? old.cabinetId ?? '', doctorId: old.doctorId, note: `Перенесено з ${v.date} ${v.time} (LANKA)`, origin, operationId: `rebook:${st.askId ?? row.id}` });
+    } catch (e) {
+      const code = codeOf(e);
       if (code === 'booking_unknown') {
         await set({ status: 'UNKNOWN', error: 'move_unknown' });
         return { ok: false, outcome: 'UNKNOWN', reasons: [code], draft: null };
@@ -556,10 +574,30 @@ export class AgentApprovalService {
         await set({ status: 'FAILED', error: code });
         return { ok: false, outcome: 'FAILED', reasons: [code], draft: null };
       }
-      await set({ status: 'SUPERSEDED', error: code.slice(0, 200) });
-      const busy = ['booking_slot_taken', 'booking_slot_blocked', 'booking_patient_busy'].includes(code);
-      return { ok: false, outcome: 'REFUSED', code: code === 'booking_in_progress' ? 'in_progress' : busy ? 'slot_unavailable' : code === 'visit_changed' || code === 'visit_not_changeable' ? 'visit_changed' : 'not_possible', reasons: [code], draft: null };
+      return refuse(code);
     }
+    // 3. only now the old one
+    let oldCancelled = true;
+    try {
+      await this.booking.cancel(row.clinicId, null, v.visitId, { origin, expect: { externalId: v.externalVisitId, startsAt: new Date(v.startsAt), doctorId: v.doctorId } });
+    } catch (e) {
+      oldCancelled = false;
+      this.log.warn(`Move: the new visit exists, the old one was not cancelled (${codeOf(e)})`);
+      await this.requests.upsert(row.clinicId, { channel: row.channel, chatId: row.chatId, patientId: old.patientId, kind: 'RESCHEDULE', summary: `Пацієнта перенесено на ${clinicDate(new Date(to.startsAt)).slice(5).split('-').reverse().join('.')} ${clinicHm(new Date(to.startsAt))}; старий запис ${v.date} ${v.time} скасуйте вручну в Cliniccards (автоматично не вдалося).` });
+    }
+    // the dialogue's booking request now names the new visit and time (what the agent and the confirmation screen read); the reminders made for the old
+    // time are not sent (the scheduler makes the one for the new visit)
+    if (created.externalVisitId) {
+      await this.prisma.bookingRequest.updateMany({ where: { clinicId: row.clinicId, kind: 'BOOKING', status: 'DONE', externalVisitId: v.externalVisitId }, data: { externalVisitId: created.externalVisitId, confirmedStartsAt: new Date(to.startsAt) } });
+    }
+    await cancelStaleReminders(this.prisma, row.clinicId, [v.visitId]);
+    // the statistic of moves through LANKA: one entry per confirmation of the patient
+    const attempt = `rebook:${st.askId ?? row.id}`;
+    if (!(await this.prisma.auditLog.findFirst({ where: { clinicId: row.clinicId, action: 'booking.rescheduled', details: { path: ['attempt'], equals: attempt } }, select: { id: true } }))) {
+      await this.prisma.auditLog.create({ data: { clinicId: row.clinicId, userId: null, action: 'booking.rescheduled', details: { visit: v.externalVisitId, newVisit: created.externalVisitId, from: new Date(v.startsAt).toISOString(), to: new Date(to.startsAt).toISOString(), attempt, ...(st.askId ? { operation: st.askId } : {}), by: 'agent', mode: 'rebook', oldCancelled } } });
+    }
+    await set({ status: 'SENT', error: oldCancelled ? null : 'old_visit_not_cancelled' });
+    return { ok: true, outcome: 'SENT', ...(created.duplicate ? { already: true } : {}), booking: { visit: created.externalVisitId, notice: null, requestId: st.requestId }, draft: null };
   }
 
   private async newStepDraft(clinicId: string, channel: string, chatId: string, requestId: string, snapshot: Snapshot, id?: string) {

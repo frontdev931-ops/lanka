@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, HttpCode, Options, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Headers, HttpCode, Options, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { IsArray, IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 import type { Request, Response } from 'express';
@@ -10,6 +10,10 @@ class SettingsDto {
   @IsOptional() @IsBoolean() enabled?: boolean;
   @IsOptional() @IsArray() @IsString({ each: true }) @MaxLength(200, { each: true }) origins?: string[];
   @IsOptional() @IsString() @MaxLength(300) greeting?: string | null;
+  @IsOptional() @IsString() @MaxLength(7) color?: string | null;
+  @IsOptional() @IsString() @MaxLength(5) position?: string;
+  // the AI answers the website chat by itself: the owner only
+  @IsOptional() @IsBoolean() aiAnswers?: boolean;
 }
 class SessionDto {
   @IsOptional() @IsString() @MaxLength(80) name?: string;
@@ -31,15 +35,16 @@ export class WebChatSettingsController {
 
   @Get()
   @Roles(Role.OWNER, Role.MANAGER)
-  get(@CurrentUser() u: AuthUser) {
-    return this.web.settings(u.clinicId);
+  async get(@CurrentUser() u: AuthUser) {
+    return { ...(await this.web.settings(u.clinicId)), canChooseAi: u.role === Role.OWNER };
   }
 
   @Patch()
   @Roles(Role.OWNER, Role.MANAGER)
   async patch(@CurrentUser() u: AuthUser, @Body() dto: SettingsDto) {
+    if (dto.aiAnswers !== undefined && u.role !== Role.OWNER) throw new ForbiddenException('forbidden');
     const r = await this.web.update(u.clinicId, dto);
-    await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'webchat.settings', details: { enabled: dto.enabled, origins: dto.origins?.length } } });
+    await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'webchat.settings', details: { enabled: dto.enabled, origins: dto.origins?.length, ...(dto.aiAnswers !== undefined ? { aiAnswers: dto.aiAnswers } : {}) } } });
     return r;
   }
 
@@ -98,6 +103,13 @@ export class WebChatPublicController {
   async send(@Param('key') key: string, @Body() dto: MessageDto, @Headers('authorization') auth: string | undefined, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     await this.cors(key, req, res);
     return this.web.send(key, req.headers.origin, auth, this.ip(req), dto);
+  }
+
+  @Post(':key/handoff')
+  @HttpCode(200)
+  async handoff(@Param('key') key: string, @Headers('authorization') auth: string | undefined, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    await this.cors(key, req, res);
+    return this.web.handoff(key, req.headers.origin, auth, this.ip(req));
   }
 
   @Get(':key/messages')

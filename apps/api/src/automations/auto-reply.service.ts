@@ -53,8 +53,10 @@ export class AutoReplyService {
 
   async onInbound(clinicId: string, channel: string, chatId: string): Promise<boolean> {
     try {
-      const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiAgentMode: true, aiAutoReply: true, aiRepliesPerChatDay: true, sendingEnabled: true, suspendedAt: true, plan: true } });
+      const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiEnabled: true, aiAgentMode: true, aiAutoReply: true, aiRepliesPerChatDay: true, sendingEnabled: true, suspendedAt: true, plan: true, aiWebAuto: true } });
       if (clinic.suspendedAt) return this.skip(clinicId, channel, 'clinic_suspended');
+      // the website chat: the AI answers there only after the owner's own choice for that channel (installing the widget never implies it)
+      if (channel === 'WEB' && !clinic.aiWebAuto) return this.skip(clinicId, channel, 'web_ai_off');
       if (!clinic.aiEnabled) return this.skip(clinicId, channel, 'ai_off');
       if (!clinic.aiAutoReply) return this.skip(clinicId, channel, 'autoreply_off');
       // The agent's target mode for the pilot is DRAFTS ONLY: in a clinic with aiAgentMode the old AI does not answer by itself next to it. Manual replies of staff
@@ -66,6 +68,9 @@ export class AutoReplyService {
       if (ch?.optedOutAt) return this.skip(clinicId, channel, 'opted_out');
       // A staff member has already taken the dialogue: the AI does not interfere
       if (await this.pausedUntil(clinicId, channel, chatId)) return this.skip(clinicId, channel, 'paused_after_staff_reply');
+      // the dialogue is a person's (taken in the inbox, or the visitor asked for a person): the AI does not answer until it is given back (as the inbox label says)
+      const owner = await this.prisma.conversationState.findUnique({ where: { clinicId_channel_chatId: { clinicId, channel, chatId } }, select: { owner: true } });
+      if (owner?.owner === 'HUMAN') return this.skip(clinicId, channel, 'staff_owns_dialog');
       const today = await this.prisma.chatMessage.count({ where: { clinicId, channel, chatId, byAi: true, createdAt: { gt: new Date(Date.now() - 86_400_000) } } });
       if (today >= clinic.aiRepliesPerChatDay) return this.skip(clinicId, channel, 'daily_ai_reply_cap');
 

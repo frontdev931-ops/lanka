@@ -126,6 +126,31 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Название клиники или пароль введены неверно',
     en: 'The clinic name or password is incorrect',
   },
+  lead_contact_required: {
+    uk: 'Вкажіть телефон або e-mail, щоб клініка могла відповісти',
+    ru: 'Укажите телефон или e-mail, чтобы клиника могла ответить',
+    en: 'Enter a phone or an e-mail so the clinic can reply',
+  },
+  lead_bad_email: {
+    uk: 'Перевірте адресу e-mail',
+    ru: 'Проверьте адрес e-mail',
+    en: 'Check the e-mail address',
+  },
+  lead_bad_field: {
+    uk: 'Поле форми має неправильний формат або задовге',
+    ru: 'Поле формы имеет неверный формат или слишком длинное',
+    en: 'A form field has a wrong format or is too long',
+  },
+  lead_server_secret_required: {
+    uk: 'Запит без адреси сайту: сервер сайту має надсилати заявки із секретним ключем',
+    ru: 'Запрос без адреса сайта: сервер сайта должен отправлять заявки с секретным ключом',
+    en: 'No site address: a website server must send enquiries with the secret key',
+  },
+  bad_lead_secret: {
+    uk: 'Невірний секретний ключ для заявок',
+    ru: 'Неверный секретный ключ для заявок',
+    en: 'Wrong secret key for enquiries',
+  },
   inquiry_empty: {
     uk: 'Вкажіть хоча б телефон, ім’я або примітку',
     ru: 'Укажите хотя бы телефон, имя или заметку',
@@ -186,6 +211,16 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Этот канал не подключён на странице «Автоматизации»',
     en: 'This channel is not connected on the Automations page',
   },
+  bad_widget_color: {
+    uk: 'Колір має бути у форматі #RRGGBB',
+    ru: 'Цвет должен быть в формате #RRGGBB',
+    en: 'The colour must look like #RRGGBB',
+  },
+  bad_widget_position: {
+    uk: 'Кнопка чату може бути праворуч або ліворуч',
+    ru: 'Кнопка чата может быть справа или слева',
+    en: 'The chat button can be on the right or the left',
+  },
   bad_widget_origin: {
     uk: 'Адреса сайту має бути у форматі https://приклад.com (до 10 адрес)',
     ru: 'Адрес сайта должен быть в формате https://пример.com (до 10 адресов)',
@@ -235,6 +270,21 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     uk: 'Подію не знайдено або її не потрібно повторювати',
     ru: 'Событие не найдено или его не нужно повторять',
     en: 'The event was not found or does not need a retry',
+  },
+  agent_not_ready: {
+    uk: 'ШІ-адміністратора ще не можна ввімкнути: завершіть налаштування зі списку',
+    ru: 'ИИ-администратора пока нельзя включить: завершите настройку из списка',
+    en: 'The AI front desk cannot be turned on yet: finish the setup steps in the list',
+  },
+  auto_services_too_many: {
+    uk: 'Можна вибрати не більше п’яти послуг',
+    ru: 'Можно выбрать не больше пяти услуг',
+    en: 'You can choose at most five services',
+  },
+  auto_services_duplicate: {
+    uk: 'Послуга вибрана двічі',
+    ru: 'Услуга выбрана дважды',
+    en: 'A service is chosen twice',
   },
   plan_feature: {
     uk: 'Ця можливість входить у тариф «Про»',
@@ -501,6 +551,62 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     uk: 'Спочатку увімкніть двофакторний вхід для себе',
     ru: 'Сначала включите двухфакторный вход для себя',
     en: 'Turn on two-factor sign-in for yourself first',
+  },
+  bot_webhook_in_use: {
+    uk: 'Цей бот уже отримує повідомлення через інший сервіс (налаштовано webhook). LANKA нічого не змінила. Підтвердьте, що бота можна забрати, і зверніться до підтримки',
+    ru: 'Этот бот уже получает сообщения через другой сервис (настроен webhook). LANKA ничего не изменила. Подтвердите, что бота можно забрать, и обратитесь в поддержку',
+    en: 'This bot already receives messages through another service (a webhook is set). LANKA changed nothing. Confirm the bot can be taken over and contact support',
+  },
+  bot_pending_updates: {
+    uk: 'У бота є непрочитані повідомлення від попередніх користувачів. LANKA їх не обробляла й нічого не змінила. Щоб не відповісти цим людям, спершу вирішіть, що з ними робити, і зверніться до підтримки',
+    ru: 'У бота есть непрочитанные сообщения от прежних пользователей. LANKA их не обрабатывала и ничего не изменила. Чтобы не ответить этим людям, сначала решите, что с ними делать, и обратитесь в поддержку',
+    en: 'The bot has unread messages from earlier users. LANKA did not process them and changed nothing. So as not to answer those people, decide what to do with them first and contact support',
+  },
+  member_not_in_branch: {
+    uk: 'Спершу запросіть цю людину в команду філіалу мережі (роль керуючого або аналітика), потім додайте її сюди',
+    ru: 'Сначала пригласите этого человека в команду филиала сети (роль управляющего или аналитика), потом добавьте его сюда',
+    en: 'First invite this person to the team of a network branch (manager or analyst role), then add them here',
+  },
+  member_not_found: { uk: 'Учасника не знайдено', ru: 'Участник не найден', en: 'Member not found' },
+  member_is_owner: { uk: 'Власника мережі тут прибрати не можна', ru: 'Владельца сети здесь убрать нельзя', en: 'The network owner cannot be removed here' },
+  network_next_period_paid: {
+    uk: 'Наступний період мережі вже оплачено. Щоб додати філіал до вже оплаченого періоду, напишіть нам: hello@lankaclinic.app',
+    ru: 'Следующий период сети уже оплачен. Чтобы добавить филиал к уже оплаченному периоду, напишите нам: hello@lankaclinic.app',
+    en: 'The network’s next period is already paid. To add a branch to an already paid period, write to us: hello@lankaclinic.app',
+  },
+  network_payment_pending: {
+    uk: 'Оплату мережі вже відкрито й вона чекає підтвердження LiqPay. Зачекайте кілька хвилин, щоб не оплатити той самий період двічі',
+    ru: 'Оплата сети уже открыта и ждёт подтверждения LiqPay. Подождите несколько минут, чтобы не оплатить тот же период дважды',
+    en: 'A network payment is already open and waiting for LiqPay’s confirmation. Wait a few minutes so the same period is not paid twice',
+  },
+  network_not_found: { uk: 'Мережу не знайдено', ru: 'Сеть не найдена', en: 'Network not found' },
+  network_branch: { uk: 'Цей філіал оплачується мережею', ru: 'Этот филиал оплачивается сетью', en: 'This branch is paid by its network' },
+  network_no_branches: { uk: 'У мережі ще немає філіалів', ru: 'В сети ещё нет филиалов', en: 'The network has no branches yet' },
+  network_branch_required: { uk: 'Увійдіть у кабінет одного з філіалів мережі', ru: 'Войдите в кабинет одного из филиалов сети', en: 'Sign in to one of the network’s branches' },
+  branch_not_found: { uk: 'Філіал не знайдено', ru: 'Филиал не найден', en: 'Branch not found' },
+  branch_not_owned: { uk: 'Приєднати можна лише клініку, власником якої ви є', ru: 'Присоединить можно только клинику, владельцем которой вы являетесь', en: 'You can attach only a clinic you own' },
+  branch_already_in_network: { uk: 'Клініка вже в цій мережі', ru: 'Клиника уже в этой сети', en: 'The clinic is already in this network' },
+  branch_in_other_network: { uk: 'Клініка вже в іншій мережі', ru: 'Клиника уже в другой сети', en: 'The clinic is in another network' },
+  branch_has_own_subscription: {
+    uk: 'У клініки діє власна оплачена підписка. Підтвердьте, що наступна оплата мережі замінить її (автоматичного повернення немає)',
+    ru: 'У клиники действует собственная оплаченная подписка. Подтвердите, что следующая оплата сети заменит её (автоматического возврата нет)',
+    en: 'The clinic has its own paid subscription. Confirm that the network’s next payment replaces it (no automatic refund)',
+  },
+  branch_setup_not_quoted: { uk: 'Вартість підключення цього філіалу ще не погоджено', ru: 'Стоимость подключения этого филиала ещё не согласована', en: 'The onboarding of this branch is not quoted yet' },
+  branch_setup_paid: { uk: 'Підключення філіалу вже оплачено', ru: 'Подключение филиала уже оплачено', en: 'The branch onboarding is already paid' },
+  bad_format: { uk: 'Невідомий формат файлу', ru: 'Неизвестный формат файла', en: 'Unknown file format' },
+  message_not_found: { uk: 'Повідомлення не знайдено', ru: 'Сообщение не найдено', en: 'Message not found' },
+  message_not_retryable: {
+    uk: 'Це повідомлення не можна надіслати повторно: воно могло дійти до пацієнта або помилка не тимчасова',
+    ru: 'Это сообщение нельзя отправить повторно: оно могло дойти до пациента или ошибка не временная',
+    en: 'This message cannot be sent again: it may have reached the patient, or the error is not temporary',
+  },
+  message_expired: { uk: 'Час для цього повідомлення минув', ru: 'Время для этого сообщения прошло', en: 'The time for this message has passed' },
+  message_retry_limit: { uk: 'Повідомлення вже надсилали повторно двічі', ru: 'Сообщение уже отправляли повторно дважды', en: 'The message was already resent twice' },
+  plan_users_over: {
+    uk: 'У клініці більше співробітників (разом із запрошеними), ніж дозволяє цей тариф. Спершу приберіть зайвих у «Команді»',
+    ru: 'В клинике больше сотрудников (вместе с приглашёнными), чем позволяет этот тариф. Сначала уберите лишних в «Команде»',
+    en: 'The clinic has more staff (with open invitations) than this plan allows. Remove some in Team first',
   },
   plan_users_limit: {
     uk: 'Ліміт співробітників за тарифом вичерпано',

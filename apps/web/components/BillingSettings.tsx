@@ -8,6 +8,12 @@ import { Alert, Badge, Card, Empty, Loading } from './ui';
 
 interface Overview {
   configured: boolean;
+  // a branch of a network is paid by its network
+  network?: { id: string; name: string } | null;
+  // LiqPay's test mode on this server (never in production)
+  sandbox?: boolean;
+  // a payment sent to LiqPay in the last 30 minutes is not confirmed yet
+  checking?: boolean;
   plan: string;
   status: 'AWAITING_PAYMENT' | 'ACTIVE' | 'PAST_DUE' | 'LAPSED';
   paidUntil: string | null;
@@ -25,7 +31,7 @@ interface Form {
   signature: string;
 }
 
-const FEATURES = ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest'] as const;
+const FEATURES = ['multi_channel', 'patient_agent', 'ai_assistant', 'ai_autoreply', 'advanced_analytics', 'daily_digest'] as const;
 
 // Settings → "Payment" (the former /billing page): the plan, the first payment (connection + first month), renewal and the payment history.
 // One compact card for AI replies: how many are left this period and the button to buy a pack (POST /billing/ai-pack; only the owner pays, canBuy).
@@ -45,6 +51,17 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
   useEffect(() => {
     if (form) formRef.current?.submit();
   }, [form]);
+  // After coming back from the payment page the status waits for LiqPay's signed call to the server; the page asks again for two minutes
+  const checking = !!o?.checking;
+  useEffect(() => {
+    if (!checking) return;
+    let n = 0;
+    const id = setInterval(() => {
+      if (++n > 24) clearInterval(id);
+      else void load();
+    }, 5000);
+    return () => clearInterval(id);
+  }, [checking, load]);
 
   async function go(path: string, body?: object) {
     setBusy(true);
@@ -58,6 +75,12 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
   }
 
   if (!o) return error ? <Alert tone="error">{error}</Alert> : <Loading />;
+  if (o.network)
+    return (
+      <Alert tone="info">
+        {t('billing.byNetwork', { name: o.network.name })} <a href="/network">{t('billing.toNetwork')}</a>
+      </Alert>
+    );
   const active = o.status === 'ACTIVE' || o.status === 'PAST_DUE';
   const money = (minor: number) => `${(minor / 100).toLocaleString()} ${t('billing.uah')}`;
 
@@ -65,6 +88,8 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
     <>
       {error && <Alert tone="error">{error}</Alert>}
       {!o.configured && <Alert tone="warn">{t('billing.notConfigured')}</Alert>}
+      {o.sandbox && <Alert tone="warn">{t('billing.sandbox')}</Alert>}
+      {o.checking && <Alert tone="info">{t('billing.checking')}</Alert>}
       {o.status === 'AWAITING_PAYMENT' && <Alert tone="info">{t('billing.awaiting')}</Alert>}
       {o.status === 'LAPSED' && <Alert tone="warn">{t('billing.lapsed')}</Alert>}
       {o.status === 'PAST_DUE' && <Alert tone="warn">{t('billing.pastDue', { date: o.graceUntil ? fmtDate(o.graceUntil) : '' })}</Alert>}
@@ -135,9 +160,9 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
                 {o.payments.map((p) => (
                   <tr key={p.id}>
                     <td>{fmtDate(p.paidAt ?? p.createdAt)}</td>
-                    <td>{p.kind === 'AI_PACK' ? t('billing.kindPack') : t('billing.kindPlan', { plan: p.plan ?? '' })}</td>
+                    <td>{p.kind === 'AI_PACK' ? t('billing.kindPack') : t('billing.kindPlan', { plan: p.plan === 'PRO' ? t('billing.pro') : p.plan === 'START' ? t('billing.start') : (p.plan ?? '') })}</td>
                     <td>{money(p.amountMinor)}</td>
-                    <td><Badge tone={p.status === 'PAID' ? 'green' : p.status === 'FAILED' ? 'red' : 'amber'}>{t(p.status === 'PAID' ? 'billing.st.PAID' : p.status === 'FAILED' ? 'billing.st.FAILED' : 'billing.st.PENDING')}</Badge></td>
+                    <td><Badge tone={p.status === 'PAID' ? 'green' : p.status === 'FAILED' || p.status === 'REVERSED' ? 'red' : 'amber'}>{t(p.status === 'PAID' ? 'billing.st.PAID' : p.status === 'FAILED' ? 'billing.st.FAILED' : p.status === 'REVERSED' ? 'billing.st.REVERSED' : 'billing.st.PENDING')}</Badge></td>
                   </tr>
                 ))}
               </tbody>

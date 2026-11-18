@@ -63,7 +63,7 @@ describe('тарифы, лимиты и использование', () => {
   it('клиника видит тариф, лимиты и расход; сотрудников по тарифу не больше лимита (учитывая приглашения)', async () => {
     const o = await clinic();
     const u = (await http().get('/service/usage').set(auth(o.token)).expect(200)).body;
-    expect(u).toMatchObject({ plan: 'START', limits: { users: 10, messagesPerMonth: 2000, aiRepliesPerMonth: 500 }, usage: { users: 1, pendingInvitations: 0, messagesThisMonth: 0 }, require2fa: false, suspended: false });
+    expect(u).toMatchObject({ plan: 'START', limits: { users: 5, messagesPerMonth: 2000, aiRepliesPerMonth: 500 }, usage: { users: 1, pendingInvitations: 0, messagesThisMonth: 0 }, require2fa: false, suspended: false });
     await prisma.clinic.update({ where: { id: o.clinicId }, data: { limitOverrides: { users: 5 } } }); // a small limit makes the check short
     await http().post('/team/invitations').set(auth(o.token)).send({ email: `a${rnd()}@example.com`, role: 'ADMIN' }).expect(201);
     await http().post('/team/invitations').set(auth(o.token)).send({ email: `b${rnd()}@example.com`, role: 'DOCTOR' }).expect(201);
@@ -201,9 +201,14 @@ describe('воронка: деньги когорты и работа коман
     await prisma.visit.create({ data: { clinicId: o.clinicId, patientId: stuck.id, externalId: `v${rnd()}`, startsAt: new Date(Date.now() - 12 * DAYMS), status: 'VISITED' } });
 
     const f = (await http().get('/funnel?months=3').set(auth(o.token)).expect(200)).body;
-    expect(f.money).toMatchObject({ paid: 8500, payers: 2 });
-    expect(f.money.openPlanStarted).toBe(5000);
-    expect(f.money.openPlanNotStarted).toBeGreaterThanOrEqual(0);
+    // per currency (the clinic has not stated its currency: null)
+    expect(f.money).toMatchObject({ paid: [{ currency: null, amount: 8500 }], payers: 2 });
+    // the open remainder comes only from plan totals (item prices may be in other currencies): without a total there is no sum
+    expect(f.money.openPlanStarted).toEqual([]);
+    const open = await prisma.planItem.findFirstOrThrow({ where: { clinicId: o.clinicId, patientId: started.id, status: 'NEW' } });
+    await prisma.treatmentPlan.create({ data: { clinicId: o.clinicId, externalId: open.planId, total: 5000, totalDone: 0, createdAtExt: new Date() } });
+    expect((await http().get('/funnel?months=3').set(auth(o.token)).expect(200)).body.money.openPlanStarted).toEqual([{ currency: null, amount: 5000 }]);
+    expect(Array.isArray(f.money.openPlanNotStarted)).toBe(true);
     expect((await http().get('/funnel?months=3').set(auth(admin.token)).expect(200)).body.money).toBeNull(); // we do not show money to the administrator
 
     // command: inquiries, requests, contacts

@@ -49,7 +49,7 @@ export class PatientsController {
         orderBy: { fullName: 'asc' },
         skip: (Math.max(page, 1) - 1) * pageSize,
         take: pageSize,
-        select: { id: true, fullName: true, phone: true, source: true, lastVisitAt: true, balanceIssued: true, balancePaid: true, consent: true, automationPaused: true },
+        select: { id: true, fullName: true, phone: true, source: true, lastVisitAt: true, balanceIssued: true, balancePaid: true, balanceCurrency: true, consent: true, automationPaused: true },
       }),
       this.prisma.patient.groupBy({ by: ['source'], where: { clinicId: u.clinicId, removedAt: null } }),
     ]);
@@ -59,10 +59,11 @@ export class PatientsController {
       pageSize,
       sources: sources.map((x) => x.source).filter(Boolean),
       // Debt = billed − paid. The doctor works with treatment, not with patients' money: the debt is not given to them
-      rows: rows.map(({ balanceIssued, balancePaid, ...rest }) => {
+      // debtCurrency: the stamp of the card's balance (null = currency not confirmed; common/money.ts)
+      rows: rows.map(({ balanceIssued, balancePaid, balanceCurrency, ...rest }) => {
         if (u.role === Role.DOCTOR) return rest;
         const debt = Math.round((Number(balanceIssued ?? 0) - Number(balancePaid ?? 0)) * 100) / 100;
-        return { ...rest, debt: debt > 0 ? debt : 0 };
+        return { ...rest, debt: debt > 0 ? debt : 0, debtCurrency: balanceCurrency };
       }),
     };
   }
@@ -93,7 +94,7 @@ export class PatientsController {
     });
     if (!p) throw new NotFoundException('patient_not_found');
     if (u.role === Role.DOCTOR) {
-      const { balanceIssued: _a, balancePaid: _b, visits, outbox: _d, ...rest } = p;
+      const { balanceIssued: _a, balancePaid: _b, balanceCurrency: _e, visits, outbox: _d, ...rest } = p;
       return { ...rest, visits: visits.map(({ amount: _c, ...v }) => v) };
     }
     return p;

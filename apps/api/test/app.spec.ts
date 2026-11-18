@@ -265,6 +265,12 @@ describe('логика отчётов', () => {
     expect(ru.text.split('\r\n')[0]).toContain('"Пациент";"Телефон"');
     const en = await http().get('/reports/no-next-visit/csv').set(auth(a.token)).set('Accept-Language', 'en').expect(200);
     expect(en.text.split('\r\n')[0]).toContain('"Patient";"Phone"');
+    // the clinic has not stated the currency of its Cliniccards amounts: they are marked as such (never assumed hryvnias, money.spec.ts);
+    // the revenue by source is a sum of service prices, so it carries no currency at all
+    const debt = (await http().get('/reports/debtors/csv').set(auth(a.token)).expect(200)).text.split('\r\n')[0];
+    expect(debt).toContain('"Борг (валюта не підтверджена)"');
+    expect(debt).not.toMatch(/грн|UAH/);
+    expect((await http().get('/reports/sources/csv').set(auth(a.token)).expect(200)).text.split('\r\n')[0]).not.toMatch(/грн|UAH/);
   });
 
   it('Excel и PDF: настоящие файлы с кириллицей, подписями на языке запроса; финансовые отчёты по ролям; выгрузка пишется в историю', async () => {

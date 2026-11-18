@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Provider } from '@prisma/client';
 import { decrypt } from '../common/crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -16,6 +16,18 @@ import { clinicDate } from '../common/clinic-time';
 import { inSendWindow } from './send-window';
 import { MessengerService } from './messenger.service';
 import { SendError } from './channels';
+
+// Failures that certainly did not reach the patient: nothing was sent (no bot, the visit could not be checked) or the provider refused the request
+// outright (Telegram "Bad Request" / "Too Many Requests"; an Instagram error that is not "result unknown"). A network error, a 5xx and an unknown result
+// may have been delivered, so they are not offered for a resend.
+const MAX_RETRIES = 2;
+export function retryableFailure(m: { channel: string; error: string | null }): boolean {
+  const e = m.error ?? '';
+  if (e === 'Telegram-бот не підключено' || e.startsWith('Не вдалося перевірити запис у Cliniccards')) return true;
+  if (m.channel === 'TELEGRAM') return /^(Bad Request|Too Many Requests)/.test(e);
+  if (m.channel === 'INSTAGRAM') return !!e && e !== 'Не вдалося надіслати';
+  return false;
+}
 
 @Injectable()
 export class OutboxService {
@@ -53,9 +65,9 @@ export class OutboxService {
     return reminderStale(now ? { status: now.status, startsAt: now.startsAt } : null, m) ? 'stale' : 'ok';
   }
 
-  async list(clinicId: string, status: string, page: number) {
+  async list(clinicId: string, status: string, page: number, channel?: string) {
     const pageSize = 50;
-    const where = { clinicId, ...(status !== 'ALL' ? { status } : {}) };
+    const where = { clinicId, ...(status !== 'ALL' ? { status } : {}), ...(channel ? { channel } : {}) };
     const [total, rows] = await Promise.all([
       this.prisma.outboundMessage.count({ where }),
       this.prisma.outboundMessage.findMany({
@@ -85,8 +97,26 @@ export class OutboxService {
         scheduledFor: m.scheduledFor,
         sentAt: m.sentAt,
         error: m.error,
+        // staff may send it again (retry below): a failure that certainly did not reach the patient, not expired
+        retryable: m.status === 'FAILED' && retryableFailure(m) && !(m.expiresAt && m.expiresAt <= new Date()),
       })),
     };
+  }
+
+  // Staff send a FAILED message again: it goes back to the queue as approved and the sender checks EVERYTHING again (sending switch, consent,
+  // the patient's channel, the visit in Cliniccards, the 24-hour window, the expiry). Only a failure that certainly did not reach the patient,
+  // at most MAX_RETRIES times per message. A result that may have been delivered (UNKNOWN, a network error) is never resent.
+  async retry(clinicId: string, userId: string, id: string, now = new Date()) {
+    const m = await this.prisma.outboundMessage.findFirst({ where: { clinicId, id } });
+    if (!m) throw new NotFoundException('message_not_found');
+    if (m.status !== 'FAILED' || !retryableFailure(m)) throw new BadRequestException('message_not_retryable');
+    if (m.expiresAt && m.expiresAt <= now) throw new BadRequestException('message_expired');
+    const tries = await this.prisma.auditLog.count({ where: { clinicId, action: 'messages.retry', details: { path: ['id'], equals: id } } });
+    if (tries >= MAX_RETRIES) throw new BadRequestException('message_retry_limit');
+    const r = await this.prisma.outboundMessage.updateMany({ where: { id, clinicId, status: 'FAILED' }, data: { status: 'APPROVED', scheduledFor: now, error: null, approvedById: userId, approvedAt: now } });
+    if (!r.count) throw new BadRequestException('message_not_retryable');
+    await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'messages.retry', details: { id, error: m.error } } });
+    return { retried: true };
   }
 
   async approve(clinicId: string, userId: string, opts: { ids?: string[]; all?: boolean }) {

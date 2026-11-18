@@ -1,4 +1,5 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { BookingService } from '../src/booking/booking.service';
+import { BadRequestException, INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { bookingStatusOf } from '../src/ai/booking-status';
@@ -88,6 +89,10 @@ const phone = () => `097${Math.floor(1_000_000 + Math.random() * 8_999_999)}`;
 const bookingReq = (c: C) => prisma.bookingRequest.findFirst({ where: { clinicId: c.clinicId, channel: 'INSTAGRAM', chatId: c.chat, kind: 'BOOKING' }, orderBy: { createdAt: 'desc' } });
 const puts = () => mock.writes.filter((w) => w.method === 'PUT' && w.path === '/visits');
 const posts = () => mock.writes.filter((w) => w.method === 'POST' && w.path === '/visits');
+// the owner's rule for the agent's move (2026-11-16): a NEW visit (POST), then the old one cancelled (PUT with status CANCELLED); a PUT of a new time is
+// the staff action only
+const cancels = () => puts().filter((w) => (w.body as { status?: string }).status === 'CANCELLED');
+const timePuts = () => puts().filter((w) => (w.body as { status?: string }).status !== 'CANCELLED');
 const stateOf = (c: C) => prisma.conversationState.findFirstOrThrow({ where: { clinicId: c.clinicId, chatId: c.chat } });
 const lastButtons = async (c: C) => {
   const m = await prisma.chatMessage.findFirstOrThrow({ where: { clinicId: c.clinicId, chatId: c.chat, direction: 'OUT', error: null }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
@@ -137,7 +142,7 @@ async function toConfirm(c: C) {
 }
 
 describe('агент переносить запис, створений у цьому діалозі', () => {
-  it('кабінети: той самий візит (той самий visit_id), один PUT, новий час; заявка й наступні відповіді — з новим часом; аудит зі старим і новим часом', async () => {
+  it('кабінети: спершу новий візит, потім скасування старого; заявка й наступні відповіді — з новим часом; аудит зі старим і новим часом', async () => {
     const { c, done, visit, raw } = await booked();
     const to = await toConfirm(c);
     const conf = lastText(c);
@@ -147,19 +152,24 @@ describe('агент переносить запис, створений у ць
     expect(puts()).toHaveLength(0);
     expect(modelCalls).toBe(0);
     await say(c, 'Так, перенести', (await buttonOf(c, 'moveyes|')).payload);
-    expect(puts()).toHaveLength(1);
-    expect(posts()).toHaveLength(0);
-    expect(puts()[0].body).toMatchObject({ visit_id: Number(done.externalVisitId), date: to.date, time_start: to.time, doctor_id: Number(raw().doctor_id), note: raw().note });
-    // the same visit, moved (one row in Cliniccards with that id, the same length)
-    expect(mock.data.visits.filter((v) => String(v.visit_id) === done.externalVisitId)).toHaveLength(1);
-    expect(String(raw().visit_start)).toBe(`${to.date} ${to.time}:00`);
-    const moved = await prisma.visit.findUniqueOrThrow({ where: { id: visit.id } });
-    expect(moved.externalId).toBe(visit.externalId);
+    // the new visit first (the same doctor), then the old one cancelled; no PUT of a new time
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].body).toMatchObject({ date: to.date, time_start: to.time, doctor_id: Number(raw().doctor_id) });
+    expect(cancels()).toHaveLength(1);
+    expect(cancels()[0].body).toMatchObject({ visit_id: Number(done.externalVisitId), status: 'CANCELLED' });
+    expect(mock.writes.indexOf(posts()[0])).toBeLessThan(mock.writes.indexOf(cancels()[0]));
+    expect(timePuts()).toHaveLength(0);
+    expect(raw().status).toBe('CANCELLED');
+    expect((await prisma.visit.findUniqueOrThrow({ where: { id: visit.id } })).status).toBe('CANCELLED');
+    // the dialogue's booking now names the new visit, at the new time, with the same length
+    const req = await prisma.bookingRequest.findUniqueOrThrow({ where: { id: done.id } });
+    expect(req.externalVisitId).not.toBe(done.externalVisitId);
+    const moved = await prisma.visit.findFirstOrThrow({ where: { clinicId: c.clinicId, externalId: req.externalVisitId! } });
     expect(clinicDate(moved.startsAt)).toBe(to.date);
     expect(moved.endsAt!.getTime() - moved.startsAt.getTime()).toBe(visit.endsAt!.getTime() - visit.startsAt.getTime());
-    expect((await prisma.bookingRequest.findUniqueOrThrow({ where: { id: done.id } })).confirmedStartsAt!.getTime()).toBe(moved.startsAt.getTime());
+    expect(req.confirmedStartsAt!.getTime()).toBe(moved.startsAt.getTime());
     const audit = await prisma.auditLog.findFirstOrThrow({ where: { clinicId: c.clinicId, action: 'booking.rescheduled' } });
-    expect(audit.details).toMatchObject({ visit: done.externalVisitId, from: visit.startsAt.toISOString(), to: moved.startsAt.toISOString(), by: 'agent' });
+    expect(audit.details).toMatchObject({ visit: done.externalVisitId, newVisit: req.externalVisitId, from: visit.startsAt.toISOString(), to: moved.startsAt.toISOString(), by: 'agent', oldCancelled: true });
     expect(lastText(c)).toMatch(/^Запис перенесено: Тестова консультація/);
     expect(await bookingStatusOf(prisma, c.clinicId, 'INSTAGRAM', c.chat)).toMatchObject({ kind: 'CONFIRMED', time: to.time });
     // the model's next answer is told the NEW time
@@ -173,9 +183,9 @@ describe('агент переносить запис, створений у ць
     expect(system).toContain(`${to.date.split('-').reverse().join('.')} о ${to.time}`);
     fake.complete = async () => ({ text: fake.script(), inputTokens: 1, outputTokens: 1 });
     // a repeated yes (the old button) writes nothing
-    const k = puts().length;
+    const k = mock.writes.length;
     await say(c, 'Так, перенести', `moveyes|${(await prisma.agentDraft.findFirstOrThrow({ where: { clinicId: c.clinicId, choice: 'ASK_MOVE' } })).id}`);
-    expect(puts()).toHaveLength(k);
+    expect(mock.writes).toHaveLength(k);
     expect(lastText(c)).toContain('кнопка вже неактуальна');
   });
 
@@ -202,12 +212,13 @@ describe('агент переносить запис, створений у ць
     expect((await lastButtons(c)).every((b) => b.payload.startsWith('moveslot|') && b.payload !== `moveslot|x|${to.date}|${to.time}`)).toBe(true);
   });
 
-  it('оригінальний візит змінили в Cliniccards: PUT не надсилається, заявка на перенесення з причиною', async () => {
+  it('оригінальний візит змінили в Cliniccards: нічого не створюється й не скасовується, заявка на перенесення з причиною', async () => {
     const { c, raw } = await booked();
     await toConfirm(c);
     const yes = (await buttonOf(c, 'moveyes|')).payload;
     raw().visit_start = String(raw().visit_start).replace(/ (\d{2}):/, (_m, h: string) => ` ${String((Number(h) + 1) % 24).padStart(2, '0')}:`);
     await say(c, 'Так, перенести', yes);
+    expect(posts()).toHaveLength(0);
     expect(puts()).toHaveLength(0);
     const r = await reqs(c);
     expect(r).toHaveLength(1);
@@ -216,7 +227,7 @@ describe('агент переносить запис, створений у ць
     expect(await stateOf(c)).toMatchObject({ owner: 'HUMAN' });
   });
 
-  it('повторні й застарілі підтвердження: одночасні «так» — один PUT; стара кнопка пропозиції, стара кнопка запису й кнопка скасування нічого не переносять', async () => {
+  it('повторні й застарілі підтвердження: одночасні «так» — один новий візит і одне скасування; стара кнопка пропозиції, стара кнопка запису й кнопка скасування нічого не переносять', async () => {
     const { c, done } = await booked();
     await toConfirm(c);
     const oldSlot = (await prisma.chatMessage.findMany({ where: { clinicId: c.clinicId, chatId: c.chat, direction: 'OUT' }, orderBy: { createdAt: 'asc' } })).flatMap((m) => (Array.isArray(m.buttons) ? (m.buttons as { label: string; payload: string }[]) : [])).find((b) => b.payload.startsWith('moveslot|'))!;
@@ -226,20 +237,23 @@ describe('агент переносить запис, створений у ць
     expect(lastText(c)).toContain('Ваш запис уже підтверджено');
     await say(c, 'Так, скасувати', 'cancelyes|abcdefghijklmnop'); // a cancellation button: not this question
     expect(lastText(c)).toContain('кнопка вже неактуальна');
+    const before = posts().length;
     expect(puts()).toHaveLength(0);
     scriptedModel(() => decision({ reply: 'Консультація триває близько 30 хвилин.' }));
     await say(c, 'А скільки триває консультація?'); // something else while nothing is open: the model answers, nothing moves
     expect(puts()).toHaveLength(0);
+    expect(posts()).toHaveLength(before);
     // a new confirmation, then three simultaneous yes
     const to = await toConfirm(c);
     const yes = (await buttonOf(c, 'moveyes|')).payload;
     await Promise.all([say(c, 'Так, перенести', yes), say(c, 'Так, перенести', yes), say(c, 'Так, перенести', yes)]);
-    expect(puts()).toHaveLength(1);
-    expect(puts()[0].body).toMatchObject({ date: to.date, time_start: to.time });
+    expect(posts()).toHaveLength(before + 1);
+    expect(posts()[posts().length - 1].body).toMatchObject({ date: to.date, time_start: to.time });
+    expect(cancels()).toHaveLength(1);
     expect(sendsTo(c).filter((m) => m.text.startsWith('Запис перенесено')).length).toBe(1);
   });
 
-  it('відповідь Cliniccards втрачено: НЕВІДОМО — жоден час не підтверджено, одна заявка, повтору немає; звірка персоналом без другого PUT', async () => {
+  it('відповідь Cliniccards втрачено при створенні нового візиту: НЕВІДОМО — старий не скасовано, жоден час не підтверджено, одна заявка, повтору немає; звірка без другого створення', async () => {
     const { c, visit } = await booked();
     const to = await toConfirm(c);
     const yes = (await buttonOf(c, 'moveyes|')).payload;
@@ -247,21 +261,26 @@ describe('агент переносить запис, створений у ць
     mock.control.dropReplyAfterWrite = true;
     await say(c, 'Так, перенести', yes);
     mock.control.dropReplyAfterWrite = false;
-    expect(puts()).toHaveLength(1);
+    // the new visit was sent, its answer lost: the old one is NOT cancelled, nothing is claimed
+    expect(posts()).toHaveLength(1);
+    expect(puts()).toHaveLength(0);
     expect(sendsTo(c).length).toBe(n);
     const r = await reqs(c);
     expect(r).toHaveLength(1);
     expect(r[0].summary).toContain('результат перенесення невідомий');
     expect(await bookingStatusOf(prisma, c.clinicId, 'INSTAGRAM', c.chat)).toEqual({ kind: 'UNKNOWN', move: true });
-    expect((await prisma.visit.findUniqueOrThrow({ where: { id: visit.id } })).startsAt.getTime()).toBe(visit.startsAt.getTime());
+    const old = await prisma.visit.findUniqueOrThrow({ where: { id: visit.id } });
+    expect(old.startsAt.getTime()).toBe(visit.startsAt.getTime());
+    expect(old.status).not.toBe('CANCELLED');
     await say(c, 'Так, перенести', yes);
-    expect(puts()).toHaveLength(1);
-    // the staff member's move to the same time and cabinet reconciles first: the visit IS at the new time, nothing is written again
-    const ask = await prisma.agentDraft.findFirstOrThrow({ where: { clinicId: c.clinicId, choice: 'MOVE_VISIT' } });
-    const cabinetId = (ask.snapshot as { step: { to: { cabinetId: string; startsAt: string } } }).step.to.cabinetId;
-    await http().post(`/bookings/visits/${visit.id}/reschedule`).set(auth(c.token)).send({ startsAt: localIso(to), cabinetId }).expect(200);
-    expect(puts()).toHaveLength(1);
-    expect(clinicDate((await prisma.visit.findUniqueOrThrow({ where: { id: visit.id } })).startsAt)).toBe(to.date);
+    expect(posts()).toHaveLength(1);
+    // the same operation tried again reconciles first: the visit created at the new time IS found, nothing is created a second time
+    const ask = await prisma.agentDraft.findFirstOrThrow({ where: { clinicId: c.clinicId, choice: 'ASK_MOVE' }, orderBy: { createdAt: 'desc' } });
+    const step = (await prisma.agentDraft.findFirstOrThrow({ where: { clinicId: c.clinicId, choice: 'MOVE_VISIT' } })).snapshot as { step: { to: { cabinetId: string; startsAt: string } } };
+    const again = await app.get(BookingService).book(c.clinicId, null, { patientId: old.patientId, startsAt: new Date(step.step.to.startsAt), durationMin: Math.round((old.endsAt!.getTime() - old.startsAt.getTime()) / 60_000), cabinetId: step.step.to.cabinetId, doctorId: old.doctorId!, operationId: `rebook:${ask.id}` });
+    expect(again.externalVisitId).toBeTruthy();
+    expect(posts()).toHaveLength(1);
+    expect(clinicDate(new Date(step.step.to.startsAt))).toBe(to.date);
   });
 
   it('перенесено, але повідомлення не надіслано: Cliniccards не змінюється вдруге; заявка «перенесено, повідомте пацієнта»', async () => {
@@ -288,10 +307,12 @@ describe('агент переносить запис, створений у ць
     expect(lastText(c)).toContain('Перенести запис?');
     await say(c, 'так'); // a bare yes: the confirmation again
     expect(lastText(c)).toContain('Щоб перенести запис, оберіть, будь ласка, відповідь кнопкою.');
+    expect(posts()).toHaveLength(0);
     expect(puts()).toHaveLength(0);
     await say(c, 'Да, перенести'); // the button's words in the other language
-    expect(puts()).toHaveLength(1);
-    expect(puts()[0].body).toMatchObject(slotBody(slotOf(slot.payload)));
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].body).toMatchObject(slotBody(slotOf(slot.payload)));
+    expect(cancels()).toHaveLength(1);
     expect(lastText(c)).toMatch(/^Запис перенесено/);
   });
 
@@ -310,7 +331,7 @@ describe('агент переносить запис, створений у ць
     expect(puts()).toHaveLength(0);
   });
 
-  it('режим лікарів: часи лише того самого лікаря; підтвердження з лікарем; PUT з тим самим doctor_id', async () => {
+  it('режим лікарів: часи лише того самого лікаря; підтвердження з лікарем; новий візит з тим самим doctor_id, старий скасовано', async () => {
     const c = await createAgentClinic({ http, prisma });
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { bookingWriteEnabled: true, aiAgentAuto: true, agentAutoServiceId: c.consult.id, scheduleMode: 'DOCTORS' } });
     allow(c);
@@ -336,9 +357,11 @@ describe('агент переносить запис, створений у ць
     expect(lastText(c)).toMatch(/Зараз: Тестова консультація, лікар Мельник Олена/);
     expect(lastText(c)).toMatch(/Новий час: Тестова консультація, лікар Мельник Олена/);
     await say(c, 'Так, перенести', (await buttonOf(c, 'moveyes|')).payload);
-    expect(puts()).toHaveLength(1);
-    expect(puts()[0].body).toMatchObject({ visit_id: Number(done.externalVisitId), doctor_id: 901, cabinet_id: 801, ...slotBody(slotOf(offer[0].payload)) });
-    expect(posts()).toHaveLength(0);
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].body).toMatchObject({ doctor_id: 901, cabinet_id: 801, ...slotBody(slotOf(offer[0].payload)) });
+    expect(cancels()).toHaveLength(1);
+    expect(cancels()[0].body).toMatchObject({ visit_id: Number(done.externalVisitId) });
+    expect(timePuts()).toHaveLength(0);
   });
 
   it('чернетка персоналу нічого не змінює; ізоляція: кнопка іншої клініки не діє', async () => {
@@ -385,7 +408,7 @@ describe('ідентичність операції перенесення й н
     expect(puts()).toHaveLength(3);
   });
 
-  it('агент: A→B→A→B — три підтвердження, три перенесення, візит на B; операція = підтвердження пацієнта', async () => {
+  it('агент: A→B→A→B — три підтвердження, три нові візити й три скасування, діючий візит на B; операція = підтвердження пацієнта', async () => {
     const { c, visit, raw } = await booked();
     const pick = async (want?: { date: string; time: string }) => {
       await say(c, 'Перенесіть мій запис');
@@ -401,8 +424,12 @@ describe('ідентичність операції перенесення й н
     const B = await pick();
     await pick(A);
     await pick(B);
-    expect(puts()).toHaveLength(3);
-    expect(String(raw().visit_start)).toBe(`${B.date} ${B.time}:00`);
+    // back to the original time A is a NEW visit too (each confirmation is its own operation, never answered by the original booking)
+    expect(posts()).toHaveLength(3);
+    expect(cancels()).toHaveLength(3);
+    expect(raw().status).toBe('CANCELLED');
+    const live = mock.data.visits.filter((v) => String(v.patient_id) === String(raw().patient_id) && v.status !== 'CANCELLED');
+    expect(live.map((v) => String(v.visit_start))).toEqual([`${B.date} ${B.time}:00`]);
     const a = await audits(c);
     expect(a).toHaveLength(3);
     const ops = a.map((x) => (x.details as { operation?: string }).operation);
@@ -452,3 +479,20 @@ describe('ідентичність операції перенесення й н
 
 const slotBody = (s: { date: string; time: string }) => ({ date: s.date, time_start: s.time });
 const localIso = (s: { date: string; time: string }) => localToUtc(`${s.date} ${s.time}:00`).toISOString();
+
+describe('перенесення: новий візит створено, а старий скасувати не вдалося (2026-11-16)', () => {
+  it('пацієнт лишається з новим записом, старий — завданням персоналу; нічого не повторюється само', async () => {
+    const { c, done } = await booked();
+    await toConfirm(c);
+    const spy = jest.spyOn(app.get(BookingService), 'cancel').mockRejectedValueOnce(new BadRequestException('booking_failed'));
+    await say(c, 'Так, перенести', (await buttonOf(c, 'moveyes|')).payload);
+    spy.mockRestore();
+    expect(posts()).toHaveLength(1);
+    expect(cancels()).toHaveLength(0);
+    const req = await prisma.bookingRequest.findUniqueOrThrow({ where: { id: done.id } });
+    expect(req.externalVisitId).not.toBe(done.externalVisitId);
+    const r = (await reqs(c)).find((x) => x.summary.includes('скасуйте вручну'));
+    expect(r).toBeTruthy();
+    expect((await prisma.auditLog.findFirstOrThrow({ where: { clinicId: c.clinicId, action: 'booking.rescheduled' } })).details).toMatchObject({ oldCancelled: false });
+  });
+});

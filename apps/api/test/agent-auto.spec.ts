@@ -13,6 +13,7 @@ import { SyncService } from '../src/integrations/sync.service';
 import { RequestsService } from '../src/automations/requests.service';
 import { MessengerService } from '../src/automations/messenger.service';
 import { clinicDate, clinicHm, localToUtc } from '../src/common/clinic-time';
+import { encrypt } from '../src/common/crypto';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { KbService } from '../src/kb/kb.service';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -906,5 +907,144 @@ describe('після завершеного запису: коротко код�
     expect(sendsTo(c)[sendsTo(c).length - 1].text).toContain('На який день і час вам зручно його перенести?');
     expect(await stateOf(c)).toMatchObject({ owner: 'BOT' });
     expect(visitWrites()).toHaveLength(1);
+  });
+});
+
+// The clinic's own activation (2026-11-12): Pro gives the right, the owner finishes the setup and switches the agent on for the whole clinic; the server
+// list of dialogs is then not needed. An older test activation (scope DIALOGS) is never widened without that step.
+describe('агент: самостійне ввімкнення власником клініки на тарифі «Про»', () => {
+  const agent = (c: C) => http().get('/ai/agent').set(auth(c.token));
+  const connectInstagram = (c: C) => prisma.integration.create({ data: { clinicId: c.clinicId, provider: 'INSTAGRAM', apiKeyEnc: encrypt(`ig-${rnd()}`) } });
+  // a clinic with everything set up but the agent's autonomy off and no dialog on the server list
+  async function readyClinic() {
+    const { c } = await autoClinic({ auto: false, listed: false });
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { agentAutoServiceId: null } });
+    await connectInstagram(c);
+    return c;
+  }
+
+  it('тариф сам нічого не вмикає; без послуг і каналу ввімкнути не можна; після ввімкнення агент відповідає в новому діалозі без серверного списку', async () => {
+    const c = await readyClinic();
+    let st = (await agent(c).expect(200)).body;
+    expect(st).toMatchObject({ inPlan: true, active: false, ready: false, testMode: false });
+    expect(st.prerequisites.find((p: { key: string }) => p.key === 'services').met).toBe(false);
+    await http().post('/ai/agent/activate').set(auth(c.token)).expect(400);
+    await ask(c);
+    expect(transport.sent).toHaveLength(0);
+
+    // the owner picks the services: only approved, active services of this clinic, at most five, no repeats
+    const other = await agentClinic();
+    await http().put('/ai/agent/services').set(auth(c.token)).send({ ids: [other.consult.id] }).expect(400);
+    await http().put('/ai/agent/services').set(auth(c.token)).send({ ids: [c.consult.id, c.consult.id] }).expect(400);
+    st = (await http().put('/ai/agent/services').set(auth(c.token)).send({ ids: [c.consult.id] }).expect(200)).body;
+    expect(st).toMatchObject({ ready: true, active: false });
+    expect(st.services.map((s: { id: string }) => s.id)).toEqual([c.consult.id]);
+
+    st = (await http().post('/ai/agent/activate').set(auth(c.token)).expect(200)).body;
+    expect(st).toMatchObject({ active: true, paused: false });
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).toMatchObject({ aiAgentMode: true, aiAgentAuto: true, agentAutoScope: 'CLINIC' });
+    // no server list at all, and a dialogue nobody ever listed
+    expect(process.env.AGENT_AUTO_DIALOGS).toBeUndefined();
+    await ask(c);
+    expect(transport.sent.length).toBeGreaterThan(0);
+    const fresh = { ...c, chat: `ig${rnd()}` };
+    const before = transport.sent.length;
+    await ask(fresh);
+    expect(transport.sent.length).toBeGreaterThan(before);
+    // Telegram is covered by the same owner switch (owner's decision of 2026-11-16): a new Telegram dialogue is answered too
+    expect(await app.get(AgentAutoGate).denied(c.clinicId, 'TELEGRAM', 'tg1')).toBeNull();
+    const tgBefore = transport.sent.length;
+    await intake().handle(c.clinicId, { channel: 'TELEGRAM', chatId: `tg${rnd()}`, mid: `tg-${rnd()}`, text: 'Скільки коштує тестова консультація?' });
+    expect(transport.sent.length).toBeGreaterThan(tgBefore);
+    // channels the agent does not serve stay denied
+    expect(await app.get(AgentAutoGate).denied(c.clinicId, 'VIBER', 'v1')).toBe('channel_not_supported');
+    // the website chat (2026-11-17) is NOT reached by that switch: the owner includes it explicitly; until then the agent leaves it to the staff
+    const web = `w-${rnd()}`;
+    expect(await app.get(AgentAutoGate).denied(c.clinicId, 'WEB', web)).toBe('web_not_included');
+    await intake().handle(c.clinicId, { channel: 'WEB', chatId: web, mid: null, text: 'Скільки коштує тестова консультація?' });
+    const webOut = () => prisma.chatMessage.count({ where: { clinicId: c.clinicId, channel: 'WEB', chatId: web, direction: 'OUT' } });
+    expect(await webOut()).toBe(0);
+    const manager = await invite(c, 'MANAGER');
+    await http().patch('/automations/webchat').set(auth(manager)).send({ aiAnswers: true }).expect(403);
+    await http().patch('/automations/webchat').set(auth(c.token)).send({ aiAnswers: true }).expect(200);
+    expect(await app.get(AgentAutoGate).denied(c.clinicId, 'WEB', web)).toBeNull();
+    await intake().handle(c.clinicId, { channel: 'WEB', chatId: web, mid: null, text: 'А скільки вона триває?' });
+    expect(await webOut()).toBeGreaterThan(0);
+    // the visitor asks for a person: the agent stops in that dialogue
+    await prisma.conversationState.updateMany({ where: { clinicId: c.clinicId, channel: 'WEB', chatId: web }, data: { owner: 'HUMAN' } });
+    const n = await webOut();
+    await intake().handle(c.clinicId, { channel: 'WEB', chatId: web, mid: null, text: 'Ще питання' });
+    expect(await webOut()).toBe(n);
+  });
+
+  it('права: вмикає й змінює лише власник; керуючий бачить стан; інша клініка не зачеплена', async () => {
+    const c = await readyClinic();
+    await http().put('/ai/agent/services').set(auth(c.token)).send({ ids: [c.consult.id] }).expect(200);
+    const manager = await invite(c, 'MANAGER');
+    const admin = await invite(c, 'ADMIN');
+    await http().get('/ai/agent').set(auth(manager)).expect(200);
+    await http().get('/ai/agent').set(auth(admin)).expect(403);
+    await http().post('/ai/agent/activate').set(auth(manager)).expect(403);
+    await http().put('/ai/agent/services').set(auth(manager)).send({ ids: [] }).expect(403);
+    await http().post('/ai/agent/deactivate').set(auth(admin)).expect(403);
+    await http().get('/ai/agent').expect(401);
+
+    const b = await readyClinic();
+    await http().post('/ai/agent/activate').set(auth(c.token)).expect(200);
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: b.clinicId } })).toMatchObject({ aiAgentAuto: false, agentAutoScope: 'DIALOGS' });
+    expect((await agent(b).expect(200)).body.active).toBe(false);
+  });
+
+  it('старе тестове ввімкнення не розширюється: без серверного списку агент мовчить, доки власник сам не ввімкне', async () => {
+    // the service owner's older activation: the switch is on, the scope is the restricted one
+    const { c } = await autoClinic({ listed: false });
+    await connectInstagram(c);
+    expect((await agent(c).expect(200)).body).toMatchObject({ active: false, testMode: true });
+    await ask(c);
+    expect(transport.sent).toHaveLength(0);
+    // a dialog on the list still works as before
+    allow(c);
+    await ask(c);
+    expect(transport.sent.length).toBeGreaterThan(0);
+  });
+
+  it('вимкнення й втрата тарифу зупиняють агента; старий автовідповідач при цьому не вмикається', async () => {
+    const c = await readyClinic();
+    await http().put('/ai/agent/services').set(auth(c.token)).send({ ids: [c.consult.id] }).expect(200);
+    await http().post('/ai/agent/activate').set(auth(c.token)).expect(200);
+    await ask(c);
+    const sent = transport.sent.length;
+    expect(sent).toBeGreaterThan(0);
+
+    // the plan is gone: the next message gets no automatic answer, and the gate names the reason
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'START', aiAutoReply: true } });
+    const second = { ...c, chat: `ig${rnd()}` };
+    await ask(second);
+    expect(transport.sent).toHaveLength(sent);
+    expect(await app.get(AgentAutoGate).denied(c.clinicId, 'INSTAGRAM', second.chat)).toBe('plan_without_agent');
+    expect((await agent(c).expect(200)).body).toMatchObject({ inPlan: false, active: true, paused: true });
+    await http().post('/ai/agent/activate').set(auth(c.token)).expect(400);
+
+    // back on Pro, then the owner switches the agent off: silent again, the agent mode (drafts) stays, the older auto-reply stays held
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'PRO' } });
+    expect((await http().post('/ai/agent/deactivate').set(auth(c.token)).expect(200)).body).toMatchObject({ active: false });
+    const third = { ...c, chat: `ig${rnd()}` };
+    await ask(third);
+    expect(transport.sent).toHaveLength(sent);
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).toMatchObject({ aiAgentMode: true, aiAgentAuto: false });
+    expect((await http().get('/ai').set(auth(c.token)).expect(200)).body).toMatchObject({ agentMode: true, autoReplyHeldByAgent: true, agentAuto: false });
+  });
+
+  it('оплата: заблокована клініка не отримує автономних відповідей', async () => {
+    const c = await readyClinic();
+    await http().put('/ai/agent/services').set(auth(c.token)).send({ ids: [c.consult.id] }).expect(200);
+    await http().post('/ai/agent/activate').set(auth(c.token)).expect(200);
+    process.env.BILLING_ENFORCED = 'true';
+    try {
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { billingStatus: 'LAPSED' } });
+      expect(await app.get(AgentAutoGate).denied(c.clinicId, 'INSTAGRAM', c.chat)).toBe('billing_blocked');
+    } finally {
+      delete process.env.BILLING_ENFORCED;
+    }
   });
 });

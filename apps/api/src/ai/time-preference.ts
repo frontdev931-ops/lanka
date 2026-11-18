@@ -4,8 +4,9 @@ export interface TimePreference {
   afterMin?: number;
   beforeMin?: number;
   // how the wish was said (for the words the code writes back to the client)
-  afterKind?: 'time' | 'evening' | 'afternoon';
-  beforeKind?: 'time' | 'morning';
+  // 'at': a named hour ("о 19", "на 19:00", "о шостій"): afterMin is that hour and beforeMin an hour later (a start within that hour)
+  afterKind?: 'time' | 'evening' | 'afternoon' | 'at';
+  beforeKind?: 'time' | 'morning' | 'at';
   // a day wish, read in the CLINIC's calendar (the `today` the caller passes): a date YYYY-MM-DD. A wish, never a promise.
   date?: string;
   // the day could not be read safely: 'same_weekday' (the weekday of today: today or next week?), 'past' (the date has passed)
@@ -72,6 +73,28 @@ function parseDay(text: string, today: string, reach: number): Pick<TimePreferen
 const HM = '(\\d{1,2})(?:[:.](\\d{2}))?';
 const minutes = (h: string, m?: string) => Number(h) * 60 + Number(m ?? 0);
 
+// Hours said in words. Ukrainian: the genitive after "після/до" ("після шостої") and the locative after "о" ("о шостій"); Russian: the genitive after
+// "после/до" ("после шести") and the accusative after "в" ("в шесть").
+const UK_GEN = ['першої', 'другої', 'третьої', 'четвертої', "п['’ʼ]?ятої", 'шостої', "с[ьі]омої", 'восьмої', "дев['’ʼ]?ятої", 'десятої', 'одинадцятої', 'дванадцятої'];
+const UK_LOC = ['першій', 'другій', 'третій', 'четвертій', "п['’ʼ]?ятій", 'шостій', "с[ьі]омій", 'восьмій', "дев['’ʼ]?ятій", 'десятій', 'одинадцятій', 'дванадцятій'];
+const RU_GEN = ['часа', 'двух', 'тр[её]х', 'четыр[её]х', 'пяти', 'шести', 'семи', 'восьми', 'девяти', 'десяти', 'одиннадцати', 'двенадцати'];
+const RU_ACC = ['час', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять', 'десять', 'одиннадцать', 'двенадцать'];
+const WORD_HOUR = (list: string[]) => `(${list.join('|')})`;
+const hourOfWord = (w: string) => {
+  for (const list of [UK_GEN, UK_LOC, RU_GEN, RU_ACC]) {
+    const i = list.findIndex((x) => new RegExp(`^${x}$`, 'iu').test(w));
+    if (i >= 0) return i + 1;
+  }
+  return null;
+};
+// A clock hour from a spoken one: "ранку/утра" keeps the morning, "вечора/дня/обіду" means the afternoon, and without a word a bare 1-7 is the
+// afternoon (a clinic is not open at 6 in the morning: "після шостої" is 18:00). 8-12 stay as said.
+function clockHour(h: number, text: string): number {
+  if (/(?<![\p{L}])(?:ранку|утра|вранці|утром|зранку)(?![\p{L}])/iu.test(text)) return h === 12 ? 0 : h;
+  if (/(?<![\p{L}])(?:вечора|вечера|дня|обіду|обеда)(?![\p{L}])/iu.test(text)) return h < 12 ? h + 12 : h;
+  return h <= 7 ? h + 12 : h;
+}
+
 export function parseTimePreference(text: string, today?: string, reach = 7): TimePreference | null {
   // the echo of a tapped time button ("Обрав час: 12.11 14:30") is a CHOICE of an offered slot, not a wish
   if (/^\s*Обрав час:/.test(text)) return null;
@@ -79,13 +102,41 @@ export function parseTimePreference(text: string, today?: string, reach = 7): Ti
   if (today) Object.assign(pref, parseDay(text, today, reach) ?? {});
   const after = new RegExp(`(?:після|после|пізніше|позже)\\s*(?:о\\s*)?${HM}`, 'iu').exec(text);
   if (after && Number(after[1]) <= 23) {
-    pref.afterMin = minutes(after[1], after[2]);
+    pref.afterMin = minutes(String(clockHour(Number(after[1]), text)), after[2]);
+    pref.afterKind = 'time';
+  }
+  const afterWord = new RegExp(`(?<![\\p{L}])(?:після|после|пізніше|позже)\\s+${WORD_HOUR([...UK_GEN, ...RU_GEN])}(?![\\p{L}])`, 'iu').exec(text);
+  if (pref.afterMin === undefined && afterWord) {
+    pref.afterMin = clockHour(hourOfWord(afterWord[1])!, text) * 60;
     pref.afterKind = 'time';
   }
   const before = new RegExp(`(?:до|раніше|раньше|ранее)\\s*${HM}\\s*(?:год|час|ч\\b|:|$|[.,!?])`, 'iu').exec(text);
   if (before && Number(before[1]) <= 24 && before[0].match(/\d/)) {
-    pref.beforeMin = minutes(before[1], before[2]);
+    pref.beforeMin = minutes(String(clockHour(Number(before[1]), text)), before[2]);
     pref.beforeKind = 'time';
+  }
+  const beforeWord = new RegExp(`(?<![\\p{L}])(?:до|раніше|раньше|ранее)\\s+${WORD_HOUR([...UK_GEN, ...RU_GEN])}(?![\\p{L}])`, 'iu').exec(text);
+  if (pref.beforeMin === undefined && beforeWord) {
+    pref.beforeMin = clockHour(hourOfWord(beforeWord[1])!, text) * 60;
+    pref.beforeKind = 'time';
+  }
+  // A named hour: "о 19", "о 19:30", "на 19:00", "в 19 годині", "о шостій", "в шесть". "на"/"в" with a bare number count only with minutes or an hour word
+  // ("на 2 зуби" is not a time). The start is wished within that hour. Only when no "after"/"before" was said.
+  if (pref.afterMin === undefined && pref.beforeMin === undefined) {
+    const atNum =
+      // a number followed by another word ("о 3 зуби") is not a time; time words after it are fine
+      new RegExp(`(?<![\\p{L}])(?:о|об)\\s+${HM}(?![\\d])(?!\\s*(?!(?:год\\p{L}*|ранку|вечора|дня|утра|вечера|час\\p{L}*|ч)(?![\\p{L}]))\\p{L})`, 'iu').exec(text) ??
+      new RegExp(`(?<![\\p{L}])(?:на|в|во)\\s+(\\d{1,2})(?:[:.](\\d{2}))(?![\\d])`, 'iu').exec(text) ??
+      new RegExp(`(?<![\\p{L}])(?:на|в|во|о)\\s+(\\d{1,2})()\\s*(?:год\\p{L}*|час\\p{L}*|ч)(?![\\p{L}])`, 'iu').exec(text);
+    const atWord = new RegExp(`(?<![\\p{L}])(?:о|об|в)\\s+${WORD_HOUR([...UK_LOC, ...RU_ACC.slice(1)])}(?![\\p{L}])`, 'iu').exec(text);
+    const h = atNum ? clockHour(Number(atNum[1]), text) : atWord ? clockHour(hourOfWord(atWord[1])!, text) : null;
+    const m = atNum?.[2] ? Number(atNum[2]) : 0;
+    if (h !== null && h >= 7 && h <= 21 && m < 60) {
+      pref.afterMin = h * 60 + m;
+      pref.afterKind = 'at';
+      pref.beforeMin = h * 60 + m + 60;
+      pref.beforeKind = 'at';
+    }
   }
   if (pref.afterMin === undefined && /(?<![\p{L}])(?:ввечері|увечері|вечором|вечора|вечір|вечером|вечера|вечер)(?![\p{L}])/iu.test(text)) {
     pref.afterMin = 17 * 60;
@@ -121,6 +172,7 @@ export const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}
 export function preferencePhrase(pref: TimePreference, lang: 'uk' | 'ru'): string {
   const ru = lang === 'ru';
   const parts: string[] = [];
+  if (pref.afterKind === 'at' && pref.afterMin !== undefined) return [`${ru ? 'в' : 'о'} ${hm(pref.afterMin)}`, pref.date ? `${ru ? 'на' : 'на'} ${pref.date.slice(8)}.${pref.date.slice(5, 7)}` : ''].filter(Boolean).join(' ');
   if (pref.afterMin !== undefined) parts.push(pref.afterKind === 'evening' ? (ru ? 'вечером' : 'ввечері') : pref.afterKind === 'afternoon' ? (ru ? 'после обеда' : 'після обіду') : `${ru ? 'после' : 'після'} ${hm(pref.afterMin)}`);
   if (pref.date) parts.push(`${ru ? 'на' : 'на'} ${pref.date.slice(8)}.${pref.date.slice(5, 7)}`);
   if (pref.beforeMin !== undefined) parts.push(pref.beforeKind === 'morning' ? (ru ? 'утром' : 'зранку') : `${ru ? 'до' : 'до'} ${hm(pref.beforeMin)}`);

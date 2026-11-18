@@ -24,6 +24,8 @@ interface Conv {
   lastDirection: 'IN' | 'OUT';
   lastAt: string;
   unread: number;
+  // who answers the next message by itself (the server's label; the senders check everything again)
+  answers?: 'AI' | 'STAFF';
 }
 interface Thread {
   channel: string;
@@ -75,6 +77,8 @@ interface PatientRow {
 
 export default function InboxPage() {
   const { t } = useI18n();
+  // the website chat says "Website" in the clinic's language
+  const chName = (c: string) => (c === 'WEB' ? t('chs.tab.website') : c ? (CHANNEL_NAME[c] ?? c) : '');
   const [list, setList] = useState<Conv[] | null>(null);
   const [open, setOpen] = useState<{ channel: string; chatId: string } | null>(null);
   const [thread, setThread] = useState<Thread | null>(null);
@@ -491,7 +495,7 @@ export default function InboxPage() {
               <div className="toolbar" style={{ padding: '12px 16px 0' }} role="group" aria-label={t('inbox.channelFilter')}>
                 <button className={chFilter === '' ? 'btn btn-sm btn-primary' : 'btn btn-sm'} aria-pressed={chFilter === ''} onClick={() => setChFilter('')}>{t('inbox.allChannels')}</button>
                 {channels.map((ch) => (
-                  <button key={ch} className={chFilter === ch ? 'btn btn-sm btn-primary' : 'btn btn-sm'} aria-pressed={chFilter === ch} onClick={() => setChFilter(ch)}>{CHANNEL_NAME[ch] ?? ch}</button>
+                  <button key={ch} className={chFilter === ch ? 'btn btn-sm btn-primary' : 'btn btn-sm'} aria-pressed={chFilter === ch} onClick={() => setChFilter(ch)}>{chName(ch)}</button>
                 ))}
               </div>
             )}
@@ -501,8 +505,9 @@ export default function InboxPage() {
                   <button className="chat-item" onClick={() => setOpen({ channel: c.channel, chatId: c.chatId })}>
                     <span className="chat-name">
                       <b>{name(c)}</b>
-                      <Badge tone={c.channel === 'TELEGRAM' ? 'gray' : 'blue'}>{CHANNEL_NAME[c.channel] ?? c.channel}</Badge>
+                      <Badge tone={c.channel === 'TELEGRAM' ? 'gray' : 'blue'}>{chName(c.channel)}</Badge>
                       {!c.patient && <Badge tone="amber">{t('inbox.notLinked')}</Badge>}
+                      {c.answers && <Badge tone={c.answers === 'AI' ? 'teal' : 'gray'}>{c.answers === 'AI' ? t('inbox.answersAi') : t('inbox.answersStaff')}</Badge>}
                       {c.unread > 0 && <Badge tone="blue">{c.unread}</Badge>}
                     </span>
                     <span className="muted chat-last">{c.lastDirection === 'OUT' ? `${t('inbox.you')}: ` : ''}{c.lastText}</span>
@@ -548,7 +553,7 @@ export default function InboxPage() {
                 </details>
               )}
               {thread.optedOut && <Alert tone="warn">{t('inbox.optedOut')}</Alert>}
-              {!thread.replyWindowOpen && <Alert tone="warn">{t('inbox.windowClosed', { channel: CHANNEL_NAME[open?.channel ?? ''] ?? '' })}</Alert>}
+              {!thread.replyWindowOpen && <Alert tone="warn">{t('inbox.windowClosed', { channel: chName(open?.channel ?? '') })}</Alert>}
               {thread.agentOwnerHuman && !thread.botPausedUntil && (
                 <Alert tone="info">
                   {t('inbox.agentHuman')}{' '}
@@ -597,7 +602,7 @@ export default function InboxPage() {
                   {t('inbox.send')}
                 </button>
               </div>
-              <p className="muted" style={{ fontSize: 13 }}>{t('inbox.sendNote', { channel: CHANNEL_NAME[open?.channel ?? ''] ?? '' })}{open && WINDOW_CHANNELS.has(open.channel) ? ` ${t('inbox.sendNoteWindow')}` : ''}</p>
+              <p className="muted" style={{ fontSize: 13 }}>{t('inbox.sendNote', { channel: chName(open?.channel ?? '') })}{open && WINDOW_CHANNELS.has(open.channel) ? ` ${t('inbox.sendNoteWindow')}` : ''}</p>
             </>
           )}
         </Card>

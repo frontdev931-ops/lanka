@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Post, Put, Query, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { SOURCE_CURRENCIES } from '../common/money';
 import { Role } from '@prisma/client';
 import { AuthGuard, AuthUser, CurrentUser, Roles } from '../common/auth.guard';
 import { SyncService } from './sync.service';
@@ -9,6 +10,14 @@ class ConnectDto {
   @IsString() @MinLength(8) apiKey: string;
   // Starts the first data load at once (the answer does not wait for it to finish)
   @IsOptional() @IsBoolean() sync?: boolean;
+}
+
+class CurrencyDto {
+  @IsIn(SOURCE_CURRENCIES as unknown as string[]) currency: string;
+  // the earlier statement was a mistake: relabel every amount loaded so far
+  @IsOptional() @IsBoolean() correct?: boolean;
+  // which amounts the statement covers: payments, invoices and balances (default) or treatment-plan totals
+  @IsOptional() @IsIn(['finance', 'plans']) scope?: 'finance' | 'plans';
 }
 
 @Controller('integrations/cliniccards')
@@ -34,6 +43,13 @@ export class IntegrationsController {
     // A load error is recorded in the sync history, we do not wait for it here
     if (dto.sync) void this.sync.run(u.clinicId, u.userId).catch(() => {});
     return status;
+  }
+
+  // The currency of the clinic's amounts in Cliniccards: only the owner states it
+  @Put('currency')
+  @Roles(Role.OWNER)
+  currency(@CurrentUser() u: AuthUser, @Body() dto: CurrencyDto) {
+    return this.sync.setCurrency(u.clinicId, u.userId, dto.currency, !!dto.correct, dto.scope ?? 'finance');
   }
 
   @Post('sync')

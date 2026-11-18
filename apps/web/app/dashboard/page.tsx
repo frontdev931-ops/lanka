@@ -6,6 +6,7 @@ import { api } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { fmtDateTime } from '../../lib/ui';
 import { Alert, Icon, PageHeader } from '../../components/ui';
+import { OnboardingCard } from '../../components/OnboardingCard';
 import { Period, PRESET_DAYS, dayLabel, localDay, periodQuery, rangeProblem, readPeriod, today } from '../../lib/period';
 
 interface Report {
@@ -90,6 +91,7 @@ export default function Dashboard() {
   return (
     <>
       <PageHeader title={t('dash.title')} subtitle={t('dash.updated', { date: updated })} />
+      <OnboardingCard />
 
       {/* What to show in an empty workspace: demo data, an empty clinic without a connection, or a connected one that is not loaded yet */}
       {integration?.mode === 'demo' && integration.lastSyncAt && (

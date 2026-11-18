@@ -1,6 +1,6 @@
 import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, Patch, UseGuards } from '@nestjs/common';
 import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
-import { MAX_AUTO_SERVICES, configuredAutoServiceIds } from '../automations/agent-auto-gate';
+import { assertAutoServiceSet, configuredAutoServiceIds } from '../automations/agent-auto-gate';
 import { AuthGuard, AuthUser, CurrentUser } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLAN_KEYS, PLANS, effectiveLimits, monthStart } from './plans';
@@ -15,7 +15,8 @@ export async function isPlatformAdmin(prisma: PrismaService, userId: string): Pr
 }
 
 class ClinicPatchDto {
-  @IsOptional() @IsIn(PLAN_KEYS) plan?: string;
+  // NETWORK is given only by a network (a branch joins it): never set by hand
+  @IsOptional() @IsIn(PLAN_KEYS.filter((k) => k !== 'NETWORK')) plan?: string;
   @IsOptional() @IsBoolean() suspended?: boolean;
   @IsOptional() @IsObject() limits?: Record<string, unknown>;
   @IsOptional() @IsInt() @Min(0) @Max(1_000_000) aiMonthlyLimit?: number;
@@ -107,7 +108,8 @@ export class PlatformController {
   @Get('plans')
   async plans(@CurrentUser() u: AuthUser) {
     await this.assertAdmin(u);
-    return Object.entries(PLANS).map(([key, p]) => ({ key, label: p.label, limits: p.limits }));
+    // NETWORK is given only by a network, never chosen by hand
+    return Object.entries(PLANS).filter(([key]) => key !== 'NETWORK').map(([key, p]) => ({ key, label: p.label, limits: p.limits }));
   }
 
   @Patch('clinics/:id')
@@ -124,10 +126,7 @@ export class PlatformController {
     const autoSet = dto.agentAutoServiceIds ?? (dto.agentAutoServiceId !== undefined ? (dto.agentAutoServiceId ? [dto.agentAutoServiceId] : []) : undefined);
     let autoBefore: string[] | null = null;
     if (autoSet) {
-      if (autoSet.length > MAX_AUTO_SERVICES) throw new BadRequestException('auto_services_too_many');
-      if (new Set(autoSet).size !== autoSet.length) throw new BadRequestException('auto_services_duplicate');
-      const valid = await this.prisma.kbItem.count({ where: { id: { in: autoSet }, clinicId: id, kind: 'SERVICE', active: true, approvedAt: { not: null } } });
-      if (valid !== autoSet.length) throw new BadRequestException('service_not_found');
+      await assertAutoServiceSet(this.prisma, id, autoSet);
       autoBefore = configuredAutoServiceIds(await this.prisma.clinic.findUniqueOrThrow({ where: { id }, select: { agentAutoServiceIds: true, agentAutoServicesSet: true, agentAutoServiceId: true } }));
     }
     const data = {

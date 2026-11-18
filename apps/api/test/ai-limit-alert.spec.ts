@@ -17,7 +17,7 @@ const tg = {
   sent: [] as { chatId: string; text: string }[],
   // rejected: Telegram answers with a refusal (nothing was delivered). lost: the message is taken but the answer never comes (a timeout)
   fail: false as false | 'rejected' | 'lost',
-  getMe: async () => ({ id: 1, username: 'limit_test_bot' }),
+  getMe: async () => ({ id: 1, username: 'limit_test_bot' }), getWebhookInfo: async () => ({ url: '', pending_update_count: 0 }),
   sendMessage: async (_t: string, chatId: string | number, text: string) => {
     if (tg.fail === 'rejected') throw new TelegramError('Forbidden: bot was kicked from the supergroup chat', 403);
     tg.sent.push({ chatId: String(chatId), text });

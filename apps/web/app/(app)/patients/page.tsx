@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../../../lib/api';
 import { useT } from '../../../lib/i18n';
-import { fmtDate, fmtNumber } from '../../../lib/ui';
+import { fmtDate, fmtNumber, fmtAmount } from '../../../lib/ui';
 import { Alert, Card, Empty, Icon, Loading, PageHeader } from '../../../components/ui';
 
 interface Result {
@@ -12,7 +12,7 @@ interface Result {
   page: number;
   pageSize: number;
   sources: string[];
-  rows: { id: string; fullName: string; phone: string | null; source: string | null; lastVisitAt: string | null; debt?: number }[];
+  rows: { id: string; fullName: string; phone: string | null; source: string | null; lastVisitAt: string | null; debt?: number; debtCurrency?: string | null }[];
 }
 
 export default function PatientsPage() {
@@ -75,7 +75,7 @@ export default function PatientsPage() {
                     <td>{p.phone ?? <span className="muted">—</span>}</td>
                     <td>{p.source ?? <span className="muted">—</span>}</td>
                     <td>{fmtDate(p.lastVisitAt)}</td>
-                    {showMoney && <td className="num">{p.debt ? <b style={{ color: 'var(--red)' }}>{fmtNumber(p.debt)}</b> : <span className="muted">—</span>}</td>}
+                    {showMoney && <td className="num">{p.debt ? <b style={{ color: 'var(--red)' }}>{fmtAmount(p.debt, p.debtCurrency ?? null, t('billing.uah'), t('money.unknownShort'))}</b> : <span className="muted">—</span>}</td>}
                   </tr>
                 ))}
               </tbody>

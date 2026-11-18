@@ -29,7 +29,7 @@ const tg = {
   sent: [] as { chatId: string; text: string; extra?: Record<string, unknown> }[],
   answered: [] as string[],
   answerCallbackQuery: async (_t: string, id: string) => void tg.answered.push(id),
-  getMe: async () => ({ id: 1, username: 'ai_test_bot' }),
+  getMe: async () => ({ id: 1, username: 'ai_test_bot' }), getWebhookInfo: async () => ({ url: '', pending_update_count: 0 }),
   sendMessage: async (_t: string, chatId: string | number, text: string, extra?: Record<string, unknown>) => void tg.sent.push({ chatId: String(chatId), text, ...(extra && Object.keys(extra).length ? { extra } : {}) }),
   getUpdates: async () => [],
   setWebhook: async () => true,
@@ -644,7 +644,8 @@ describe('ШІ-помічник керівника: вопрос → отчёт'
 
     fake.seq = [J({ answer: 'Загальна кількість.', title: 'Усього', spec: { dataset: 'patients', aggregates: [{ fn: 'count' }, { fn: 'sum', field: 'balanceIssued' }] } }), 'Усього два пацієнти.'];
     const total = (await ask(c.token, 'скільки всього пацієнтів і на яку суму виставлено').expect(200)).body;
-    expect(total.report.rows).toEqual([{ a0: 2, a1: 3000 }]);
+    // the balances carry no stated currency: the total says so in its own currency cell
+    expect(total.report.rows).toEqual([{ a0: 2, a1: 3000, currency: null }]);
 
     // money is unavailable to the administrator: it is not in the model's catalogue, and a description with money is rejected
     const inv = await http().post('/team/invitations').set(auth(c.token)).send({ email: `ad${rnd()}@example.com`, role: 'ADMIN' }).expect(201);

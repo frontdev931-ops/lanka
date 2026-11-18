@@ -3,6 +3,7 @@ import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import { Lang, VALUE_LABEL } from '../common/i18n';
 import type { Cell, Report } from './reports.service';
+import { currencyCell } from './report-currency';
 
 // A label of a value for people (statuses, yes/no, "not specified"): shared by CSV, Excel and PDF
 export function cellLabel(lang: Lang, key: string, value: Cell): string {
@@ -11,7 +12,13 @@ export function cellLabel(lang: Lang, key: string, value: Cell): string {
   if (key === 'visitStatus') return v.status[String(value)] ?? String(value ?? '');
   if (key === 'rebooked') return value ? v.yes : v.no;
   if (key === 'source' && !value) return v.notSpecified;
+  if (key === 'currency') return currencyCell(lang, value);
   return String(value ?? '');
+}
+
+// The header of a column in a file: the label as built (the currency of money columns is already in it, see report-currency.ts)
+export function headLabel(c: { label: string }, _lang: Lang): string {
+  return c.label;
 }
 
 const TEXT = {
@@ -32,7 +39,7 @@ export async function toXlsx(report: Report, lang: Lang): Promise<Buffer> {
   ws.addRow([`${t.rule}: ${report.rule}`]);
   ws.addRow([`${t.updated}: ${when(report.dataUpdatedAt, lang)} · ${t.generated}: ${when(report.generatedAt, lang)} · ${t.rows}: ${report.rows.length}`]);
   ws.addRow([]);
-  const head = ws.addRow(report.columns.map((c) => c.label));
+  const head = ws.addRow(report.columns.map((c) => headLabel(c, lang)));
   head.font = { bold: true };
   head.alignment = { vertical: 'middle', wrapText: true };
   head.eachCell((c) => (c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6F2F1' } }));
@@ -57,7 +64,7 @@ export async function toXlsx(report: Report, lang: Lang): Promise<Buffer> {
     for (const x of sec.summary) ss.addRow([x.label, x.value]);
     if (sec.note) ss.addRow([sec.note]);
     ss.addRow([]);
-    const h = ss.addRow(sec.columns.map((c) => c.label));
+    const h = ss.addRow(sec.columns.map((c) => headLabel(c, lang)));
     h.font = { bold: true };
     h.eachCell((c) => (c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6F2F1' } }));
     for (const r of sec.rows) ss.addRow(sec.columns.map((c) => cellLabel(lang, c.key, r[c.key])));
@@ -103,7 +110,7 @@ export function toPdf(report: Report, lang: Lang): Promise<Buffer> {
       doc.font(font).fontSize(fs);
       return Math.max(...cells.map((c, i) => doc.heightOfString(c, { width: cw[i] - pad * 2 }))) + pad * 2;
     };
-    let headerCells = report.columns.map((c) => c.label);
+    let headerCells = report.columns.map((c) => headLabel(c, lang));
     const drawRow = (cells: string[], header: boolean) => {
       const h = rowHeight(cells, header ? 'b' : 'r');
       if (doc.y + h > doc.page.height - doc.page.margins.bottom - 14) {
@@ -122,7 +129,7 @@ export function toPdf(report: Report, lang: Lang): Promise<Buffer> {
       doc.x = left;
     };
 
-    drawRow(report.columns.map((c) => c.label), true);
+    drawRow(headerCells, true);
     for (const r of report.rows.slice(0, PDF_MAX_ROWS)) drawRow(report.columns.map((c) => cellLabel(lang, c.key, r[c.key])), false);
     if (report.rows.length > PDF_MAX_ROWS) doc.moveDown(0.5).font('r').fontSize(8.5).text(t.cut.replace('{n}', String(PDF_MAX_ROWS)), left, doc.y);
 
@@ -134,7 +141,7 @@ export function toPdf(report: Report, lang: Lang): Promise<Buffer> {
       if (sec.note) doc.text(sec.note, { width });
       doc.fillColor('#000').moveDown(0.4);
       cw.splice(0, cw.length, ...sec.columns.map(() => width / sec.columns.length));
-      headerCells = sec.columns.map((c) => c.label);
+      headerCells = sec.columns.map((c) => headLabel(c, lang));
       drawRow(headerCells, true);
       for (const r of sec.rows.slice(0, PDF_MAX_ROWS)) drawRow(sec.columns.map((c) => cellLabel(lang, c.key, r[c.key])), false);
     }

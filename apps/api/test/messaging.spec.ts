@@ -20,6 +20,9 @@ jest.setTimeout(60_000);
 class FakeTelegram {
   sent: { token: string; chatId: string; text: string; extra?: Record<string, unknown> }[] = [];
   blocked = new Set<string>();
+  // a clean bot: no webhook of another service, nothing waiting (the connect guard of TelegramService)
+  webhook = { url: '', pending_update_count: 0 };
+  getWebhookInfo = async () => this.webhook;
   getMe = async (token: string) => {
     if (token.startsWith('bad')) throw new TelegramError('Unauthorized', 401);
     return { id: 1, username: 'clinic_test_bot' };
@@ -707,18 +710,18 @@ describe('результат сообщений для воронки', () => {
     await prisma.payment.create({ data: { clinicId, patientId: a.id, externalId: `p${rnd()}`, paidAt: ago(25), amount: 999 } }); // before the message
     await prisma.payment.create({ data: { clinicId, patientId: b.id, externalId: `p${rnd()}`, paidAt: ago(5), amount: 700 } }); // did not book after a message
     const pay = (await http().get('/messages/payback?days=30').set(auth(token)).expect(200)).body;
-    expect(pay).toMatchObject({ days: 30, attributionDays: 14, sent: 7, booked: 2, attended: 1, remindedVisits: 1, paid: 1500 });
+    expect(pay).toMatchObject({ days: 30, attributionDays: 14, sent: 7, booked: 2, attended: 1, remindedVisits: 1, paid: [{ currency: null, amount: 1500 }] });
     // a chosen range of days: only the messages sent in it (four campaign messages 20 days ago); the booking after them counts also after the range
     const dayIso = (n: number) => clinicDate(new Date(Date.now() - n * DAYMS));
-    expect((await http().get(`/messages/payback?from=${dayIso(21)}&to=${dayIso(19)}`).set(auth(token)).expect(200)).body).toMatchObject({ from: dayIso(21), to: dayIso(19), days: 3, sent: 4, booked: 1, paid: 1500 });
+    expect((await http().get(`/messages/payback?from=${dayIso(21)}&to=${dayIso(19)}`).set(auth(token)).expect(200)).body).toMatchObject({ from: dayIso(21), to: dayIso(19), days: 3, sent: 4, booked: 1, paid: [{ currency: null, amount: 1500 }] });
     await http().get(`/messages/payback?from=${dayIso(1)}`).set(auth(token)).expect(400);
     // a shorter period leaves only the fresh message and its appointment, and no payment
-    expect((await http().get('/messages/payback?days=7').set(auth(token)).expect(200)).body).toMatchObject({ sent: 3, booked: 1, attended: 0, paid: 0 });
+    expect((await http().get('/messages/payback?days=7').set(auth(token)).expect(200)).body).toMatchObject({ sent: 3, booked: 1, attended: 0, paid: [] });
     // money: only the owner and the manager; another clinic sees none of it
     await http().get('/messages/payback').set(auth(doctor)).expect(403);
     const admin = await member(token, 'ADMIN');
     await http().get('/messages/payback').set(auth(admin)).expect(403);
-    expect((await http().get('/messages/payback').set(auth(other.token)).expect(200)).body).toMatchObject({ sent: 0, booked: 0, paid: 0, remindedVisits: 0 });
+    expect((await http().get('/messages/payback').set(auth(other.token)).expect(200)).body).toMatchObject({ sent: 0, booked: 0, paid: [], remindedVisits: 0 });
   });
 });
 
@@ -827,13 +830,14 @@ describe('дайджест руководителю в Telegram', () => {
     const svc = (await import('../src/automations/digest.service')).DigestService;
     const digest = (app as INestApplication).get(svc);
     const n = await digest.numbers(c.clinicId, 'WEEKLY');
-    expect(n).toMatchObject({ visited: 2, noShow: 1, cancelled: 1, newPatients: 1, paid: 12500, upcoming: 1, requestsNew: 1, requestsOpen: 1, unclosed: 1 });
-    expect(n.prev).toMatchObject({ visited: 1, newPatients: 1, paid: 4000 });
+    expect(n).toMatchObject({ visited: 2, noShow: 1, cancelled: 1, newPatients: 1, paid: [{ currency: null, amount: 12500 }], upcoming: 1, requestsNew: 1, requestsOpen: 1, unclosed: 1 });
+    expect(n.prev).toMatchObject({ visited: 1, newPatients: 1, paid: [{ currency: null, amount: 4000 }] });
 
     const text = digest.format(n, 'Моя клініка', 'WEEKLY', 'uk', 'https://x/analytics');
     expect(text).toContain('Дайджест клініки «Моя клініка»');
     expect(text).toContain('проведено 2 (було 1)');
-    expect(text).toContain('Оплати: 12 500 (було 4 000)');
+    // the clinic has not stated its currency: the amount says so, and is compared only with the same currency
+    expect(text).toContain('Оплати: 12 500 (валюта не підтверджена) (було 4 000)');
     expect(text).toContain('Записів минулих днів без підсумку: 1');
     expect(text).toContain('Є заявки без відповіді: 1');
     expect(digest.format(n, 'Clinic', 'WEEKLY', 'en', 'u')).toContain('Appointments: completed 2 (was 1)');
@@ -1322,5 +1326,76 @@ describe('напоминания о записи в привязанный ди�
     await outbox.process(noon(), { clinicId: d.clinicId });
     expect((await prisma.outboundMessage.findFirstOrThrow({ where: { clinicId: d.clinicId } })).status).toBe('FAILED');
     expect((await prisma.patientChannel.findFirstOrThrow({ where: { patientId: z.p.id, channel: 'INSTAGRAM' } })).optedOutAt).toBeNull();
+  });
+});
+
+describe('підключення бота, яким уже користувалися (2026-11-16)', () => {
+  afterEach(() => {
+    tg.webhook = { url: '', pending_update_count: 0 };
+  });
+  it('бот із webhook іншого сервісу або з непрочитаними оновленнями не підключається і нічого не змінюється; чистий — підключається', async () => {
+    const { token, clinicId } = await clinic();
+    const stored = () => prisma.integration.count({ where: { clinicId, provider: 'TELEGRAM' } });
+    tg.webhook = { url: 'https://other-service.example/hook', pending_update_count: 0 };
+    expect((await http().post('/automations/telegram').set(auth(token)).send({ token: TOKEN }).expect(400)).body.message).toMatch(/webhook/);
+    expect(await stored()).toBe(0);
+    tg.webhook = { url: '', pending_update_count: 3 };
+    const r = (await http().post('/automations/telegram').set(auth(token)).send({ token: TOKEN }).expect(400)).body;
+    expect(r).toMatchObject({ username: 'clinic_test_bot', pending: 3 });
+    expect(await stored()).toBe(0);
+    tg.webhook = { url: '', pending_update_count: 0 };
+    await http().post('/automations/telegram').set(auth(token)).send({ token: TOKEN }).expect(201);
+    expect(await stored()).toBe(1);
+  });
+});
+
+describe('Telegram у режимі агента (2026-11-16)', () => {
+  it('повідомлення пацієнта йде тим самим шляхом, що й в Instagram: зберігається один раз, повторна доставка не дублює; без агента — як раніше', async () => {
+    const { token, clinicId } = await clinic();
+    await http().post('/automations/telegram').set(auth(token)).send({ token: TOKEN }).expect(201);
+    const tgToken = TOKEN;
+    const svc = app.get(TelegramService);
+    const msg = (id: number, chat: number, text: string) => ({ update_id: id, message: { chat: { id: chat }, from: { id: chat, first_name: 'Олена' }, text } });
+    const count = (chat: number) => prisma.chatMessage.count({ where: { clinicId, channel: 'TELEGRAM', chatId: String(chat), direction: 'IN' } });
+
+    // agent mode off: the older path, with its once-a-day polite answer
+    await svc.handleUpdate(clinicId, tgToken, msg(9001, 7001, 'Добрий день'));
+    expect(await count(7001)).toBe(1);
+    expect(tg.sent.filter((x) => x.chatId === '7001')).toHaveLength(1);
+
+    // agent mode on: IntakeService saves it with the update id; a repeated delivery is saved once; no old polite answer
+    await prisma.clinic.update({ where: { id: clinicId }, data: { aiAgentMode: true } });
+    await svc.handleUpdate(clinicId, tgToken, msg(9002, 7002, 'Скільки коштує консультація?'));
+    await svc.handleUpdate(clinicId, tgToken, msg(9002, 7002, 'Скільки коштує консультація?'));
+    expect(await count(7002)).toBe(1);
+    expect((await prisma.chatMessage.findFirstOrThrow({ where: { clinicId, chatId: '7002', direction: 'IN' } })).externalId).toBe('tg:9002');
+    expect(tg.sent.filter((x) => x.chatId === '7002')).toHaveLength(0);
+    // Telegram's own commands stay with the bot: /stop opts out as before
+    await svc.handleUpdate(clinicId, tgToken, msg(9003, 7002, '/stop'));
+    expect(tg.sent.filter((x) => x.chatId === '7002')).toHaveLength(1);
+  });
+});
+
+describe('кнопка «Хочу перенести» в нагадуванні, коли агент відповідає сам (2026-11-16)', () => {
+  it('натискання йде до агента як прохання перенести цей запис, а не заявкою адміністратору; без автономного агента — як раніше', async () => {
+    const { token, clinicId } = await clinic();
+    await http().post('/automations/telegram').set(auth(token)).send({ token: TOKEN }).expect(201);
+    const { p, v } = await patientWithVisit(clinicId, 30);
+    const chat = (await prisma.patientChannel.findFirstOrThrow({ where: { patientId: p.id } })).externalId;
+    const press = (id: string) => app.get(TelegramService).handleUpdate(clinicId, TOKEN, { update_id: Math.floor(Math.random() * 1e9), callback_query: { id, from: { id: Number(chat.replace(/\D/g, '')) || 1 }, message: { chat: { id: chat as unknown as number } }, data: `confirm|${v.id}|m` } });
+    const reschedules = () => prisma.bookingRequest.count({ where: { clinicId, kind: 'RESCHEDULE' } });
+
+    // no autonomous agent: a request for the administrator, as before
+    await press('cb1');
+    expect(await reschedules()).toBe(1);
+
+    // the owner switched the agent on for the clinic (Pro, a service of the agent, cabinets, sending on)
+    const svc = await prisma.kbItem.create({ data: { clinicId, kind: 'SERVICE', title: 'Консультація', active: true, approvedAt: new Date(), durationMin: 30 } });
+    await prisma.clinic.update({ where: { id: clinicId }, data: { aiAgentMode: true, aiAgentAuto: true, agentAutoScope: 'CLINIC', scheduleMode: 'CABINETS', agentAutoServiceIds: [svc.id], agentAutoServicesSet: true } });
+    await press('cb2');
+    // the press became the patient's words in the dialogue, handled by the agent's path; no second fixed request, no fixed "передали адміністратору"
+    const said = await prisma.chatMessage.findFirst({ where: { clinicId, chatId: chat, direction: 'IN', text: { startsWith: 'Хочу перенести запис' } } });
+    expect(said).toBeTruthy();
+    expect(tg.sent.filter((x) => x.chatId === chat && x.text.startsWith('Передали адміністратору: він зв’яжеться'))).toHaveLength(1); // only the first press
   });
 });

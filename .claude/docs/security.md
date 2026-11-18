@@ -61,3 +61,10 @@ Besides the list below: tenant isolation is enforced in the application and by t
 
 ## Password reset tells whether the address exists (2026-11-03)
 By the owner's decision `POST /auth/forgot-password` answers 404 `user_not_found` for an address with no account (a wrong address otherwise looks like a mail that never arrives). The price: the form shows which addresses are registered. The limits stay (3 per address and 10 per IP per hour, also for unknown addresses). Registration already says "email taken". To go back, return the same answer for both cases in `AuthService.forgotPassword`.
+
+## Website integration (2026-11-17)
+- Public keys (form key, chat key) are not credentials: they only name the clinic, and work only with an `Origin` on the clinic's list. A server posts with its own secret (`lsk_…`, owner only, shown once, stored as SHA-256), never Origin; the secret endpoint sends no CORS headers.
+- Stored from a form: only the documented fields; the page as origin + path (query and fragment dropped), the referrer as origin. Not stored: other fields, cookies, page contents. The audit log keeps the enquiry id and route only.
+- No message, consent or patient-channel link is created from a form. The website chat visitor is anonymous: no linked-patient visits, no cancelling or moving existing visits. Visitor text is rendered as text in the widget (no HTML).
+- Rate limits: forms 30/hour per IP and 300/hour per key (browser), 600/hour per IP and per clinic (server); chat 20 sessions/hour per IP, 20 messages/10 min per chat and 80/hour per IP, 300 polls/10 min per chat.
+- Meta Lead Ads: the webhook is accepted only with a valid `X-Hub-Signature-256` (HMAC of the raw body with `META_APP_SECRET`); the clinic is the one whose connected page the event names. The inbox keeps only ids; the answers are fetched from Meta when handled. Kept: name, phone, e-mail, message, up to 10 custom answers (text, 300 chars), ids; not kept: address, birth date, gender, job and national-id fields. A lead creates no patient channel, consent or message, and its answers are never given to the AI.

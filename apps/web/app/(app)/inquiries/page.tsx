@@ -19,6 +19,10 @@ interface Row {
   utmSource?: string | null;
   utmCampaign?: string | null;
   landing?: string | null;
+  email?: string | null;
+  via?: string | null;
+  formId?: string | null;
+  leadAds?: { platform: string | null; formId: string | null; campaignId: string | null; adId: string | null; organic: boolean | null; answers: { q: string; a: string }[] } | null;
   status: 'OPEN' | 'LOST';
   stage: Stage;
   patient: { id: string; fullName: string } | null;
@@ -148,12 +152,31 @@ export default function InquiriesPage() {
                   {list.rows.map((r) => (
                     <tr key={r.id}>
                       <td>{fmtWhen(r.occurredAt)}</td>
-                      <td>{t(`inq.ch.${r.channel}` as never)}</td>
                       <td>
-                        {r.phone ?? <span className="muted">—</span>}
+                        {t(`inq.ch.${r.channel}` as never)}
+                        {/* the route it arrived by: a website form keeps the channel of its campaign marks and says "website" here */}
+                        {r.via === 'WEBSITE_FORM' && <div className="cell-sub"><Badge tone="blue">{t('inq.via.WEBSITE_FORM')}</Badge>{r.formId ? ` ${r.formId}` : ''}</div>}
+                        {/* Meta Lead Ads: the platform of the form and its ids as Meta gave them (no campaign marks are made up) */}
+                        {r.via === 'META_LEAD_ADS' && (
+                          <div className="cell-sub">
+                            <Badge tone="blue">{t(r.leadAds?.platform === 'ig' ? 'inq.via.META_IG' : r.leadAds?.platform === 'fb' ? 'inq.via.META_FB' : 'inq.via.META_LEAD_ADS')}</Badge>
+                            {r.leadAds?.formId ? ` ${t('inq.leadForm', { id: r.leadAds.formId })}` : ''}
+                            {r.leadAds?.campaignId ? ` · ${t('inq.leadCampaign', { id: r.leadAds.campaignId })}` : ''}
+                            {r.leadAds?.organic ? ` · ${t('inq.leadOrganic')}` : ''}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        {r.phone ?? (r.email ? null : <span className="muted">—</span>)}
+                        {r.email && <div className={r.phone ? 'cell-sub' : undefined}>{r.email}</div>}
                         {r.name && <div className="cell-sub">{r.name}</div>}
                       </td>
-                      <td>{r.note ?? <span className="muted">—</span>}{(r.utmSource || r.utmCampaign) && <div className="cell-sub">{[r.utmSource, r.utmCampaign].filter(Boolean).join(' / ')}</div>}</td>
+                      <td>
+                        {r.note ?? (r.leadAds?.answers.length ? null : <span className="muted">—</span>)}
+                        {(r.utmSource || r.utmCampaign) && <div className="cell-sub">{[r.utmSource, r.utmCampaign].filter(Boolean).join(' / ')}</div>}
+                        {/* the answers to the ad form's own questions: shown as plain text */}
+                        {r.leadAds?.answers.map((x, k) => <div key={k} className="cell-sub">{x.q}: {x.a}</div>)}
+                      </td>
                       <td>
                         <Badge tone={TONE[r.stage]}>{t(`inq.st.${r.stage}` as never)}</Badge>
                         {r.patient && (
