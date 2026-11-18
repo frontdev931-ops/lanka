@@ -2,23 +2,20 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { BillingPayment, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { MailService } from '../auth/mail.service';
-import type { AuthUser } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { AI_PACK, BRANCH_SETUP_MIN_UAH, GRACE_DAYS, PLANS, SELLABLE_PLANS, SETUP_FEE_UAH, effectiveLimits, networkMonthlyUah, periodStart } from '../service/plans';
-import { canAccessPlatform } from '../service/platform-access';
 import { INVOICE_VALIDITY, MONO_CURRENCY, MonoClient, MonoRequestError, MonoStatus, readMonoStatus } from './mono';
-import { DIAGNOSTIC_AUDIT_PREFIX, DIAGNOSTIC_WEBHOOK, MONO_DIAGNOSTIC } from './mono-diagnostic';
+import { DIAGNOSTIC_AUDIT_PREFIX, MONO_DIAGNOSTIC } from './mono-diagnostic';
 
 const DAY = 86_400_000;
 const CHECK_INTERVAL = 15_000;
-const ONE_TIME_PRO_MINOR = 100;
 const monoPending: Prisma.BillingPaymentWhereInput = {
   monoExpiresAt: { not: null },
   OR: [{ status: 'PENDING' }, { status: 'FAILED', monoInvoiceId: { not: null } }],
 };
 const paymentDetails = { id: true, kind: true, plan: true, amountMinor: true, currency: true, setupMinor: true, packReplies: true, status: true, createdAt: true, paidAt: true, periodFrom: true, periodTo: true, refundedMinor: true } as const;
 type Scope = { clinicId: string; networkId?: string | null } | { networkId: string; clinicId?: never };
-type Quote = Pick<BillingPayment, 'clinicId' | 'kind' | 'amountMinor'> & Partial<Pick<BillingPayment, 'networkId' | 'periodFrom' | 'periodTo' | 'plan' | 'setupMinor' | 'packReplies' | 'branchIds' | 'oneTimeProBuyerId' | 'oneTimeProIncludesSetup'>>;
+type Quote = Pick<BillingPayment, 'clinicId' | 'kind' | 'amountMinor'> & Partial<Pick<BillingPayment, 'networkId' | 'periodFrom' | 'periodTo' | 'plan' | 'setupMinor' | 'packReplies' | 'branchIds'>>;
 const addMonth = (d: Date) => {
   const r = new Date(d);
   r.setUTCMonth(r.getUTCMonth() + 1);
@@ -52,19 +49,17 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     if (this.reconciliationTimer) clearInterval(this.reconciliationTimer);
   }
 
-  async overview(user: AuthUser, now = new Date()) {
-    const { clinicId } = user;
+  async overview(clinicId: string, now = new Date()) {
     const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { networkId: true, plan: true, billingStatus: true, paidUntil: true, periodStartsAt: true, setupPaidAt: true, aiMonthlyLimit: true, aiPurchased: true, aiPackCapPerMonth: true, limitOverrides: true } });
     const since = periodStart(c, now);
     const [used, packs, payments] = await Promise.all([
       this.prisma.aiUsage.count({ where: { clinicId, ok: true, billable: true, createdAt: { gte: since } } }),
       this.prisma.billingPayment.count({ where: { clinicId, kind: 'AI_PACK', status: 'PAID', paidAt: { gte: since } } }),
-      this.prisma.billingPayment.findMany({ where: { clinicId, kind: { not: MONO_DIAGNOSTIC } }, orderBy: { createdAt: 'desc' }, take: 20, select: { ...paymentDetails, oneTimeProBuyerId: true } }),
+      this.prisma.billingPayment.findMany({ where: { clinicId, kind: { not: MONO_DIAGNOSTIC } }, orderBy: { createdAt: 'desc' }, take: 20, select: paymentDetails }),
     ]);
     const setupUah = c.setupPaidAt ? null : SETUP_FEE_UAH;
     const from = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
     const pending = await this.prisma.billingPayment.findFirst({ where: { clinicId, networkId: null, kind: { not: MONO_DIAGNOSTIC }, ...monoPending }, orderBy: { createdAt: 'desc' }, select: { id: true } });
-    const oneTimePro = c.networkId ? null : await this.oneTimeProOffer(user, !c.setupPaidAt);
     return {
       configured: this.mono.configured,
       // a branch of a network is paid by its network (/billing/network/:id): its own payment page only points there
@@ -75,19 +70,16 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       status: c.billingStatus,
       paidUntil: c.paidUntil,
       graceUntil: c.paidUntil ? new Date(c.paidUntil.getTime() + GRACE_DAYS * DAY) : null,
-      plans: SELLABLE_PLANS.map((k) => {
-        const offer = k === 'PRO' ? oneTimePro : null;
-        return {
-          key: k, priceUah: PLANS[k].priceUah, totalUah: offer ? ONE_TIME_PRO_MINOR / 100 : PLANS[k].priceUah + (setupUah ?? 0),
-          limits: PLANS[k].limits, features: PLANS[k].features, ...(offer && { oneTimePro: offer }),
-        };
-      }),
+      plans: SELLABLE_PLANS.map((k) => ({
+        key: k, priceUah: PLANS[k].priceUah, totalUah: PLANS[k].priceUah + (setupUah ?? 0),
+        limits: PLANS[k].limits, features: PLANS[k].features,
+      })),
       setupPaid: !!c.setupPaidAt,
       setupUah,
       pack: { ...AI_PACK, bought: packs, cap: c.aiPackCapPerMonth, periodFrom: since, periodTo: c.paidUntil },
       ai: { included: c.aiMonthlyLimit, used, purchased: c.aiPurchased, remaining: Math.max(0, c.aiMonthlyLimit - used) + c.aiPurchased },
       limits: effectiveLimits(c.plan, c.limitOverrides),
-      payments: payments.map(({ oneTimeProBuyerId, ...payment }) => ({ ...payment, oneTimePro: !!oneTimeProBuyerId })),
+      payments,
     };
   }
 
@@ -99,7 +91,7 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
   private async purchase(
     scope: Scope, kind: string, now: Date,
     quote: (tx: Prisma.TransactionClient) => Promise<{ order: Quote; description: string }>,
-    subscription?: { plan: string; buyer: AuthUser },
+    plan?: string,
   ) {
     if (!this.mono.configured) throw new ServiceUnavailableException('billing_not_configured');
     const active = { ...scope, kind, ...monoPending };
@@ -110,11 +102,11 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       await this.lockScope(tx, scope);
       const existing = await tx.billingPayment.findFirst({ where: active, orderBy: { createdAt: 'asc' } });
       if (existing) {
-        if ((subscription && existing.plan !== subscription.plan) ||
-            !(await this.canOpenOneTimePro(tx, existing, subscription?.buyer))) throw new ConflictException('billing_payment_pending');
+        // An outstanding historical Pro invoice still holds the subscription slot until mono resolves it.
+        if (existing.oneTimeProBuyerId || (plan && existing.plan !== plan)) throw new ConflictException('billing_payment_pending');
         return { order: existing, description: null };
       }
-      if (before && (!subscription || before.plan === subscription.plan)) {
+      if (before && (!plan || before.plan === plan)) {
         const settled = await tx.billingPayment.findFirst({ where: { id: before.id, status: { in: ['PAID', 'REVERSED'] } } });
         if (settled) return { order: settled, description: null };
       }
@@ -149,53 +141,21 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   private checkoutUrl(order: BillingPayment) {
-    return (order.status === 'PENDING' || order.status === 'FAILED') && order.monoExpiresAt && order.monoExpiresAt > new Date()
+    return !order.oneTimeProBuyerId && (order.status === 'PENDING' || order.status === 'FAILED') && order.monoExpiresAt && order.monoExpiresAt > new Date()
       ? order.monoPageUrl : null;
   }
 
-  private oneTimeProEnabled(clinicId: string) {
-    return process.env.BILLING_ONE_TIME_PRO_ENABLED === 'true' && process.env.BILLING_ONE_TIME_PRO_CLINIC_ID?.trim() === clinicId;
-  }
-
-  private async authorizedOneTimePro(tx: Pick<Prisma.TransactionClient, 'user' | 'membership'>, user: AuthUser) {
-    if (user.role !== 'OWNER' || !(await canAccessPlatform(tx, user.userId))) return false;
-    const membership = await tx.membership.findUnique({
-      where: { userId_clinicId: { userId: user.userId, clinicId: user.clinicId } },
-      select: { role: true, clinic: { select: { networkId: true, isDemo: true } } },
-    });
-    return membership?.role === 'OWNER' && !membership.clinic.networkId && !membership.clinic.isDemo;
-  }
-
-  private async canOpenOneTimePro(tx: Pick<Prisma.TransactionClient, 'user' | 'membership' | 'billingPayment'>, order: BillingPayment, user?: AuthUser) {
-    if (!order.oneTimeProBuyerId) return true;
-    return user?.userId === order.oneTimeProBuyerId && await this.authorizedOneTimePro(tx, user) &&
-      !(await this.oneTimeProConsumed(tx, order.clinicId, order.id));
-  }
-
-  private oneTimeProConsumed(tx: Pick<Prisma.TransactionClient, 'billingPayment'>, clinicId: string, exceptId?: string) {
+  private settledHistoricalProPayment(tx: Prisma.TransactionClient, clinicId: string, exceptId: string) {
     return tx.billingPayment.findFirst({
       where: {
-        clinicId, oneTimeProBuyerId: { not: null }, ...(exceptId && { id: { not: exceptId } }),
+        clinicId, oneTimeProBuyerId: { not: null }, id: { not: exceptId },
         OR: [{ paidAt: { not: null } }, { status: 'REVERSED' }],
       },
       select: { id: true },
     });
   }
 
-  private async oneTimeProOffer(user: AuthUser, includesSetup: boolean) {
-    if (!(await this.authorizedOneTimePro(this.prisma, user))) return null;
-    if (await this.oneTimeProConsumed(this.prisma, user.clinicId)) return null;
-    const open = await this.prisma.billingPayment.findFirst({
-      where: { clinicId: user.clinicId, networkId: null, kind: 'SUBSCRIPTION', ...monoPending },
-      select: { oneTimeProBuyerId: true, oneTimeProIncludesSetup: true },
-    });
-    if (open) return open.oneTimeProBuyerId === user.userId ? { includesSetup: open.oneTimeProIncludesSetup } : null;
-    if (!this.oneTimeProEnabled(user.clinicId)) return null;
-    return { includesSetup };
-  }
-
-  checkout(user: AuthUser, plan: string, now = new Date()) {
-    const { clinicId } = user;
+  checkout(clinicId: string, plan: string, now = new Date()) {
     if (!SELLABLE_PLANS.includes(plan)) throw new BadRequestException('bad_plan');
     return this.purchase({ clinicId, networkId: null }, 'SUBSCRIPTION', now, async (tx) => {
       const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { limitOverrides: true, networkId: true, setupPaidAt: true, paidUntil: true } });
@@ -205,19 +165,16 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
         tx.invitation.count({ where: { clinicId, acceptedAt: null, expiresAt: { gt: now } } }),
       ]);
       if (users + pending > effectiveLimits(plan, c.limitOverrides).users) throw new BadRequestException('plan_users_over');
-      const oneTimePro = plan === 'PRO' && this.oneTimeProEnabled(clinicId) && await this.authorizedOneTimePro(tx, user) &&
-        !(await this.oneTimeProConsumed(tx, clinicId));
-      const setupMinor = oneTimePro || c.setupPaidAt ? 0 : SETUP_FEE_UAH * 100;
+      const setupMinor = c.setupPaidAt ? 0 : SETUP_FEE_UAH * 100;
       const periodFrom = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
       return {
         order: {
-          clinicId, kind: 'SUBSCRIPTION', plan, amountMinor: oneTimePro ? ONE_TIME_PRO_MINOR : PLANS[plan].priceUah * 100 + setupMinor,
+          clinicId, kind: 'SUBSCRIPTION', plan, amountMinor: PLANS[plan].priceUah * 100 + setupMinor,
           setupMinor, periodFrom, periodTo: addMonth(periodFrom),
-          ...(oneTimePro && { oneTimeProBuyerId: user.userId, oneTimeProIncludesSetup: !c.setupPaidAt }),
         },
-        description: oneTimePro ? `LANKA — Pro, разова перевірка оплати${c.setupPaidAt ? '' : ' (з підключенням)'}` : `LANKA ${PLANS[plan].label}`,
+        description: `LANKA ${PLANS[plan].label}`,
       };
-    }, { plan, buyer: user });
+    }, plan);
   }
 
   buyPack(clinicId: string, now = new Date()) {
@@ -234,44 +191,9 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     });
   }
 
-  private diagnosticEnabled() {
-    return process.env.MONO_DIAGNOSTIC_ENABLED === 'true';
-  }
-
-  async diagnosticOverview(clinicId: string) {
-    const latest = await this.prisma.billingPayment.findFirst({
-      where: { clinicId, kind: MONO_DIAGNOSTIC }, orderBy: { createdAt: 'desc' }, select: { id: true },
-    });
-    return { enabled: this.diagnosticEnabled(), configured: this.mono.configured, paymentId: latest?.id ?? null };
-  }
-
-  diagnosticCheckout(clinicId: string) {
-    if (!this.diagnosticEnabled()) throw new NotFoundException();
-    return this.purchase({ clinicId, networkId: null }, MONO_DIAGNOSTIC, new Date(), async () => ({
-      order: { clinicId, kind: MONO_DIAGNOSTIC, amountMinor: 100 },
-      description: 'LANKA — перевірка оплати',
-    }));
-  }
-
-  async diagnosticPayment(id: string, clinicId: string) {
-    const order = await this.reconciledPayment(id, { clinicId, kind: MONO_DIAGNOSTIC });
-    const webhook = await this.prisma.auditLog.findFirst({
-      where: { clinicId, action: DIAGNOSTIC_WEBHOOK, details: { path: ['orderId'], equals: order.orderId } }, select: { createdAt: true },
-    });
-    return {
-      ...this.paymentStatus(order, this.diagnosticEnabled()),
-      diagnostic: {
-        invoiceId: order.monoInvoiceId,
-        reference: order.orderId,
-        webhookReceivedAt: webhook?.createdAt ?? null,
-        checkoutLinkUnavailable: order.status === 'PENDING' && !order.monoPageUrl,
-      },
-    };
-  }
-
-  async payment(id: string, scope: Scope, owner: boolean, user?: AuthUser) {
+  async payment(id: string, scope: Scope, owner: boolean) {
     const order = await this.reconciledPayment(id, { ...scope, kind: { not: MONO_DIAGNOSTIC } });
-    return this.paymentStatus(order, owner && await this.canOpenOneTimePro(this.prisma, order, user));
+    return this.paymentStatus(order, owner);
   }
 
   private async reconciledPayment(id: string, scope: Prisma.BillingPaymentWhereInput) {
@@ -285,7 +207,6 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     const { id, status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, kind } = order;
     return {
       id, status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, kind,
-      ...(order.oneTimeProBuyerId && { oneTimePro: { includesSetup: order.oneTimeProIncludesSetup } }),
       review: status === 'PENDING' && !order.monoInvoiceId && !!order.monoExpiresAt && order.monoExpiresAt <= new Date(),
       url: canResume ? this.checkoutUrl(order) : null,
     };
@@ -457,7 +378,8 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       return exceptions;
     }
     if (kind !== 'SUBSCRIPTION') throw new Error('invalid_billing_purchase');
-    if (order.oneTimeProBuyerId && await this.oneTimeProConsumed(tx, clinicId, order.id)) return ['one_time_pro_duplicate'];
+    // A different historical invoice may report late. Record the funds without granting a second period.
+    if (order.oneTimeProBuyerId && await this.settledHistoricalProPayment(tx, clinicId, order.id)) return ['one_time_pro_duplicate'];
     const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { paidUntil: true, networkId: true, limitOverrides: true, setupPaidAt: true } });
     if (c.networkId) return ['scope_changed'];
     const plan = order.plan ?? 'START';

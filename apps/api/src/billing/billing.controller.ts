@@ -5,7 +5,6 @@ import type { Request } from 'express';
 import { AuthGuard, AuthUser, CurrentUser, Roles } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { SELLABLE_PLANS } from '../service/plans';
-import { PlatformAdminGuard } from '../service/platform-access';
 import { BillingService } from './billing.service';
 
 class CheckoutDto {
@@ -24,20 +23,20 @@ export class BillingController {
   @Get()
   @Roles(Role.OWNER, Role.MANAGER)
   overview(@CurrentUser() u: AuthUser) {
-    return this.billing.overview(u);
+    return this.billing.overview(u.clinicId);
   }
 
   @Get('payments/:id')
   @Roles(Role.OWNER, Role.MANAGER)
   payment(@CurrentUser() u: AuthUser, @Param('id') id: string) {
-    return this.billing.payment(id, { clinicId: u.clinicId, networkId: null }, u.role === Role.OWNER, u);
+    return this.billing.payment(id, { clinicId: u.clinicId, networkId: null }, u.role === Role.OWNER);
   }
 
   @Post('checkout')
   @Roles(Role.OWNER)
   @HttpCode(200)
   async checkout(@CurrentUser() u: AuthUser, @Body() dto: CheckoutDto) {
-    const r = await this.billing.checkout(u, dto.plan);
+    const r = await this.billing.checkout(u.clinicId, dto.plan);
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'billing.checkout', details: { plan: dto.plan } } });
     return r;
   }
@@ -49,28 +48,6 @@ export class BillingController {
     const r = await this.billing.buyPack(u.clinicId);
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'billing.checkout', details: { kind: 'AI_PACK' } } });
     return r;
-  }
-}
-
-@Controller('platform/mono-diagnostic')
-@UseGuards(AuthGuard, PlatformAdminGuard)
-export class PlatformMonoDiagnosticController {
-  constructor(private billing: BillingService) {}
-
-  @Get()
-  overview(@CurrentUser() u: AuthUser) {
-    return this.billing.diagnosticOverview(u.clinicId);
-  }
-
-  @Post('checkout')
-  @HttpCode(200)
-  checkout(@CurrentUser() u: AuthUser) {
-    return this.billing.diagnosticCheckout(u.clinicId);
-  }
-
-  @Get(':id')
-  payment(@CurrentUser() u: AuthUser, @Param('id') id: string) {
-    return this.billing.diagnosticPayment(id, u.clinicId);
   }
 }
 

@@ -1,6 +1,5 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { createPublicKey, KeyObject, verify } from 'node:crypto';
-import { MONO_DIAGNOSTIC } from './mono-diagnostic';
 
 const BASE = 'https://api.monobank.ua';
 const CHECKOUT_ORIGINS = new Set(['https://pay.mbnk.biz', 'https://pay.monobank.ua']);
@@ -54,10 +53,9 @@ export class MonoClient {
 
   async create(order: { id: string; orderId: string; amountMinor: number; currency: number; networkId: string | null; kind: string; plan: string | null; setupMinor: number }, description: string) {
     const origin = (process.env.WEB_ORIGIN ?? 'http://localhost:3000').replace(/\/$/, '');
-    const diagnostic = order.kind === MONO_DIAGNOSTIC;
-    const redirect = new URL(diagnostic ? '/platform' : order.networkId ? '/network' : '/settings?tab=billing', origin);
+    const redirect = new URL(order.networkId ? '/network' : '/settings?tab=billing', origin);
     if (order.networkId) redirect.searchParams.set('network', order.networkId);
-    redirect.searchParams.set(diagnostic ? 'diagnosticPayment' : 'payment', order.id);
+    redirect.searchParams.set('payment', order.id);
     const setup = order.setupMinor < order.amountMinor ? order.setupMinor : 0;
     const service = order.amountMinor - setup;
     const basketOrder = [{ name: description, qty: 1, sum: service, total: service, unit: 'посл.', code: order.plan ?? order.kind }];

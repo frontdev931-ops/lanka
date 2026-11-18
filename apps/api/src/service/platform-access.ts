@@ -21,11 +21,6 @@ function platformRequires2fa() {
   return process.env.PLATFORM_REQUIRE_2FA === 'true' || (process.env.NODE_ENV === 'production' && process.env.PLATFORM_REQUIRE_2FA !== 'false');
 }
 
-export async function canAccessPlatform(prisma: Pick<PrismaService, 'user'>, userId: string): Promise<boolean> {
-  const owner = await platformOwner(prisma, userId);
-  return !!owner && (!platformRequires2fa() || !!owner.totpEnabledAt);
-}
-
 @Injectable()
 export class PlatformAdminGuard implements CanActivate {
   constructor(private prisma: PrismaService) {}

@@ -7,7 +7,6 @@ import { fmtDate, fmtDateTime, fmtNumber } from '../../../lib/ui';
 import { Alert, Badge, Card, Empty, Loading, PageHeader } from '../../../components/ui';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { PlatformWebsiteConnections } from '../../../components/PlatformWebsiteConnections';
-import { PlatformMonoDiagnostic } from '../../../components/PlatformMonoDiagnostic';
 
 interface Row {
   id: string;
@@ -81,7 +80,6 @@ export default function PlatformPage() {
       <PageHeader title={t('pf.title')} subtitle={t('pf.subtitle')} />
       {error && <Alert tone="error">{error}</Alert>}
       {info && <Alert tone="success">{info}</Alert>}
-      <PlatformMonoDiagnostic />
 
       <div className="stats" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
         <section className="card stat"><div className="stat-top">{t('pf.clinics')}</div><div className="stat-value">{rows.length}</div></section>

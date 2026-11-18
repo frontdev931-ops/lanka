@@ -11,7 +11,6 @@ import type { MonoStatus } from '../src/billing/mono';
 import { monoFixture } from './mono-fixture';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { pinPlatformFixture } from './platform-fixture';
 
 jest.setTimeout(60_000);
 
@@ -70,147 +69,6 @@ const member = async (ownerToken: string, role: string) => {
   const inv = await http().post('/team/invitations').set(auth(ownerToken)).send({ email: `r${rnd()}@example.com`, role }).expect(201);
   return (await http().post(`/invites/${(inv.body.link as string).split('/invite/')[1]}/accept`).send({ name: 'Роль', password: PASSWORD }).expect(201)).body.accessToken as string;
 };
-
-describe('mono diagnostic', () => {
-  const path = '/platform/mono-diagnostic';
-  const flag = process.env.MONO_DIAGNOSTIC_ENABLED;
-  let owner: Awaited<ReturnType<typeof clinic>>;
-  let restoreOwner: (() => Promise<void>) | undefined;
-
-  beforeEach(async () => {
-    process.env.MONO_DIAGNOSTIC_ENABLED = 'true';
-    owner = await clinic();
-    restoreOwner = await pinPlatformFixture(prisma, owner.email);
-  });
-
-  afterEach(async () => {
-    await restoreOwner?.();
-    restoreOwner = undefined;
-    if (flag === undefined) delete process.env.MONO_DIAGNOSTIC_ENABLED;
-    else process.env.MONO_DIAGNOSTIC_ENABLED = flag;
-  });
-
-  it('allows only the pinned platform owner and defaults to disabled for checkout', async () => {
-    const other = await clinic(); // Even an allowlisted clinic owner is not the pinned owner.
-    process.env.PLATFORM_ADMIN_EMAILS += ',' + other.email;
-    for (const [method, route] of [['get', path], ['post', path + '/checkout'], ['get', path + '/unavailable-id']] as const) {
-      await http()[method](route).expect(401);
-      await http()[method](route).set(auth(other.token)).expect(403);
-    }
-    delete process.env.MONO_DIAGNOSTIC_ENABLED;
-    await http().get(path).set(auth(owner.token)).expect(200, { enabled: false, configured: true, paymentId: null });
-    await http().post(path + '/checkout').set(auth(owner.token)).expect(404);
-    expect(await prisma.billingPayment.count({ where: { clinicId: owner.clinicId } })).toBe(0);
-  });
-
-  it('opens and reuses the exact bank checkout URL — mono diagnostic navigation', async () => {
-    const pageUrl = 'https://pay.monobank.ua/checkout/opaque-link?source=acquiring%2Ftest';
-    const invoiceCount = mono.invoices.size;
-    mono.pageUrlNext(pageUrl);
-    const checkout = () => http().post(path + '/checkout').set(auth(owner.token)).expect(200);
-    const { body: first } = await checkout();
-    expect(first.url).toBe(pageUrl);
-    const invoice = await prisma.billingPayment.findUniqueOrThrow({ where: { id: first.id } });
-    expect(invoice.monoPageUrl).toBe(pageUrl);
-    expect(invoice.monoInvoiceId).not.toContain('opaque-link');
-    await checkout().expect(200, first);
-    await http().get(path + '/' + first.id).set(auth(owner.token)).expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ status: 'PENDING', url: pageUrl }));
-    expect(mono.invoices.size).toBe(invoiceCount + 1);
-
-    await prisma.billingPayment.update({ where: { id: first.id }, data: { monoExpiresAt: new Date(Date.now() - 1000) } });
-    await http().get(path + '/' + first.id).set(auth(owner.token)).expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ url: null }));
-  });
-
-  it.each([
-    'https://pay.monobank.ua.example.test/checkout',
-    'http://pay.monobank.ua/checkout',
-    'https://user@pay.monobank.ua/checkout',
-  ])('keeps the invoice for reconciliation without offering an unsafe URL %s — mono diagnostic navigation', async (pageUrl) => {
-    mono.pageUrlNext(pageUrl);
-    const invoiceCount = mono.invoices.size;
-    const checkout = () => http().post(path + '/checkout').set(auth(owner.token)).expect(200);
-    const { body: first } = await checkout();
-    expect(first.url).toBeNull();
-    const order = await prisma.billingPayment.findUniqueOrThrow({ where: { id: first.id } });
-    expect(order).toMatchObject({ monoInvoiceId: expect.any(String), monoPageUrl: null });
-    await checkout().expect(200, first);
-    await http().get(path + '/' + first.id).set(auth(owner.token)).expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ status: 'PENDING', url: null, diagnostic: { checkoutLinkUnavailable: true } }));
-    expect(mono.invoices.size).toBe(invoiceCount + 1);
-  });
-
-  it('prices on the server, reuses concurrent checkout requests, and records a signed payment exactly once without entitlements', async () => {
-    const before = await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } });
-    const messages = mail.outbox.length;
-    const originalInvoiceCount = mono.invoices.size;
-    const checkout = () => http().post(path + '/checkout').set(auth(owner.token)).send({ amountMinor: 499000, ccy: 840, plan: 'PRO', clinicId: 'another-clinic' }).expect(200);
-    const [first, repeated] = await Promise.all([checkout(), checkout()]);
-    expect(first.body.id).toBe(repeated.body.id);
-    expect(mono.invoices.size).toBe(originalInvoiceCount + 1);
-    const id = first.body.id;
-    const order = await prisma.billingPayment.findUniqueOrThrow({ where: { id } });
-    expect(order).toMatchObject({
-      kind: MONO_DIAGNOSTIC, clinicId: owner.clinicId, networkId: null, plan: null, amountMinor: 100, currency: 980,
-      periodFrom: null, periodTo: null, setupMinor: 0, packReplies: 0,
-    });
-    const invoice = mono.invoices.get(order.orderId);
-    expect(invoice).toMatchObject({
-      amount: 100, ccy: 980, paymentType: 'debit',
-      merchantPaymInfo: { destination: 'LANKA — перевірка оплати', basketOrder: [{ sum: 100, total: 100 }] },
-    });
-    expect(new URL(invoice!.redirectUrl).pathname).toBe('/platform');
-    expect(new URL(invoice!.redirectUrl).searchParams.get('diagnosticPayment')).toBe(id);
-    expect(invoice!.webHookUrl).toContain('/backend/billing/mono/webhook');
-    await http().get('/billing/payments/' + id).set(auth(owner.token)).expect(404);
-    await http().get('/billing').set(auth(owner.token)).expect(200).expect(({ body }) => expect(body).toMatchObject({ payments: [], pendingPaymentId: null }));
-    await http().get(path + '/' + id).set(auth(owner.token)).expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ status: 'PENDING', diagnostic: { invoiceId: order.monoInvoiceId, webhookReceivedAt: null } }));
-
-    const event = mono.event(order.orderId, 100);
-    await webhook(event, false).expect(400);
-    await webhook({ ...event, ccy: 840 }).expect(200);
-    await webhook({ ...event, amount: 101 }).expect(200);
-    expect((await prisma.billingPayment.findUniqueOrThrow({ where: { id } })).status).toBe('PENDING');
-    expect(await prisma.auditLog.count({ where: { clinicId: owner.clinicId, action: DIAGNOSTIC_WEBHOOK } })).toBe(0);
-
-    await Promise.all([webhook(event).expect(200), webhook(event).expect(200)]);
-    expect(await prisma.billingPayment.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'PAID', paidAt: new Date(event.modifiedDate) });
-    expect(await prisma.auditLog.count({ where: { clinicId: owner.clinicId, action: DIAGNOSTIC_AUDIT_PREFIX + 'paid' } })).toBe(1);
-    expect(await prisma.auditLog.count({ where: { clinicId: owner.clinicId, action: DIAGNOSTIC_WEBHOOK } })).toBe(1);
-    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } })).toEqual(before);
-    expect(mail.outbox).toHaveLength(messages);
-    await http().get('/clinic/audit').set(auth(owner.token)).expect(200).expect(({ body }) =>
-      expect(body.rows.every((row: { action: string }) => !row.action.startsWith(DIAGNOSTIC_AUDIT_PREFIX))).toBe(true));
-
-    process.env.MONO_DIAGNOSTIC_ENABLED = 'false';
-    await http().post(path + '/checkout').set(auth(owner.token)).expect(404);
-    await http().get(path).set(auth(owner.token)).expect(200).expect(({ body }) => expect(body.paymentId).toBe(id));
-    await http().get(path + '/' + id).set(auth(owner.token)).expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ status: 'PAID', url: null, diagnostic: { invoiceId: order.monoInvoiceId, webhookReceivedAt: expect.any(String) } }));
-  });
-
-  it('distinguishes status reconciliation from late signed webhook delivery after a create timeout', async () => {
-    mono.failNext('unknown');
-    const { body: first } = await http().post(path + '/checkout').set(auth(owner.token)).expect(200);
-    expect(first.url).toBeNull();
-    await http().post(path + '/checkout').set(auth(owner.token)).expect(200, first);
-    const order = await prisma.billingPayment.update({
-      where: { id: first.id }, data: { createdAt: new Date(Date.now() - 120_000) },
-    });
-    const lateWebhook = mono.event(order.orderId, 100);
-    mono.report(mono.event(order.orderId, 100), true);
-    const status = path + '/' + first.id;
-    await http().get(status).set(auth(owner.token)).expect(200).expect(({ body }) =>
-      expect(body).toMatchObject({ status: 'PAID', diagnostic: { webhookReceivedAt: null } }));
-
-    process.env.MONO_DIAGNOSTIC_ENABLED = 'false';
-    await webhook(lateWebhook).expect(200);
-    await http().get(status).set(auth(owner.token)).expect(200).expect(({ body }) =>
-      expect(body).toMatchObject({ status: 'PAID', diagnostic: { webhookReceivedAt: expect.any(String) } }));
-  });
-});
 
 describe('підписка та оплата', () => {
   it('нова клініка чекає оплати; перша оплата = підключення (4 990 грн) + місяць тарифу; після неї клініка активна', async () => {
@@ -515,6 +373,46 @@ describe('покупка й підключення', () => {
     await http().post('/billing/checkout').set(auth(c.token)).send({ plan: 'PRO' }).expect(200);
   });
 
+  it('opens and reuses the exact bank checkout URL', async () => {
+    const owner = await clinic();
+    const pageUrl = 'https://pay.monobank.ua/checkout/opaque-link?source=acquiring%2Ftest';
+    const invoiceCount = mono.invoices.size;
+    mono.pageUrlNext(pageUrl);
+    const checkout = () => http().post('/billing/checkout').set(auth(owner.token)).send({ plan: 'PRO' }).expect(200);
+    const { body: first } = await checkout();
+    expect(first.url).toBe(pageUrl);
+    const invoice = await prisma.billingPayment.findUniqueOrThrow({ where: { id: first.id } });
+    expect(invoice.monoPageUrl).toBe(pageUrl);
+    expect(invoice.monoInvoiceId).not.toContain('opaque-link');
+    await checkout().expect(200, first);
+    await http().get('/billing/payments/' + first.id).set(auth(owner.token)).expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ status: 'PENDING', url: pageUrl }));
+    expect(mono.invoices.size).toBe(invoiceCount + 1);
+
+    await prisma.billingPayment.update({ where: { id: first.id }, data: { monoExpiresAt: new Date(Date.now() - 1000) } });
+    await http().get('/billing/payments/' + first.id).set(auth(owner.token)).expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ url: null }));
+  });
+
+  it.each([
+    'https://pay.monobank.ua.example.test/checkout',
+    'http://pay.monobank.ua/checkout',
+    'https://user@pay.monobank.ua/checkout',
+  ])('keeps the invoice for reconciliation without offering an unsafe URL %s', async (pageUrl) => {
+    const owner = await clinic();
+    mono.pageUrlNext(pageUrl);
+    const invoiceCount = mono.invoices.size;
+    const checkout = () => http().post('/billing/checkout').set(auth(owner.token)).send({ plan: 'PRO' }).expect(200);
+    const { body: first } = await checkout();
+    expect(first.url).toBeNull();
+    const order = await prisma.billingPayment.findUniqueOrThrow({ where: { id: first.id } });
+    expect(order).toMatchObject({ monoInvoiceId: expect.any(String), monoPageUrl: null });
+    await checkout().expect(200, first);
+    await http().get('/billing/payments/' + first.id).set(auth(owner.token)).expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ status: 'PENDING', url: null }));
+    expect(mono.invoices.size).toBe(invoiceCount + 1);
+  });
+
   it('concurrent plan clicks reuse one invoice and cannot open a second setup fee', async () => {
     const c = await clinic();
     const first = await Promise.all([checkoutOrder(c.token), checkoutOrder(c.token)]);
@@ -605,166 +503,109 @@ describe('покупка й підключення', () => {
     expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).paidUntil).toEqual(until);
   });
 });
-describe('one-time Pro checkout', () => {
-  const keys = ['BILLING_ONE_TIME_PRO_ENABLED', 'BILLING_ONE_TIME_PRO_CLINIC_ID'] as const;
-  const prior = keys.map((key) => process.env[key]);
-  let buyer: Awaited<ReturnType<typeof clinic>>;
-  let restoreOwner: () => Promise<void>;
-
-  beforeEach(async () => {
-    buyer = await clinic();
-    restoreOwner = await pinPlatformFixture(prisma, buyer.email);
-    process.env.BILLING_ONE_TIME_PRO_ENABLED = 'true';
-    process.env.BILLING_ONE_TIME_PRO_CLINIC_ID = buyer.clinicId;
-  });
-
-  afterEach(async () => {
-    await restoreOwner?.();
-    keys.forEach((key, i) => {
-      if (prior[i] === undefined) delete process.env[key];
-      else process.env[key] = prior[i];
+describe('historical mono payments', () => {
+  async function proOwner() {
+    const owner = await clinic();
+    const { userId } = await prisma.membership.findFirstOrThrow({ where: { clinicId: owner.clinicId, role: 'OWNER' }, select: { userId: true } });
+    const started = new Date(Date.now() - 86_400_000);
+    const paidUntil = new Date(started);
+    paidUntil.setUTCMonth(paidUntil.getUTCMonth() + 1);
+    const current = await prisma.clinic.update({
+      where: { id: owner.clinicId },
+      data: { plan: 'PRO', billingStatus: 'ACTIVE', periodStartsAt: started, paidUntil, setupPaidAt: started, aiMonthlyLimit: 3000, aiPurchased: 17 },
     });
-  });
+    return { ...owner, userId, current, started, paidUntil };
+  }
 
-  const offer = async (token: string) => {
-    const { body } = await http().get('/billing').set(auth(token)).expect(200);
-    return body.plans.find((p: { key: string }) => p.key === 'PRO');
-  };
-  const checkout = (token: string, plan = 'PRO') => http().post('/billing/checkout').set(auth(token)).send({
-    plan, amountMinor: 100, oneTimePro: true, clinicId: 'ignored',
-  });
-  const buyerId = async () => (await prisma.membership.findFirstOrThrow({
-    where: { clinicId: buyer.clinicId, role: 'OWNER', user: { email: 'hello@lankaclinic.app' } }, select: { userId: true },
-  })).userId;
-  const switchClinic = async (token: string, clinicId: string) => {
-    const { body } = await http().post('/auth/switch').set(auth(token)).send({ clinicId }).expect(200);
-    return body.accessToken as string;
-  };
-
-  it('requires the enabled flag, exact clinic ID, verified platform identity and clinic OWNER role', async () => {
-    const id = await buyerId();
-    expect(await offer(buyer.token)).toMatchObject({ totalUah: 1, oneTimePro: { includesSetup: true } });
-    delete process.env.BILLING_ONE_TIME_PRO_ENABLED;
-    expect(await offer(buyer.token)).toMatchObject({ totalUah: 8980 });
-    process.env.BILLING_ONE_TIME_PRO_ENABLED = 'true';
-
-    await prisma.user.update({ where: { id }, data: { emailVerifiedAt: null } });
-    expect(await offer(buyer.token)).toMatchObject({ totalUah: 8980 });
-    mono.failNext('rejected');
-    expect((await checkout(buyer.token).expect(200)).body.amountMinor).toBe(898000);
-    await prisma.user.update({ where: { id }, data: { emailVerifiedAt: new Date() } });
-
-    const membership = { userId_clinicId: { userId: id, clinicId: buyer.clinicId } };
-    await prisma.membership.update({ where: membership, data: { role: 'MANAGER' } });
-    expect(await offer(buyer.token)).toMatchObject({ totalUah: 8980 });
-    await checkout(buyer.token).expect(403);
-    await prisma.membership.update({ where: membership, data: { role: 'OWNER' } });
-
-    const target = await prisma.clinic.findUniqueOrThrow({ where: { id: buyer.clinicId } });
-    const lookalike = await prisma.clinic.create({ data: { name: target.name, memberships: { create: { userId: id, role: 'OWNER' } } } });
-    const otherClinicToken = await switchClinic(buyer.token, lookalike.id);
-    expect((await checkout(otherClinicToken).expect(200)).body.amountMinor).toBe(898000);
-
-    // An otherwise eligible buyer pays the usual Start price.
-    mono.failNext('rejected');
-    expect((await checkout(buyer.token, 'START').expect(200)).body.amountMinor).toBe(698000);
-
-    const other = await clinic();
-    const otherId = (await prisma.user.findUniqueOrThrow({ where: { email: other.email } })).id;
-    process.env.PLATFORM_ADMIN_EMAILS += ',' + other.email;
-    await prisma.membership.create({ data: { userId: otherId, clinicId: buyer.clinicId, role: 'OWNER' } });
-    const otherOwnerToken = await switchClinic(other.token, buyer.clinicId);
-    expect(await offer(otherOwnerToken)).toMatchObject({ totalUah: 8980 });
-    expect((await checkout(otherOwnerToken).expect(200)).body.amountMinor).toBe(898000);
-    expect(await offer(buyer.token)).toMatchObject({ totalUah: 8980 }); // No misleading quote while a regular invoice is open.
-  });
-
-  it.each([false, true])('fulfills the 100-kopeck Pro order once, with setup already paid = %s', async (setupPaid) => {
-    const buyerUserId = await buyerId();
-    const previousSetup = setupPaid ? new Date(Date.now() - 10 * 86_400_000) : null;
-    const previousEnd = setupPaid ? new Date(Date.now() + 10 * 86_400_000) : null;
-    await prisma.clinic.update({ where: { id: buyer.clinicId }, data: {
-      setupPaidAt: previousSetup, paidUntil: previousEnd, billingStatus: setupPaid ? 'ACTIVE' : 'AWAITING_PAYMENT', aiPurchased: 23,
-    } });
-    expect(await offer(buyer.token)).toMatchObject({ priceUah: 3990, totalUah: 1, oneTimePro: { includesSetup: !setupPaid } });
-
-    const count = mono.invoices.size;
-    const [first, duplicate] = await Promise.all([checkout(buyer.token).expect(200), checkout(buyer.token).expect(200)]);
-    expect(first.body).toMatchObject({ id: duplicate.body.id, amountMinor: 100 });
-    expect(mono.invoices.size).toBe(count + 1);
-    const order = await prisma.billingPayment.findUniqueOrThrow({ where: { id: first.body.id } });
-    expect(order).toMatchObject({
-      kind: 'SUBSCRIPTION', plan: 'PRO', amountMinor: 100, currency: 980, setupMinor: 0, networkId: null,
-      oneTimeProBuyerId: buyerUserId, oneTimeProIncludesSetup: !setupPaid, periodFrom: expect.any(Date), periodTo: expect.any(Date),
-    });
-    expect(mono.invoices.get(order.orderId)).toMatchObject({
-      amount: 100, ccy: 980, merchantPaymInfo: { destination: expect.stringContaining('Pro'), basketOrder: [{ sum: 100, total: 100 }] },
+  it('keeps paid Pro access and shows the actual 1 UAH payment at the ordinary renewal price', async () => {
+    const owner = await proOwner();
+    const orderId = rnd();
+    const row = await prisma.billingPayment.create({
+      data: {
+        clinicId: owner.clinicId, orderId, kind: 'SUBSCRIPTION', plan: 'PRO', amountMinor: 100,
+        oneTimeProBuyerId: owner.userId, oneTimeProIncludesSetup: true,
+        status: 'PAID', paidAt: owner.started, periodFrom: owner.started, periodTo: owner.paidUntil,
+        monoInvoiceId: mono.event(orderId, 100).invoiceId, monoExpiresAt: owner.started, monoModifiedAt: owner.started,
+      },
     });
 
-    const other = await clinic();
-    const otherId = (await prisma.user.findUniqueOrThrow({ where: { email: other.email } })).id;
-    await prisma.membership.create({ data: { userId: otherId, clinicId: buyer.clinicId, role: 'OWNER' } });
-    const otherClinicOwner = await switchClinic(other.token, buyer.clinicId);
-    await checkout(otherClinicOwner).expect(409);
-    await http().get('/billing/payments/' + order.id).set(auth(otherClinicOwner)).expect(200)
-      .expect(({ body }) => expect(body.url).toBeNull());
+    process.env.BILLING_ENFORCED = 'true';
+    try {
+      await http().get('/patients').set(auth(owner.token)).expect(200);
+      await http().get('/auth/me').set(auth(owner.token)).expect(200).expect(({ body }) =>
+        expect(body.billing).toMatchObject({ status: 'ACTIVE', blocked: false, paidUntil: owner.paidUntil.toISOString() }));
+    } finally {
+      delete process.env.BILLING_ENFORCED;
+    }
 
-    delete process.env.BILLING_ONE_TIME_PRO_ENABLED;
-    expect((await checkout(buyer.token).expect(200)).body).toMatchObject({ id: order.id, amountMinor: 100, url: expect.any(String) });
-    const event = mono.event(order.orderId, 100);
-    await webhook({ ...event, amount: 399000 }).expect(200);
-    await webhook(event, false).expect(400);
-    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: buyer.clinicId } })).toMatchObject({ plan: 'START', paidUntil: previousEnd });
-    await Promise.all([webhook(event).expect(200), webhook(event).expect(200)]);
+    await http().get('/billing').set(auth(owner.token)).expect(200).expect(({ body }) => {
+      expect(body).toMatchObject({ plan: 'PRO', paidUntil: owner.paidUntil.toISOString(), setupPaid: true, setupUah: null, pendingPaymentId: null });
+      expect(body.plans.find((plan: { key: string }) => plan.key === 'PRO')).toMatchObject({ priceUah: 3990, totalUah: 3990 });
+      expect(body.payments).toEqual([expect.objectContaining({ id: row.id, kind: 'SUBSCRIPTION', plan: 'PRO', amountMinor: 100, status: 'PAID' })]);
+      expect(body.payments[0]).not.toHaveProperty('oneTimePro');
+      expect(body.payments[0]).not.toHaveProperty('oneTimeProBuyerId');
+    });
 
-    const paidAt = new Date(event.modifiedDate);
-    const from = previousEnd ?? paidAt;
-    const to = new Date(from);
-    to.setUTCMonth(to.getUTCMonth() + 1);
-    expect(await prisma.billingPayment.findUniqueOrThrow({ where: { id: order.id } })).toMatchObject({
-      status: 'PAID', paidAt, periodFrom: from, periodTo: to, amountMinor: 100,
-    });
-    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: buyer.clinicId } })).toMatchObject({
-      plan: 'PRO', billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: paidAt, setupPaidAt: previousSetup ?? paidAt,
-      aiMonthlyLimit: 3000, aiPurchased: 23, sendingEnabled: false, aiAgentAuto: false, aiAgentMode: false,
-    });
-    expect(await prisma.auditLog.count({ where: { clinicId: buyer.clinicId, action: 'billing.paid' } })).toBe(1);
-    process.env.BILLING_ONE_TIME_PRO_ENABLED = 'true';
-    expect(await offer(buyer.token)).toMatchObject({ totalUah: 3990 });
-    await webhook(mono.event(order.orderId, 100, 'reversed')).expect(200);
-    const renewal = await checkout(buyer.token).expect(200);
-    expect(renewal.body.amountMinor).toBe(399000);
+    const duplicate = mono.event(orderId, 100, 'success', { modifiedDate: owner.started.toISOString() });
+    await Promise.all([webhook(duplicate).expect(200), webhook(duplicate).expect(200)]);
+    expect(await prisma.billingPayment.findUniqueOrThrow({ where: { id: row.id } })).toEqual(row);
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } })).toEqual(owner.current);
+
+    const next = await checkoutOrder(owner.token, 'PRO');
+    expect(next.params).toMatchObject({ ccy: 980, amount: 399000 });
+    expect(await prisma.billingPayment.findUniqueOrThrow({ where: { id: next.id } })).toMatchObject({ oneTimeProBuyerId: null, oneTimeProIncludesSetup: false });
   });
 
-  it('reserves an unknown or failed invoice until mono confirms it is expired and unpaid', async () => {
-    mono.failNext('unknown');
+  it('keeps a historical Pro invoice reserved and records late payment without granting a second period', async () => {
+    const owner = await proOwner();
+    const snapshot = {
+      clinicId: owner.clinicId, kind: 'SUBSCRIPTION', plan: 'PRO', amountMinor: 100,
+      oneTimeProBuyerId: owner.userId, oneTimeProIncludesSetup: true,
+    };
+    await prisma.billingPayment.create({ data: { ...snapshot, orderId: rnd(), status: 'PAID', paidAt: owner.started } });
+    const event = mono.event(rnd(), 100);
+    const late = await prisma.billingPayment.create({
+      data: {
+        ...snapshot, orderId: event.reference, monoInvoiceId: event.invoiceId,
+        monoExpiresAt: new Date(Date.now() + 60_000), monoPageUrl: 'https://pay.mbnk.biz/historical',
+      },
+    });
     const invoices = mono.invoices.size;
-    const first = (await checkout(buyer.token).expect(200)).body;
-    expect(first).toMatchObject({ url: null, amountMinor: 100 });
-    const reserved = await prisma.billingPayment.findUniqueOrThrow({ where: { id: first.id } });
-    expect(reserved).toMatchObject({ status: 'PENDING', monoInvoiceId: null });
-    await prisma.billingPayment.update({ where: { id: first.id }, data: {
-      createdAt: new Date(Date.now() - 120_000), monoExpiresAt: new Date(Date.now() - 1000),
-    } });
-    await checkout(buyer.token).expect(200, first); // Even after the local deadline, the result is unknown.
-    expect(mono.invoices.size).toBe(invoices + 1);
+    await http().get('/billing/payments/' + late.id).set(auth(owner.token)).expect(200).expect(({ body }) =>
+      expect(body).toMatchObject({ status: 'PENDING', url: null }));
+    await http().post('/billing/checkout').set(auth(owner.token)).send({ plan: 'PRO' }).expect(409);
+    expect(mono.invoices.size).toBe(invoices);
 
-    const failure = mono.event(reserved.orderId, 100, 'failure');
-    mono.report(failure);
-    await webhook(failure).expect(200);
-    await prisma.billingPayment.update({ where: { id: first.id }, data: { monoCheckedAt: null } });
-    await checkout(buyer.token).expect(200, first);
-    expect(mono.invoices.size).toBe(invoices + 1);
-    mono.report(mono.event(reserved.orderId, 100, 'expired'));
-    await prisma.billingPayment.update({ where: { id: first.id }, data: { monoCheckedAt: null } });
-
-    const retry = (await checkout(buyer.token).expect(200)).body;
-    expect(retry).toMatchObject({ amountMinor: 100, url: expect.any(String) });
-    expect(retry.id).not.toBe(first.id);
-    expect(mono.invoices.size).toBe(invoices + 2);
-    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: buyer.clinicId } })).toMatchObject({
-      plan: 'START', billingStatus: 'AWAITING_PAYMENT', paidUntil: null, setupPaidAt: null,
+    await Promise.all([webhook(event).expect(200), webhook(event).expect(200)]);
+    expect(await prisma.billingPayment.findUniqueOrThrow({ where: { id: late.id } })).toMatchObject({
+      status: 'PAID', paidAt: new Date(event.modifiedDate), amountMinor: 100, monoInvoiceId: event.invoiceId, periodTo: null,
     });
-    expect(await prisma.auditLog.count({ where: { clinicId: buyer.clinicId, action: 'billing.paid' } })).toBe(0);
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } })).toEqual(owner.current);
+    expect(await prisma.auditLog.count({ where: { clinicId: owner.clinicId, action: 'billing.one_time_pro_duplicate' } })).toBe(1);
+  });
+
+  it('keeps delayed signed diagnostic evidence internal without granting any entitlements', async () => {
+    const owner = await proOwner();
+    const event = mono.event(rnd(), 100);
+    const paidAt = new Date(Date.parse(event.modifiedDate) + 1000);
+    const row = await prisma.billingPayment.create({
+      data: {
+        clinicId: owner.clinicId, orderId: event.reference, kind: MONO_DIAGNOSTIC, amountMinor: 100,
+        status: 'PAID', paidAt, monoModifiedAt: paidAt, monoInvoiceId: event.invoiceId, monoExpiresAt: owner.paidUntil,
+      },
+    });
+    await webhook(event, false).expect(400);
+    await webhook({ ...event, amount: 101 }).expect(200);
+    expect(await prisma.auditLog.count({ where: { clinicId: owner.clinicId, action: DIAGNOSTIC_WEBHOOK } })).toBe(0);
+    await Promise.all([webhook(event).expect(200), webhook(event).expect(200)]);
+    const evidence = await prisma.auditLog.findMany({ where: { clinicId: owner.clinicId, action: DIAGNOSTIC_WEBHOOK } });
+    expect(evidence).toEqual([expect.objectContaining({ details: { orderId: event.reference, invoiceId: event.invoiceId } })]);
+    expect(await prisma.billingPayment.findUniqueOrThrow({ where: { id: row.id } })).toEqual(row);
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } })).toEqual(owner.current);
+    await http().get('/billing').set(auth(owner.token)).expect(200).expect(({ body }) =>
+      expect(body).toMatchObject({ payments: [], pendingPaymentId: null }));
+    await http().get('/billing/payments/' + row.id).set(auth(owner.token)).expect(404);
+    await http().get('/clinic/audit').set(auth(owner.token)).expect(200).expect(({ body }) =>
+      expect(body.rows.every((entry: { action: string }) => !entry.action.startsWith(DIAGNOSTIC_AUDIT_PREFIX))).toBe(true));
   });
 });
