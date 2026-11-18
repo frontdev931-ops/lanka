@@ -1,11 +1,13 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { Prisma } from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { CliniccardsClient, CliniccardsError } from '../src/integrations/cliniccards.client';
 import { CliniccardsConnector } from '../src/integrations/cliniccards.connector';
+import { SettingsImportService } from '../src/integrations/settings-import.service';
 import { MockHandle, MOCK_KEY, startMock } from '../mock/cliniccards-mock';
 
 jest.setTimeout(120_000);
@@ -173,6 +175,38 @@ describe('синхронизация и отчёты на данных имит�
     await app.close();
     await mock.close();
     delete process.env.CLINICCARDS_BASE_URL;
+  });
+
+  it('завершает синхронизацию с некорректными датами рождения и сохраняет календарный день корректных дат', async () => {
+    const birthdays = ['not-a-date', 'unknown date of birth', '0000-00-00', '2023-02-29', '2000-02-29', '1990-06-15 00:00:00', 123];
+    const patients = mock.data.patients.slice(1, birthdays.length + 1);
+    const original = patients.map((p) => p.birthday);
+    try {
+      patients.forEach((p, i) => { p.birthday = birthdays[i]; });
+      const sync = await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(201);
+      expect(sync.body).toMatchObject({ status: 'OK', patients: mock.data.patients.length });
+      const externalIds = patients.map((p) => String(p.patient_id));
+      const rows = await prisma.patient.findMany({ where: { clinicId, externalId: { in: externalIds } } });
+      const saved = new Map(rows.map((row) => [row.externalId, row.birthDate?.toISOString() ?? null]));
+      expect(externalIds.map((id) => saved.get(id))).toEqual([
+        null, null, null, null, '2000-02-29T00:00:00.000Z', '1990-06-15T00:00:00.000Z', null,
+      ]);
+    } finally {
+      patients.forEach((p, i) => { p.birthday = original[i]; });
+    }
+  });
+
+  it('сохраняет ошибку Prisma в истории синхронизации без аргументов запроса', async () => {
+    const afterSync = jest.spyOn(app.get(SettingsImportService), 'afterSync').mockRejectedValueOnce(
+      new Prisma.PrismaClientValidationError('Database input contains TEST_PATIENT_DETAILS', { clientVersion: 'test' }),
+    );
+    try {
+      await http().post('/integrations/cliniccards/sync').set(auth(owner)).expect(500);
+      const runs = (await http().get('/integrations/cliniccards/runs').set(auth(owner)).expect(200)).body;
+      expect(runs[0]).toMatchObject({ status: 'FAILED', error: 'Cliniccards sync database request failed' });
+    } finally {
+      afterSync.mockRestore();
+    }
   });
 
   it('остаток лечения берётся из итогов плана, а не суммой цен пунктов (валюта)', async () => {

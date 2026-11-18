@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, OnApplicationBootstrap } from '@nestjs/common';
-import { Integration, Provider, SyncStatus } from '@prisma/client';
+import { Integration, Prisma, Provider, SyncStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { cancelStaleReminders } from '../automations/visit-reminders';
 import { AUTO_SYNC_HOUR, autoSyncEnabled, autoSyncSlot, clinicTimeZone } from './auto-sync-schedule';
@@ -438,11 +438,18 @@ export class SyncService implements OnApplicationBootstrap {
         data: { status: SyncStatus.OK, finishedAt, patients: patients.length, visits: visitCount, extra, progress: 100, stage: null },
       });
     } catch (e) {
+      // Prisma request errors can include the query arguments, including patient data.
+      let failure = e;
+      if (e instanceof Prisma.PrismaClientKnownRequestError) {
+        failure = new Error(`Cliniccards sync database request failed (${e.code})`);
+      } else if (e instanceof Prisma.PrismaClientValidationError || e instanceof Prisma.PrismaClientUnknownRequestError) {
+        failure = new Error('Cliniccards sync database request failed');
+      }
       await this.prisma.syncRun.update({
         where: { id: run.id },
-        data: { status: SyncStatus.FAILED, finishedAt: new Date(), error: (e as Error).message },
+        data: { status: SyncStatus.FAILED, finishedAt: new Date(), error: (failure as Error).message },
       });
-      throw e;
+      throw failure;
     } finally {
       clearInterval(beat);
     }

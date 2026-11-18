@@ -150,6 +150,19 @@ const toDate = (s?: string | null) => {
   if (!s || s.startsWith('0000')) return undefined;
   return s.length > 10 ? localToUtc(s) : new Date(s + 'T00:00:00Z');
 };
+
+// A birthday is a calendar day, even when Cliniccards includes a time.
+function toBirthday(value: unknown): Date | undefined {
+  if (typeof value !== 'string') return undefined;
+  const match = /^(\d{4}-\d{2}-\d{2})(?:[ T](?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)?$/.exec(value.trim());
+  if (!match) return undefined;
+  const day = match[1];
+  const date = toDate(day);
+  // Date can roll an impossible day (such as February 29 in a non-leap year) into the next month.
+  if (!date || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== day) return undefined;
+  return date;
+}
+
 const num = (v: unknown) => (v === null || v === undefined || v === '' ? undefined : Number(v));
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const str = (v: Id | null | undefined) => (v === null || v === undefined ? undefined : String(v));
@@ -369,7 +382,7 @@ export class CliniccardsConnector implements ClinicConnector {
           lastVisitAt: toDate(p.last_visit_date),
           createdAt: toDate(p.date_created),
           firstVisitAt: toDate(p.first_visit_date),
-          birthday: toDate(p.birthday),
+          birthday: toBirthday(p.birthday),
           balanceIssued: num(p.balance_issued),
           balancePaid: num(p.balance_paid),
         });
