@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { fmtDateTime } from '../lib/ui';
+import type { WebsiteRequest } from '../lib/website-requests';
 import { Alert, Badge, Card, Loading } from './ui';
-import { WebsiteCode, WebsiteRequest } from './WebsiteCode';
 
 interface ClinicOption { id: string; name: string }
 interface OpenRequest extends WebsiteRequest {
@@ -15,13 +15,10 @@ interface OpenRequest extends WebsiteRequest {
 }
 interface WebsiteSettings {
   origins: string[];
-  formConfig: object | null;
   formPage: string | null;
-  snippet: string | null;
   request: WebsiteRequest | null;
   requestReceivedAt: string | null;
   lastReceivedAt: string | null;
-  verifiedAt: string | null;
 }
 
 export function PlatformWebsiteConnections({ clinics }: { clinics: ClinicOption[] }) {
@@ -29,12 +26,12 @@ export function PlatformWebsiteConnections({ clinics }: { clinics: ClinicOption[
   const [requests, setRequests] = useState<OpenRequest[] | null>(null);
   const [error, setError] = useState('');
   const [target, setTarget] = useState<ClinicOption | null>(null);
-  const editor = useRef<HTMLDivElement>(null);
+  const details = useRef<HTMLDivElement>(null);
   const load = useCallback(() => {
     api<OpenRequest[]>('/platform/website-requests').then((rows) => { setRequests(rows); setError(''); }).catch((e) => setError((e as Error).message));
   }, []);
   useEffect(load, [load]);
-  useEffect(() => { editor.current?.scrollIntoView({ block: 'start' }); }, [target]);
+  useEffect(() => { details.current?.scrollIntoView({ block: 'start' }); }, [target]);
   const options = target && !clinics.some((c) => c.id === target.id) ? [target, ...clinics] : clinics;
 
   return (
@@ -61,7 +58,7 @@ export function PlatformWebsiteConnections({ clinics }: { clinics: ClinicOption[
           </select>
         </label>
       </Card>
-      {target && <div ref={editor} style={{ scrollMarginTop: 64 }}><PlatformWebsiteClinic key={target.id} clinic={target} onChanged={load} /></div>}
+      {target && <div ref={details} style={{ scrollMarginTop: 64 }}><PlatformWebsiteClinic key={target.id} clinic={target} onChanged={load} /></div>}
     </div>
   );
 }
@@ -70,17 +67,11 @@ function PlatformWebsiteClinic({ clinic, onChanged }: { clinic: ClinicOption; on
   const { t } = useI18n();
   const path = `/platform/clinics/${encodeURIComponent(clinic.id)}/website`;
   const [s, setS] = useState<WebsiteSettings | null>(null);
-  const [origins, setOrigins] = useState('');
-  const [configuration, setConfiguration] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api<WebsiteSettings>(path).then((data) => {
-      setS(data);
-      setOrigins(data.origins.join('\n'));
-      setConfiguration(data.formConfig ? JSON.stringify(data.formConfig, null, 2) : '');
-    }).catch((e) => setError((e as Error).message));
+    api<WebsiteSettings>(path).then(setS).catch((e) => setError((e as Error).message));
   }, [path]);
 
   async function update(endpoint: string, body?: object) {
@@ -98,22 +89,8 @@ function PlatformWebsiteClinic({ clinic, onChanged }: { clinic: ClinicOption; on
     }
   }
 
-  async function save() {
-    let formConfig: unknown;
-    try {
-      formConfig = configuration.trim() ? JSON.parse(configuration) : null;
-    } catch {
-      setError(t('ld.formConfigInvalid'));
-      return;
-    }
-    const next = await update(path, { origins: origins.split(/[\s,]+/).filter(Boolean), formConfig });
-    if (!next) return;
-    setOrigins(next.origins.join('\n'));
-    setConfiguration(next.formConfig ? JSON.stringify(next.formConfig, null, 2) : '');
-  }
-
   const request = s?.request;
-  const evidence = request ? s?.requestReceivedAt : s?.lastReceivedAt ?? s?.verifiedAt;
+  const evidence = request ? s?.requestReceivedAt : s?.lastReceivedAt;
   async function record(action: 'installed' | 'complete') {
     if (request && await update(`${path}/requests/${request.id}`, { action })) onChanged();
   }
@@ -124,23 +101,11 @@ function PlatformWebsiteClinic({ clinic, onChanged }: { clinic: ClinicOption; on
       {!s && !error && <Loading />}
       {s && (
         <>
-          {request && <p style={{ overflowWrap: 'anywhere' }}>{request.websiteOrigin} · {t(request.handledAt ? 'ld.requestComplete' : request.installedAt ? 'ld.requestInstalled' : 'ld.requestReceived')}</p>}
-          <label className="field">
-            <span>{t('ld.allowedOrigins')}</span>
-            <textarea className="input" rows={2} value={origins} onChange={(e) => setOrigins(e.target.value)} />
-          </label>
-          <label className="field">
-            <span>{t('ld.formConfig')}</span>
-            <textarea className="input" rows={8} spellCheck={false} value={configuration} onChange={(e) => setConfiguration(e.target.value)} />
-          </label>
-          <p className="muted">{t('ld.formConfigHint')}</p>
-          <button className="btn" disabled={busy} onClick={save}>{t('ld.saveFormConfig')}</button>
-          {s.snippet && s.formPage && (
-            <section className="rule-card" style={{ marginTop: 14 }}>
-              <h3>{t('ld.installCode')}</h3>
-              <WebsiteCode key={s.snippet} code={s.snippet} page={s.formPage} />
-            </section>
+          {(request || s.origins.length > 0) && (
+            <p style={{ overflowWrap: 'anywhere' }}>{t('ld.origins')} · {request?.websiteOrigin ?? s.origins.join(', ')}</p>
           )}
+          {s.formPage && <p style={{ overflowWrap: 'anywhere' }}>{t('ld.formPage')} · {s.formPage}</p>}
+          {request && <Badge tone={request.handledAt ? 'green' : 'amber'}>{t(request.handledAt ? 'ld.requestComplete' : request.installedAt ? 'ld.requestInstalled' : 'ld.requestReceived')}</Badge>}
           <section className="rule-card" style={{ marginTop: 14 }}>
             <strong>{t('ld.verification')}</strong>
             <p className="muted">{evidence ? t('ld.receivedAt', { d: fmtDateTime(evidence) }) : t('ld.noReceiptEvidence')}</p>

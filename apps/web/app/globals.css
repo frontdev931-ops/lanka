@@ -723,8 +723,6 @@ figure.mock { margin: 0; }
 .switch-hint { display: block; font-size: 13px; margin-top: 2px; }
 /* an expandable part of a settings card */
 .more-details > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--primary-dark); font-weight: 600; font-size: 14px; }
-.website-developer-guide { margin-top: 12px; }
-.website-developer-guide > summary { display: list-item; padding-block: 12px; }
 
 /* ---------- public landing (components/Landing.tsx) ---------- */
 .lp {
@@ -1037,4 +1035,3 @@ figure.mock { margin: 0; }
 .clinic-switch select { width: 100%; }
 
 /* Installation examples (Settings → Channels → Website): scroll inside the block, never the page */
-.code-sample { margin: 6px 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 1.45; white-space: pre; overflow-x: auto; max-width: 100%; }
