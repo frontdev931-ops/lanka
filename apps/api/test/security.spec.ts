@@ -211,16 +211,14 @@ describe('настройки и служебное', () => {
       DATABASE_URL: 'postgresql://x',
       WEB_ORIGIN: 'https://app.example.com',
       SMTP_URL: 'smtps://u:p@smtp.example.com',
-      LIQPAY_PUBLIC_KEY: 'i0000000000',
-      LIQPAY_PRIVATE_KEY: 'liqpay-private-key',
+      MONO_ACQUIRING_TOKEN: 'fixture-mono-token',
     } as NodeJS.ProcessEnv;
     expect(configProblems(good)).toEqual([]);
-    // the public development database password, switches for tests, missing payment keys, half-set Meta values
+    // The development password, test switches and incomplete Meta settings are rejected. Missing acquiring only disables checkout.
     expect(configProblems({ ...good, DATABASE_URL: 'postgresql://stomat:stomat@db.internal:5432/stomat' }).join()).toContain('пароль разработки');
     expect(configProblems({ ...good, REQUIRE_EMAIL_VERIFICATION: 'false' }).join()).toContain('REQUIRE_EMAIL_VERIFICATION');
     expect(configProblems({ ...good, RATE_LIMIT_IP_MULTIPLIER: '10000' }).join()).toContain('RATE_LIMIT_IP_MULTIPLIER');
-    expect(configProblems({ ...good, LIQPAY_PRIVATE_KEY: undefined }).join()).toContain('LIQPAY');
-    expect(configProblems({ ...good, LIQPAY_PRIVATE_KEY: undefined, BILLING_ENFORCED: 'false' })).toEqual([]);
+    expect(configProblems({ ...good, MONO_ACQUIRING_TOKEN: undefined })).toEqual([]);
     expect(configProblems({ ...good, META_APP_SECRET: 's'.repeat(32) }).join()).toContain('META_VERIFY_TOKEN');
     expect(configProblems({ ...good, META_CONFIG_ID: '1' }).join()).toContain('META_CONFIG_ID');
     expect(configProblems({ ...good, META_APP_ID: '1', META_APP_SECRET: 's'.repeat(32), META_CONFIG_ID: '1', META_VERIFY_TOKEN: 'v' })).toEqual([]);

@@ -17,6 +17,8 @@ The owner's request of 2026-11-16: finish the agreed product in bounded stages (
 
 ## Stage 2. Purchase and onboarding (done 2026-11-16)
 
+This section records the original purchase implementation. The current payment integration and release instructions are in [LANKA payments with plata by mono](../../docs/07-mono-billing.md).
+
 Already in place before this stage (checked, not rewritten): new clinics wait for payment with only billing open; `POST /billing/checkout` (owner) creates the order; only the LiqPay server callback with a valid signature changes anything; amount and currency must match the order; one order is applied once (repeated callbacks are harmless); ACTIVE → PAST_DUE → LAPSED with reminders; the plan sets limits; the agent and sending are never switched on by a payment.
 
 - [x] Payment page after the return from LiqPay: "checking the payment" until the signed callback arrives (`checking` in `GET /billing`, refreshed for 2 minutes); the browser return confirms nothing
@@ -101,21 +103,17 @@ Needs the real services, not code (kept for the live checklist): the Telegram bo
 
 **Follow-up decided during the check and started (2026-11-16).** Stage A done: the agent in Telegram under the one owner switch (`agent-administrator.md` section 51; tests `agent-auto.spec.ts` 29/29, `messaging.spec.ts` routing test). Stage B done: the agent moves/cancels any future visit of a linked patient; a move = new visit first, then the old one cancelled (`agent-administrator.md` section 52; tests agent-move 16, agent-cancel 12, messaging 49, agent-auto 29, agent-approval 19, agent-funnel 114, booking 16). Live check still needed with the owner: cancel and the create-then-cancel move on a test patient in Cliniccards (changes visits).
 
-## Deployment checklist for the LiqPay sandbox step (not run)
+## Acquiring release and staging
 
-1. Decide staging: a second API + web + database (e.g. `staging.lankaclinic.app`), `NODE_ENV` not production, `LIQPAY_SANDBOX=1`, `WEB_ORIGIN` = the staging https address, its own database (never production data), `BILLING_ENFORCED=true`, mail via Resend.
-2. Merchant keys `LIQPAY_PUBLIC_KEY` / `LIQPAY_PRIVATE_KEY` from the LiqPay cabinet into the staging environment (never into the chat).
-3. Build the API from `Dockerfile.api` (migrations run at start, including `20261116100000_money_currency`, `20261116140000_network`, `20261116180000_plan_currency`, `20261116200000_network_period`); check `GET /health`; check `GET /backend/onboarding` answers 401 (route present).
-4. Make sure the LiqPay callback address is the address the API is served at directly (`{WEB_ORIGIN}/backend/billing/liqpay/callback`). Production today redirects `lankaclinic.app/backend/*` to `app.lankaclinic.app` with 308; LiqPay should be given the final address, not one that redirects (the hosting doc names `lankaclinic.app`: verify before the first real payment).
-5. Then run check 1 of the table below with a LiqPay test card.
+See [LANKA payments with plata by mono](../../docs/07-mono-billing.md) for Railway, the signed webhook URL, the migration and official test-token instructions.
 
 ## Live checks for the owner (nothing here was done live)
 
 | # | Operation | Expected result | Sends a message / charges money / changes a visit | Needs you |
 |---|---|---|---|---|
-| 1 | On staging with the real merchant keys and `LIQPAY_SANDBOX=1`, pay Start (1 990 + 4 990) from the Payment tab with a LiqPay test card | the tab shows "checking", then Active; Start limits; one payment in history | no money (sandbox), no patient message | yes: merchant keys, staging |
+| 1 | On isolated staging with an official mono test token, pay Start (1 990 + 4 990) from the Payment tab with test card data | the tab shows "checking", then Active; Start limits; one payment in history | no money (sandbox), no patient message | yes: mono test token, staging |
 | 2 | Same for Pro (3 990 + 4 990), then a renewal | Pro; next charge 3 990 only; agent and sending still off | no money (sandbox) | yes |
-| 3 | One real payment in production (smallest plan) and, if wanted, a refund in the LiqPay cabinet | Active; after the refund a "reversed" mail to PLATFORM_ADMIN_EMAILS and the payment marked REVERSED; the paid period unchanged until you decide | **charges money** | yes |
+| 3 | One real payment in production (smallest plan) and, if wanted, a refund in the mono cabinet | Active; after the refund a "reversed" mail to PLATFORM_ADMIN_EMAILS and the payment marked REVERSED; the paid period unchanged until you decide | **charges money** | yes |
 | 4 | Network: create a network for a test owner on /platform API, attach two clinics, pay 7 990 + 4 990 in sandbox | both branches Pro-level and Active; network page with both branches | no money (sandbox) | yes |
 | 5 | State the currency for 112 dental in Settings → General (after checking in Cliniccards which currency its payments/balances use) | reports show "грн"/the stated code instead of "валюта не підтверджена" | no | yes: the owner's statement |
 | 6 | Telegram bot end to end: reminders with buttons, a staff chat request, the weekly digest, a signal, a rating | messages arrive once; buttons work; digest numbers match the reports | **sends messages to real people** (use staff test accounts) | yes |

@@ -4,6 +4,7 @@ import * as bcrypt from 'bcryptjs';
 import type { Request, Response } from 'express';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { AuthGuard, AuthUser, CurrentUser, Roles, SESSION_COOKIE } from '../common/auth.guard';
+import { DIAGNOSTIC_AUDIT_PREFIX } from '../billing/mono-diagnostic';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsImportService } from '../integrations/settings-import.service';
 import { SyncService } from '../integrations/sync.service';
@@ -109,7 +110,7 @@ export class ClinicController {
   @Roles(Role.OWNER, Role.MANAGER)
   async audit(@CurrentUser() u: AuthUser, @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1) {
     const pageSize = 50;
-    const where = { clinicId: u.clinicId };
+    const where = { clinicId: u.clinicId, NOT: { action: { startsWith: DIAGNOSTIC_AUDIT_PREFIX } } };
     const [total, rows] = await Promise.all([
       this.prisma.auditLog.count({ where }),
       this.prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (Math.max(page, 1) - 1) * pageSize, take: pageSize }),
@@ -143,7 +144,7 @@ export class ClinicController {
       this.prisma.task.findMany({ where }),
       this.prisma.contactLog.findMany({ where }),
       this.prisma.importBatch.findMany({ where, select: { id: true, filename: true, type: true, status: true, stats: true, createdAt: true, appliedAt: true } }),
-      this.prisma.auditLog.findMany({ where }),
+      this.prisma.auditLog.findMany({ where: { ...where, NOT: { action: { startsWith: DIAGNOSTIC_AUDIT_PREFIX } } } }),
     ]);
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'clinic.exported' } });
     res.setHeader('Content-Type', 'application/json; charset=utf-8');

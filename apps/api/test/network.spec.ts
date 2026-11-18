@@ -5,7 +5,7 @@ import { LlmClient } from '../src/ai/llm.client';
 import { AppModule } from '../src/app.module';
 import { MailService } from '../src/auth/mail.service';
 import { BillingService } from '../src/billing/billing.service';
-import { sign } from '../src/billing/liqpay';
+import { monoFixture } from './mono-fixture';
 import { I18nExceptionFilter } from '../src/common/i18n';
 import { NetworkService } from '../src/network/network.service';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -13,9 +13,10 @@ import { pinPlatformFixture } from './platform-fixture';
 
 jest.setTimeout(120_000);
 
-// Networks of clinics (2026-11-16). The model is a fake that returns a scripted report spec; LiqPay is simulated with a test key; mail goes to the
+// Networks of clinics (2026-11-16). The model is a fake that returns a scripted report spec; mono is simulated with a test key; mail goes to the
 // in-memory outbox. Nothing leaves the machine.
-const PRIVATE = 'liqpay-private-key-for-network-tests';
+const mono = monoFixture();
+let restoreMono: () => void;
 const fake = { configured: true, seq: [] as string[], prompts: [] as string[], complete: async (system: string, messages: { content: string }[]) => {
   fake.prompts.push(JSON.stringify({ system, messages }));
   return { text: fake.seq.shift() ?? '{"answer":"ok","title":null,"spec":null}', inputTokens: 1, outputTokens: 1 };
@@ -31,10 +32,9 @@ const PASSWORD = 'correct-horse-battery';
 const ADMIN = `svc${rnd()}@example.com`;
 
 beforeAll(async () => {
-  process.env.LIQPAY_PUBLIC_KEY = 'i0000000000';
-  process.env.LIQPAY_PRIVATE_KEY = PRIVATE;
+  restoreMono = mono.install();
   process.env.PLATFORM_ADMIN_EMAILS = ADMIN;
-  app = (await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(LlmClient).useValue(fake).compile()).createNestApplication();
+  app = (await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(LlmClient).useValue(fake).compile()).createNestApplication({ rawBody: true });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.useGlobalFilters(new I18nExceptionFilter());
   await app.init();
@@ -43,8 +43,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await restorePlatform?.();
-  delete process.env.LIQPAY_PUBLIC_KEY;
-  delete process.env.LIQPAY_PRIVATE_KEY;
+  restoreMono?.();
   delete process.env.PLATFORM_ADMIN_EMAILS;
   await app.close();
 });
@@ -66,11 +65,14 @@ const member = async (owner: string, role: string, email = `r${rnd()}@example.co
   const acc = (await http().post(`/invites/${(inv.body.link as string).split('/invite/')[1]}/accept`).send({ name: 'Колега', password: PASSWORD }).expect(201)).body.accessToken as string;
   return { token: acc, email, userId: (await prisma.user.findUniqueOrThrow({ where: { email } })).id };
 };
-const pay = (orderId: string, amountMinor: number, status = 'success') => {
-  const data = Buffer.from(JSON.stringify({ order_id: orderId, status, amount: amountMinor / 100, currency: 'UAH', payment_id: 1 })).toString('base64');
-  return http().post('/billing/liqpay/callback').send({ data, signature: sign(data, PRIVATE) });
+const pay = (orderId: string, amountMinor: number) => {
+  const raw = JSON.stringify(mono.event(orderId, amountMinor));
+  return http().post('/billing/mono/webhook').set('Content-Type', 'application/json').set('X-Sign', mono.signature(raw)).send(raw);
 };
-const order = (body: { data: string }) => JSON.parse(Buffer.from(body.data, 'base64').toString()) as { order_id: string; amount: number };
+const order = (body: { url: string }) => {
+  const order_id = new URL(body.url).pathname.slice('/mono-'.length);
+  return { order_id, amount: mono.invoices.get(order_id)!.amount / 100 };
+};
 
 // The service owner, a network owner with two clinics joined into a network
 let platformUser: Awaited<ReturnType<typeof register>> | undefined;
@@ -331,8 +333,11 @@ describe('мережа: передоплата наступного період
   it('один період купується один раз: друге вікно оплати не відкривається, два оплачені вікна не дають період двічі; після передоплати новий філіал — через підтримку, без нового списання', async () => {
     const s = await setup();
     const first = (await http().post(`/billing/network/${s.net}/checkout`).set(auth(s.owner.token)).expect(200)).body;
-    // a second window for the same period while the first waits for LiqPay: refused, and the page says so
-    expect((await http().post(`/billing/network/${s.net}/checkout`).set(auth(s.owner.token)).expect(400)).body.message).toMatch(/чекає підтвердження/);
+    // The same purchase resumes the existing invoice.
+    expect((await http().post(`/billing/network/${s.net}/checkout`).set(auth(s.owner.token)).expect(200)).body).toEqual(first);
+    const stranger = await register();
+    await http().get(`/billing/network/${s.net}/payments/${first.id}`).set(auth(stranger.token)).expect(404);
+    await http().get(`/billing/network/${s.net}/payments/${first.id}`).set(auth(s.owner.token)).expect(200).expect(({ body }) => expect(body.status).toBe('PENDING'));
     expect((await http().get(`/billing/network/${s.net}`).set(auth(s.owner.token)).expect(200)).body.nextPayment.blocked).toBe('payment_pending');
     await pay(order(first).order_id, Math.round(order(first).amount * 100)).expect(200);
     const until1 = (await prisma.network.findUniqueOrThrow({ where: { id: s.net } })).paidUntil!;
@@ -349,13 +354,13 @@ describe('мережа: передоплата наступного період
     const a = (await http().post(`/billing/network/${s.net}/checkout`).set(auth(s.owner.token)).expect(200)).body;
     const dupOrder = `lanka-dup-${Date.now()}`;
     const orderA = await prisma.billingPayment.findUniqueOrThrow({ where: { orderId: order(a).order_id } });
-    await prisma.billingPayment.create({ data: { clinicId: orderA.clinicId, networkId: s.net, orderId: dupOrder, kind: 'NETWORK', plan: 'NETWORK', amountMinor: orderA.amountMinor, setupMinor: 0, periodFrom: orderA.periodFrom } });
+    await prisma.billingPayment.create({ data: { clinicId: orderA.clinicId, networkId: s.net, orderId: dupOrder, kind: 'NETWORK', plan: 'NETWORK', amountMinor: orderA.amountMinor, setupMinor: 0, periodFrom: orderA.periodFrom, monoExpiresAt: orderA.monoExpiresAt, branchIds: orderA.branchIds } });
     await pay(order(a).order_id, orderA.amountMinor).expect(200);
     const until2 = (await prisma.network.findUniqueOrThrow({ where: { id: s.net } })).paidUntil!;
     expect(until2.getTime()).toBeGreaterThan(until1.getTime());
     expect((await prisma.clinic.findFirstOrThrow({ where: { networkId: s.net, name: 'Філіал Новий' } })).billingStatus).toBe('ACTIVE');
     await pay(dupOrder, orderA.amountMinor).expect(200);
-    await pay(dupOrder, orderA.amountMinor).expect(200); // and LiqPay repeating that callback changes nothing either
+    await pay(dupOrder, orderA.amountMinor).expect(200); // and mono repeating that callback changes nothing either
     expect((await prisma.network.findUniqueOrThrow({ where: { id: s.net } })).paidUntil!.getTime()).toBe(until2.getTime());
     expect(await prisma.auditLog.count({ where: { action: 'billing.period_duplicate', details: { path: ['orderId'], equals: dupOrder } } })).toBe(1);
 

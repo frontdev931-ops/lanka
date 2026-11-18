@@ -1,17 +1,15 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Param, Post, Req, UseGuards, type RawBodyRequest } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsIn } from 'class-validator';
+import type { Request } from 'express';
 import { AuthGuard, AuthUser, CurrentUser, Roles } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { SELLABLE_PLANS } from '../service/plans';
+import { PlatformAdminGuard } from '../service/platform-access';
 import { BillingService } from './billing.service';
 
 class CheckoutDto {
   @IsIn(SELLABLE_PLANS) plan: string;
-}
-class CallbackDto {
-  @IsOptional() @IsString() data?: string;
-  @IsOptional() @IsString() signature?: string;
 }
 
 // The clinic's payments. Only the owner pays; the manager can look.
@@ -27,6 +25,12 @@ export class BillingController {
   @Roles(Role.OWNER, Role.MANAGER)
   overview(@CurrentUser() u: AuthUser) {
     return this.billing.overview(u.clinicId);
+  }
+
+  @Get('payments/:id')
+  @Roles(Role.OWNER, Role.MANAGER)
+  payment(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.billing.payment(id, { clinicId: u.clinicId, networkId: null }, u.role === Role.OWNER);
   }
 
   @Post('checkout')
@@ -48,16 +52,36 @@ export class BillingController {
   }
 }
 
-// LiqPay server callback. No sign-in: the signature (made with the private key) is the proof.
-@Controller('billing/liqpay')
-export class LiqpayCallbackController {
+@Controller('platform/mono-diagnostic')
+@UseGuards(AuthGuard, PlatformAdminGuard)
+export class PlatformMonoDiagnosticController {
   constructor(private billing: BillingService) {}
 
-  @Post('callback')
+  @Get()
+  overview(@CurrentUser() u: AuthUser) {
+    return this.billing.diagnosticOverview(u.clinicId);
+  }
+
+  @Post('checkout')
   @HttpCode(200)
-  async callback(@Body() body: CallbackDto) {
-    if (!body.data || !body.signature) throw new BadRequestException('bad_signature');
-    await this.billing.callback(body.data, body.signature);
+  checkout(@CurrentUser() u: AuthUser) {
+    return this.billing.diagnosticCheckout(u.clinicId);
+  }
+
+  @Get(':id')
+  payment(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.billing.diagnosticPayment(id, u.clinicId);
+  }
+}
+
+@Controller('billing/mono')
+export class MonoWebhookController {
+  constructor(private billing: BillingService) {}
+
+  @Post('webhook')
+  @HttpCode(200)
+  async callback(@Req() req: RawBodyRequest<Request>, @Headers('x-sign') signature?: string) {
+    await this.billing.callback(req.rawBody, signature);
     return { ok: true };
   }
 }

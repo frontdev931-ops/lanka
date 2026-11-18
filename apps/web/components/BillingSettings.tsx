@@ -1,75 +1,57 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { fmtDate } from '../lib/ui';
 import { useI18n } from '../lib/i18n';
 import { Alert, Badge, Card, Empty, Loading } from './ui';
+import { BillingPaymentStatus, type BillingCheckout, type PaymentState } from './BillingPaymentStatus';
 
 interface Overview {
   configured: boolean;
   // a branch of a network is paid by its network
   network?: { id: string; name: string } | null;
-  // LiqPay's test mode on this server (never in production)
-  sandbox?: boolean;
-  // a payment sent to LiqPay in the last 30 minutes is not confirmed yet
-  checking?: boolean;
+  pendingPaymentId: string | null;
+  nextPeriod: { from: string; to: string };
   plan: string;
   status: 'AWAITING_PAYMENT' | 'ACTIVE' | 'PAST_DUE' | 'LAPSED';
   paidUntil: string | null;
   graceUntil: string | null;
-  plans: { key: string; priceUah: number; limits: { users: number; messagesPerMonth: number; aiRepliesPerMonth: number }; features: string[] }[];
+  plans: { key: string; priceUah: number; totalUah: number; limits: { users: number; messagesPerMonth: number; aiRepliesPerMonth: number }; features: string[] }[];
   setupPaid: boolean;
   setupUah: number | null;
-  pack: { replies: number; priceUah: number; bought: number; cap: number };
+  pack: { replies: number; priceUah: number; bought: number; cap: number; periodFrom: string; periodTo: string | null };
   ai: { included: number; used: number; purchased: number; remaining: number };
-  payments: { id: string; kind: string; plan: string | null; amountMinor: number; status: string; createdAt: string; paidAt: string | null }[];
+  payments: { id: string; kind: string; plan: string | null; amountMinor: number; status: PaymentState; createdAt: string; paidAt: string | null; refundedMinor: number }[];
 }
-interface Form {
-  url: string;
-  data: string;
-  signature: string;
-}
-
 const FEATURES = ['multi_channel', 'patient_agent', 'ai_assistant', 'ai_autoreply', 'advanced_analytics', 'daily_digest'] as const;
 
 // Settings → "Payment" (the former /billing page): the plan, the first payment (connection + first month), renewal and the payment history.
 // One compact card for AI replies: how many are left this period and the button to buy a pack (POST /billing/ai-pack; only the owner pays, canBuy).
-// The card is entered on the LiqPay page; we only send the person there.
 export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
   const { t } = useI18n();
   const [o, setO] = useState<Overview | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState<Form | null>(null);
-  const formRef = useRef<HTMLFormElement>(null);
+  const [paymentId, setPaymentId] = useState<string | null>(null);
 
   const load = useCallback(() => api<Overview>('/billing').then(setO).catch((e) => setError((e as Error).message)), []);
   useEffect(() => {
-    load();
+    setPaymentId(new URLSearchParams(window.location.search).get('payment'));
+    void load();
   }, [load]);
-  useEffect(() => {
-    if (form) formRef.current?.submit();
-  }, [form]);
-  // After coming back from the payment page the status waits for LiqPay's signed call to the server; the page asks again for two minutes
-  const checking = !!o?.checking;
-  useEffect(() => {
-    if (!checking) return;
-    let n = 0;
-    const id = setInterval(() => {
-      if (++n > 24) clearInterval(id);
-      else void load();
-    }, 5000);
-    return () => clearInterval(id);
-  }, [checking, load]);
 
   async function go(path: string, body?: object) {
     setBusy(true);
     setError('');
     try {
-      setForm(await api<Form>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }));
+      const payment = await api<BillingCheckout>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
+      if (payment.url) window.location.assign(payment.url);
+      else setPaymentId(payment.id);
     } catch (e) {
       setError((e as Error).message);
+      void load();
+    } finally {
       setBusy(false);
     }
   }
@@ -81,6 +63,7 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
         {t('billing.byNetwork', { name: o.network.name })} <a href="/network">{t('billing.toNetwork')}</a>
       </Alert>
     );
+  const tracked = paymentId ?? o.pendingPaymentId;
   const active = o.status === 'ACTIVE' || o.status === 'PAST_DUE';
   const money = (minor: number) => `${(minor / 100).toLocaleString()} ${t('billing.uah')}`;
 
@@ -88,21 +71,13 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
     <>
       {error && <Alert tone="error">{error}</Alert>}
       {!o.configured && <Alert tone="warn">{t('billing.notConfigured')}</Alert>}
-      {o.sandbox && <Alert tone="warn">{t('billing.sandbox')}</Alert>}
-      {o.checking && <Alert tone="info">{t('billing.checking')}</Alert>}
+      {tracked && <BillingPaymentStatus key={tracked} path={`/billing/payments/${encodeURIComponent(tracked)}`} onSettled={load} />}
       {o.status === 'AWAITING_PAYMENT' && <Alert tone="info">{t('billing.awaiting')}</Alert>}
       {o.status === 'LAPSED' && <Alert tone="warn">{t('billing.lapsed')}</Alert>}
       {o.status === 'PAST_DUE' && <Alert tone="warn">{t('billing.pastDue', { date: o.graceUntil ? fmtDate(o.graceUntil) : '' })}</Alert>}
 
-      {form && (
-        <form ref={formRef} method="POST" action={form.url} acceptCharset="utf-8">
-          <input type="hidden" name="data" value={form.data} />
-          <input type="hidden" name="signature" value={form.signature} />
-        </form>
-      )}
-
       <Card title={t('billing.plansTitle')} actions={active ? <Badge tone="green">{t('billing.active', { date: o.paidUntil ? fmtDate(o.paidUntil) : '—' })}</Badge> : undefined}>
-        {!o.setupPaid && <p className="rule" style={{ marginTop: 0 }}>{t('billing.setupNote', { sum: o.setupUah ? o.setupUah.toLocaleString() : '—' })}</p>}
+
         <div className="plan-grid">
           {o.plans.map((p) => (
             <section key={p.key} className={`rule-card${o.plan === p.key && active ? ' plan-current' : ''}`}>
@@ -117,9 +92,10 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
                   <li key={f} className={p.features.includes(f) ? '' : 'muted'}>{p.features.includes(f) ? '✓ ' : '— '}{t(`billing.feat.${f}`)}</li>
                 ))}
               </ul>
-              <button className="btn btn-primary" disabled={busy || !o.configured} onClick={() => go('/billing/checkout', { plan: p.key })}>
-                {active && o.plan === p.key ? t('billing.renew') : o.status === 'AWAITING_PAYMENT' ? t('billing.payFirst') : t('billing.pay')}
-              </button>
+              <p>{t('billing.period', { from: fmtDate(o.nextPeriod.from), to: fmtDate(o.nextPeriod.to) })}</p>
+              {o.setupUah != null && <p>{t('billing.setupLine', { sum: o.setupUah.toLocaleString() })}</p>}
+              <p><strong>{t('billing.total', { sum: p.totalUah.toLocaleString() })}</strong></p>
+              {canBuy && <button className="btn btn-primary" disabled={busy || !o.configured} onClick={() => go('/billing/checkout', { plan: p.key })}>{t('billing.pay')}</button>}
             </section>
           ))}
         </div>
@@ -130,10 +106,11 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
       <Card title={t('billing.aiTitle')}>
         {o.ai.purchased > 0 && <p className="rule" style={{ marginTop: 0 }}>{t('billing.aiBought', { n: o.ai.purchased.toLocaleString() })}</p>}
         <p className="rule">{t('billing.packOffer', { n: o.pack.replies.toLocaleString(), sum: o.pack.priceUah.toLocaleString() })}</p>
+        {o.pack.periodTo && <p>{t('billing.period', { from: fmtDate(o.pack.periodFrom), to: fmtDate(o.pack.periodTo) })}</p>}
         {canBuy ? (
           <div className="toolbar">
             <button className="btn btn-primary" disabled={busy || !o.configured || !active || o.pack.bought >= o.pack.cap} onClick={() => go('/billing/ai-pack')}>
-              {t('billing.packBuy', { n: o.pack.replies.toLocaleString(), sum: o.pack.priceUah.toLocaleString() })}
+              {t('billing.pay')}
             </button>
             {o.pack.bought >= o.pack.cap && <span className="muted">{t('billing.packCap', { n: o.pack.cap })}</span>}
           </div>
@@ -162,7 +139,11 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
                     <td>{fmtDate(p.paidAt ?? p.createdAt)}</td>
                     <td>{p.kind === 'AI_PACK' ? t('billing.kindPack') : t('billing.kindPlan', { plan: p.plan === 'PRO' ? t('billing.pro') : p.plan === 'START' ? t('billing.start') : (p.plan ?? '') })}</td>
                     <td>{money(p.amountMinor)}</td>
-                    <td><Badge tone={p.status === 'PAID' ? 'green' : p.status === 'FAILED' || p.status === 'REVERSED' ? 'red' : 'amber'}>{t(p.status === 'PAID' ? 'billing.st.PAID' : p.status === 'FAILED' ? 'billing.st.FAILED' : p.status === 'REVERSED' ? 'billing.st.REVERSED' : 'billing.st.PENDING')}</Badge></td>
+                    <td>
+                      <Badge tone={p.status === 'PAID' ? 'green' : p.status === 'PENDING' ? 'amber' : 'red'}>{t(`billing.st.${p.status}`)}</Badge>
+                      {p.status === 'PAID' && p.refundedMinor > 0 && <span> · {t('billing.refundedSum', { sum: (p.refundedMinor / 100).toLocaleString() })}</span>}
+                      {p.status === 'PENDING' && <button className="btn btn-sm" onClick={() => setPaymentId(p.id)}>{t('billing.refreshPayment')}</button>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

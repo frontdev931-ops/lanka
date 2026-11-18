@@ -1,11 +1,21 @@
-import { BadRequestException, Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnApplicationBootstrap, OnModuleDestroy, ServiceUnavailableException } from '@nestjs/common';
+import { BillingPayment, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { MailService } from '../auth/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AI_PACK, BRANCH_SETUP_MIN_UAH, GRACE_DAYS, PLANS, SELLABLE_PLANS, SETUP_FEE_UAH, effectiveLimits, networkMonthlyUah, periodStart } from '../service/plans';
-import { buildCheckout, decodeCallback, liqpaySandbox, signatureValid } from './liqpay';
+import { INVOICE_VALIDITY, MONO_CURRENCY, MonoClient, MonoRequestError, MonoStatus, readMonoStatus } from './mono';
+import { DIAGNOSTIC_AUDIT_PREFIX, DIAGNOSTIC_WEBHOOK, MONO_DIAGNOSTIC } from './mono-diagnostic';
 
 const DAY = 86_400_000;
+const CHECK_INTERVAL = 15_000;
+const monoPending: Prisma.BillingPaymentWhereInput = {
+  monoExpiresAt: { not: null },
+  OR: [{ status: 'PENDING' }, { status: 'FAILED', monoInvoiceId: { not: null } }],
+};
+const paymentDetails = { id: true, kind: true, plan: true, amountMinor: true, currency: true, setupMinor: true, packReplies: true, status: true, createdAt: true, paidAt: true, periodFrom: true, periodTo: true, refundedMinor: true } as const;
+type Scope = { clinicId: string; networkId?: string | null } | { networkId: string; clinicId?: never };
+type Quote = Pick<BillingPayment, 'clinicId' | 'kind' | 'amountMinor'> & Partial<Pick<BillingPayment, 'networkId' | 'periodFrom' | 'periodTo' | 'plan' | 'setupMinor' | 'packReplies' | 'branchIds'>>;
 const addMonth = (d: Date) => {
   const r = new Date(d);
   r.setUTCMonth(r.getUTCMonth() + 1);
@@ -16,33 +26,27 @@ const addMonth = (d: Date) => {
 export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly log = new Logger(BillingService.name);
   private timer?: NodeJS.Timeout;
+  private reconciliationTimer?: NodeJS.Timeout;
 
   constructor(
     private prisma: PrismaService,
     private mail: MailService,
+    private mono: MonoClient,
   ) {}
 
   // Statuses and reminders are checked every hour (not in tests: AUTOMATIONS_TICK_SECONDS=0)
   onApplicationBootstrap() {
+    if (process.env.NODE_ENV === 'production' && !this.mono.configured) this.log.warn('Online payments unavailable: MONO_ACQUIRING_TOKEN is not configured');
     if (!Number(process.env.AUTOMATIONS_TICK_SECONDS ?? 60)) return;
     this.timer = setInterval(() => void this.tick().then(() => this.networkTick()).catch((e) => this.log.warn(`Billing: ${(e as Error).message}`)), 3_600_000);
     this.timer.unref();
+    this.reconciliationTimer = setInterval(() => void this.reconcilePending().catch(() => this.log.warn('Billing reconciliation failed')), 60_000);
+    this.reconciliationTimer.unref();
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
-  }
-
-  private keys() {
-    const publicKey = process.env.LIQPAY_PUBLIC_KEY;
-    const privateKey = process.env.LIQPAY_PRIVATE_KEY;
-    return publicKey && privateKey ? { publicKey, privateKey } : null;
-  }
-
-  private async setupMinor(clinicId: string): Promise<number> {
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { setupPaidAt: true } });
-    if (c.setupPaidAt) return 0;
-    return SETUP_FEE_UAH * 100;
+    if (this.reconciliationTimer) clearInterval(this.reconciliationTimer);
   }
 
   async overview(clinicId: string, now = new Date()) {
@@ -51,153 +55,350 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     const [used, packs, payments] = await Promise.all([
       this.prisma.aiUsage.count({ where: { clinicId, ok: true, billable: true, createdAt: { gte: since } } }),
       this.prisma.billingPayment.count({ where: { clinicId, kind: 'AI_PACK', status: 'PAID', paidAt: { gte: since } } }),
-      this.prisma.billingPayment.findMany({ where: { clinicId }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, kind: true, plan: true, amountMinor: true, setupMinor: true, packReplies: true, status: true, createdAt: true, paidAt: true } }),
+      this.prisma.billingPayment.findMany({ where: { clinicId, kind: { not: MONO_DIAGNOSTIC } }, orderBy: { createdAt: 'desc' }, take: 20, select: paymentDetails }),
     ]);
-    let setupUah: number | null = null;
-    if (!c.setupPaidAt) setupUah = await this.setupMinor(clinicId).then((m) => Math.round(m / 100)).catch(() => null);
+    const setupUah = c.setupPaidAt ? null : SETUP_FEE_UAH;
+    const from = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
+    const pending = await this.prisma.billingPayment.findFirst({ where: { clinicId, networkId: null, kind: { not: MONO_DIAGNOSTIC }, ...monoPending }, orderBy: { createdAt: 'desc' }, select: { id: true } });
     return {
-      configured: !!this.keys(),
+      configured: this.mono.configured,
       // a branch of a network is paid by its network (/billing/network/:id): its own payment page only points there
       network: c.networkId ? await this.prisma.network.findUnique({ where: { id: c.networkId }, select: { id: true, name: true } }) : null,
-      // LiqPay's test mode is on (a local or staging check; never in production)
-      sandbox: liqpaySandbox(),
-      // an order sent to LiqPay in the last 30 minutes and not confirmed yet: the page says the payment is being checked
-      checking: payments.some((p) => p.status === 'PENDING' && now.getTime() - p.createdAt.getTime() < 30 * 60_000),
+      pendingPaymentId: pending?.id ?? null,
+      nextPeriod: { from, to: addMonth(from) },
       plan: c.plan,
       status: c.billingStatus,
       paidUntil: c.paidUntil,
       graceUntil: c.paidUntil ? new Date(c.paidUntil.getTime() + GRACE_DAYS * DAY) : null,
-      plans: SELLABLE_PLANS.map((k) => ({ key: k, priceUah: PLANS[k].priceUah, limits: PLANS[k].limits, features: PLANS[k].features })),
+      plans: SELLABLE_PLANS.map((k) => ({ key: k, priceUah: PLANS[k].priceUah, totalUah: PLANS[k].priceUah + (setupUah ?? 0), limits: PLANS[k].limits, features: PLANS[k].features })),
       setupPaid: !!c.setupPaidAt,
       setupUah,
-      pack: { ...AI_PACK, bought: packs, cap: c.aiPackCapPerMonth },
+      pack: { ...AI_PACK, bought: packs, cap: c.aiPackCapPerMonth, periodFrom: since, periodTo: c.paidUntil },
       ai: { included: c.aiMonthlyLimit, used, purchased: c.aiPurchased, remaining: Math.max(0, c.aiMonthlyLimit - used) + c.aiPurchased },
       limits: effectiveLimits(c.plan, c.limitOverrides),
       payments,
     };
   }
 
-  private orderId(clinicId: string) {
-    return `lanka-${clinicId.slice(-8)}-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
+  private async lockScope(tx: Prisma.TransactionClient, scope: Scope) {
+    if (scope.networkId) await tx.$queryRaw`SELECT id FROM "Network" WHERE id = ${scope.networkId} FOR UPDATE`;
+    else await tx.$queryRaw`SELECT id FROM "Clinic" WHERE id = ${scope.clinicId} FOR UPDATE`;
   }
 
-  async checkout(clinicId: string, plan: string) {
-    const keys = this.keys();
-    if (!keys) throw new BadRequestException('billing_not_configured');
-    if (!SELLABLE_PLANS.includes(plan)) throw new BadRequestException('bad_plan');
-    // A plan the clinic does not fit into is not sold: more staff (with open invitations) than the plan allows must be removed first
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { limitOverrides: true, networkId: true } });
-    // a branch of a network is paid by its network (networkCheckout), never on its own
-    if (c.networkId) throw new BadRequestException('network_branch');
-    const [users, pending] = await Promise.all([
-      this.prisma.membership.count({ where: { clinicId } }),
-      this.prisma.invitation.count({ where: { clinicId, acceptedAt: null, expiresAt: { gt: new Date() } } }),
-    ]);
-    if (users + pending > effectiveLimits(plan, c.limitOverrides).users) throw new BadRequestException('plan_users_over');
-    const setupMinor = await this.setupMinor(clinicId);
-    const amountMinor = PLANS[plan].priceUah * 100 + setupMinor;
-    const orderId = this.orderId(clinicId);
-    await this.prisma.billingPayment.create({ data: { clinicId, orderId, kind: 'SUBSCRIPTION', plan, amountMinor, setupMinor } });
-    return this.form(orderId, amountMinor, `LANKA ${PLANS[plan].label}${setupMinor ? ' + підключення' : ''}`, keys);
-  }
+  private async purchase(
+    scope: Scope, kind: string, now: Date,
+    quote: (tx: Prisma.TransactionClient) => Promise<{ order: Quote; description: string }>,
+    plan?: string,
+  ) {
+    if (!this.mono.configured) throw new ServiceUnavailableException('billing_not_configured');
+    const active = { ...scope, kind, ...monoPending };
+    const before = await this.prisma.billingPayment.findFirst({ where: active });
+    if (before && before.monoExpiresAt! <= now) await this.reconcile(before);
 
-  async buyPack(clinicId: string, now = new Date()) {
-    const keys = this.keys();
-    if (!keys) throw new BadRequestException('billing_not_configured');
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { billingStatus: true, periodStartsAt: true, aiPackCapPerMonth: true } });
-    if (c.billingStatus !== 'ACTIVE' && c.billingStatus !== 'PAST_DUE') throw new BadRequestException('payment_required');
-    const bought = await this.prisma.billingPayment.count({ where: { clinicId, kind: 'AI_PACK', status: 'PAID', paidAt: { gte: periodStart(c, now) } } });
-    if (bought >= c.aiPackCapPerMonth) throw new BadRequestException('pack_cap');
-    const orderId = this.orderId(clinicId);
-    const amountMinor = AI_PACK.priceUah * 100;
-    await this.prisma.billingPayment.create({ data: { clinicId, orderId, kind: 'AI_PACK', amountMinor, packReplies: AI_PACK.replies } });
-    return this.form(orderId, amountMinor, `LANKA: ${AI_PACK.replies} відповідей ШІ`, keys);
-  }
-
-  private form(orderId: string, amountMinor: number, description: string, keys: { publicKey: string; privateKey: string }) {
-    const origin = (process.env.WEB_ORIGIN ?? 'http://localhost:3000').replace(/\/$/, '');
-    return buildCheckout({ amount: amountMinor / 100, description, order_id: orderId, result_url: `${origin}/billing`, server_url: `${origin}/backend/billing/liqpay/callback`, language: 'uk' }, keys);
-  }
-
-  // LiqPay calls this after a payment. Safe to repeat: an order is applied once.
-  async callback(data: string, signature: string, now = new Date()) {
-    const keys = this.keys();
-    if (!keys || !data || !signature || !signatureValid(data, signature, keys.privateKey)) throw new BadRequestException('bad_signature');
-    const cb = decodeCallback(data);
-    if (!cb?.order_id) return;
-    const order = await this.prisma.billingPayment.findUnique({ where: { orderId: cb.order_id } });
-    if (!order) return;
-    const ok = cb.status === 'success' || (cb.status === 'sandbox' && process.env.NODE_ENV !== 'production');
-    if (!ok) {
-      if (['failure', 'error', 'reversed'].includes(cb.status ?? '')) await this.prisma.billingPayment.updateMany({ where: { id: order.id, status: 'PENDING' }, data: { status: 'FAILED' } });
-      // A paid order reversed later (a refund or a chargeback): recorded and sent to the service owner. The paid period is NOT taken back by
-      // itself: that is a person's decision (a partial refund, a goodwill refund).
-      if (cb.status === 'reversed') {
-        const r = await this.prisma.billingPayment.updateMany({ where: { id: order.id, status: 'PAID' }, data: { status: 'REVERSED' } });
-        if (r.count) {
-          await this.prisma.auditLog.create({ data: { clinicId: order.clinicId, action: 'billing.reversed', details: { orderId: order.orderId, amountMinor: order.amountMinor } } });
-          await this.toServiceOwner(`LiqPay: повернення оплати ${order.orderId}`, `Оплату ${order.orderId} (${(order.amountMinor / 100).toFixed(2)} грн) повернено в LiqPay. Оплачений період клініки ${order.clinicId} не змінено: вирішіть вручну.`);
-        }
+    const reserved = await this.prisma.$transaction(async (tx) => {
+      await this.lockScope(tx, scope);
+      const existing = await tx.billingPayment.findFirst({ where: active, orderBy: { createdAt: 'asc' } });
+      if (existing) {
+        if (plan && existing.plan !== plan) throw new ConflictException('billing_payment_pending');
+        return { order: existing, description: null };
       }
-      return; // wait_accept and other in-between statuses change nothing
-    }
-    // What was paid must match what we asked for
-    if (cb.currency !== 'UAH' || Math.round(Number(cb.amount) * 100) !== order.amountMinor) {
-      this.log.error(`LiqPay order ${order.orderId}: amount or currency mismatch`);
-      await this.prisma.auditLog.create({ data: { clinicId: order.clinicId, action: 'billing.mismatch', details: { orderId: order.orderId, expected: order.amountMinor, got: Math.round(Number(cb.amount) * 100), currency: cb.currency ?? null } } });
-      await this.toServiceOwner(`LiqPay: сума не збігається ${order.orderId}`, `Оплату ${order.orderId} не застосовано: очікували ${(order.amountMinor / 100).toFixed(2)} UAH, отримали ${cb.amount} ${cb.currency}. Перевірте в кабінеті LiqPay.`);
-      return;
-    }
-    let duplicateSetup = false;
-    let duplicatePeriod = false;
-    const applied = await this.prisma.$transaction(async (tx) => {
-      const claim = await tx.billingPayment.updateMany({ where: { id: order.id, status: { in: ['PENDING', 'FAILED'] } }, data: { status: 'PAID', paidAt: now, providerRef: cb.payment_id !== undefined ? String(cb.payment_id) : null } });
-      if (!claim.count) return false;
-      if (order.kind === 'AI_PACK') {
-        await tx.clinic.update({ where: { id: order.clinicId }, data: { aiPurchased: { increment: order.packReplies } } });
-      } else if (order.kind === 'BRANCH_SETUP') {
-        await tx.clinic.update({ where: { id: order.clinicId }, data: { branchSetupPaidAt: now } });
-      } else if (order.kind === 'NETWORK' && order.networkId) {
-        const n = await tx.network.findUniqueOrThrow({ where: { id: order.networkId }, select: { paidUntil: true, setupPaidAt: true } });
-        // the period this order bought was already granted by another order (two payment windows both paid): the money is recorded for the service
-        // owner to refund, the period is not granted a second time
-        if (order.periodFrom && n.paidUntil && n.paidUntil.getTime() > order.periodFrom.getTime()) {
-          duplicatePeriod = true;
-          return true;
-        }
-        if (order.setupMinor && n.setupPaidAt) duplicateSetup = true;
-        const base = n.paidUntil && n.paidUntil > now ? n.paidUntil : now;
-        const until = addMonth(base);
-        await tx.network.update({ where: { id: order.networkId }, data: { billingStatus: 'ACTIVE', paidUntil: until, periodStartsAt: now, ...(order.setupMinor && !n.setupPaidAt ? { setupPaidAt: now } : {}) } });
-        // every branch gets the network's paid period and the Pro capabilities and allowances, each its own (no shared pool)
-        for (const b of await tx.clinic.findMany({ where: { networkId: order.networkId }, select: { id: true, limitOverrides: true } })) {
-          await tx.clinic.update({ where: { id: b.id }, data: { plan: 'NETWORK', billingStatus: 'ACTIVE', paidUntil: until, periodStartsAt: now, aiMonthlyLimit: effectiveLimits('NETWORK', b.limitOverrides).aiRepliesPerMonth } });
-        }
-      } else {
-        const c = await tx.clinic.findUniqueOrThrow({ where: { id: order.clinicId }, select: { paidUntil: true, limitOverrides: true, setupPaidAt: true } });
-        // Two payment windows opened before the first payment and both paid: the connection fee was taken twice. The month is applied as usual;
-        // the second fee is recorded for the service owner to refund (setupPaidAt stays the first one).
-        if (order.setupMinor && c.setupPaidAt) duplicateSetup = true;
-        const plan = order.plan ?? 'START';
-        // paying before the month ends extends it
-        const base = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
-        await tx.clinic.update({
-          where: { id: order.clinicId },
-          data: { plan, billingStatus: 'ACTIVE', paidUntil: addMonth(base), periodStartsAt: now, aiMonthlyLimit: effectiveLimits(plan, c.limitOverrides).aiRepliesPerMonth, ...(order.setupMinor && !c.setupPaidAt ? { setupPaidAt: now } : {}) },
-        });
+      if (before && (!plan || before.plan === plan)) {
+        const settled = await tx.billingPayment.findFirst({ where: { id: before.id, status: { in: ['PAID', 'REVERSED'] } } });
+        if (settled) return { order: settled, description: null };
       }
-      await tx.auditLog.create({ data: { clinicId: order.clinicId, action: 'billing.paid', details: { kind: order.kind, plan: order.plan, amountMinor: order.amountMinor, ...(order.networkId ? { networkId: order.networkId } : {}) } } });
-      return true;
+      const { order, description } = await quote(tx);
+      const row = await tx.billingPayment.create({ data: {
+        ...order, orderId: randomBytes(16).toString('hex'), currency: MONO_CURRENCY,
+        monoExpiresAt: new Date(now.getTime() + INVOICE_VALIDITY * 1000),
+      } });
+      return { order: row, description };
     });
-    if (applied) await this.notify(order.clinicId, 'Оплату отримано', `Дякуємо! Оплату ${(order.amountMinor / 100).toFixed(2)} грн отримано.`);
-    if (applied && duplicatePeriod) {
-      await this.prisma.auditLog.create({ data: { clinicId: order.clinicId, action: 'billing.period_duplicate', details: { orderId: order.orderId, networkId: order.networkId, amountMinor: order.amountMinor } } });
-      await this.toServiceOwner(`LiqPay: повторна оплата періоду мережі ${order.orderId}`, `Мережа ${order.networkId} оплатила той самий період удруге (замовлення ${order.orderId}, ${(order.amountMinor / 100).toFixed(2)} грн). Період не продовжено вдруге; поверніть оплату.`);
+
+    const { order, description } = reserved;
+    if (description) {
+      let invoice: Awaited<ReturnType<MonoClient['create']>>;
+      try {
+        invoice = await this.mono.create(order, description);
+      } catch (e) {
+        // A timeout, invalid answer or server failure can follow creation. It must never trigger another POST.
+        if (e instanceof MonoRequestError && [400, 403, 405, 429].includes(e.status ?? 0)) {
+          await this.prisma.billingPayment.updateMany({ where: { id: order.id, status: 'PENDING', monoInvoiceId: null }, data: { status: 'FAILED' } });
+        }
+        return { id: order.id, url: null };
+      }
+      const saved = await this.prisma.billingPayment.updateMany({
+        where: { id: order.id, OR: [{ monoInvoiceId: null }, { monoInvoiceId: invoice.invoiceId }] },
+        data: { monoInvoiceId: invoice.invoiceId, monoPageUrl: invoice.pageUrl, monoExpiresAt: new Date(Date.now() + INVOICE_VALIDITY * 1000) },
+      });
+      if (!saved.count) return { id: order.id, url: null };
     }
-    if (applied && duplicateSetup) {
-      await this.prisma.auditLog.create({ data: { clinicId: order.clinicId, action: 'billing.setup_duplicate', details: { orderId: order.orderId, setupMinor: order.setupMinor } } });
-      await this.toServiceOwner(`LiqPay: повторна оплата підключення ${order.orderId}`, `Клініка ${order.clinicId} оплатила підключення вдруге (${(order.setupMinor / 100).toFixed(2)} грн у замовленні ${order.orderId}). Поверніть цю частину.`);
+    const current = await this.prisma.billingPayment.findUniqueOrThrow({ where: { id: order.id } });
+    return { id: order.id, url: this.checkoutUrl(current) };
+  }
+
+  private checkoutUrl(order: BillingPayment) {
+    return (order.status === 'PENDING' || order.status === 'FAILED') && order.monoExpiresAt && order.monoExpiresAt > new Date()
+      ? order.monoPageUrl : null;
+  }
+
+  checkout(clinicId: string, plan: string, now = new Date()) {
+    if (!SELLABLE_PLANS.includes(plan)) throw new BadRequestException('bad_plan');
+    return this.purchase({ clinicId, networkId: null }, 'SUBSCRIPTION', now, async (tx) => {
+      const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { limitOverrides: true, networkId: true, setupPaidAt: true, paidUntil: true } });
+      if (c.networkId) throw new BadRequestException('network_branch');
+      const [users, pending] = await Promise.all([
+        tx.membership.count({ where: { clinicId } }),
+        tx.invitation.count({ where: { clinicId, acceptedAt: null, expiresAt: { gt: now } } }),
+      ]);
+      if (users + pending > effectiveLimits(plan, c.limitOverrides).users) throw new BadRequestException('plan_users_over');
+      const setupMinor = c.setupPaidAt ? 0 : SETUP_FEE_UAH * 100;
+      const periodFrom = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
+      return {
+        order: { clinicId, kind: 'SUBSCRIPTION', plan, amountMinor: PLANS[plan].priceUah * 100 + setupMinor, setupMinor, periodFrom, periodTo: addMonth(periodFrom) },
+        description: `LANKA ${PLANS[plan].label}`,
+      };
+    }, plan);
+  }
+
+  buyPack(clinicId: string, now = new Date()) {
+    return this.purchase({ clinicId, networkId: null }, 'AI_PACK', now, async (tx) => {
+      const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { billingStatus: true, periodStartsAt: true, paidUntil: true, aiPackCapPerMonth: true } });
+      if (c.billingStatus !== 'ACTIVE' && c.billingStatus !== 'PAST_DUE') throw new BadRequestException('payment_required');
+      const since = periodStart(c, now);
+      const bought = await tx.billingPayment.count({ where: { clinicId, kind: 'AI_PACK', status: 'PAID', paidAt: { gte: since } } });
+      if (bought >= c.aiPackCapPerMonth) throw new BadRequestException('pack_cap');
+      return {
+        order: { clinicId, kind: 'AI_PACK', amountMinor: AI_PACK.priceUah * 100, packReplies: AI_PACK.replies, periodFrom: since, periodTo: c.paidUntil },
+        description: `LANKA: ${AI_PACK.replies} відповідей ШІ`,
+      };
+    });
+  }
+
+  private diagnosticEnabled() {
+    return process.env.MONO_DIAGNOSTIC_ENABLED === 'true';
+  }
+
+  async diagnosticOverview(clinicId: string) {
+    const latest = await this.prisma.billingPayment.findFirst({
+      where: { clinicId, kind: MONO_DIAGNOSTIC }, orderBy: { createdAt: 'desc' }, select: { id: true },
+    });
+    return { enabled: this.diagnosticEnabled(), configured: this.mono.configured, paymentId: latest?.id ?? null };
+  }
+
+  diagnosticCheckout(clinicId: string) {
+    if (!this.diagnosticEnabled()) throw new NotFoundException();
+    return this.purchase({ clinicId, networkId: null }, MONO_DIAGNOSTIC, new Date(), async () => ({
+      order: { clinicId, kind: MONO_DIAGNOSTIC, amountMinor: 100 },
+      description: 'LANKA — перевірка оплати',
+    }));
+  }
+
+  async diagnosticPayment(id: string, clinicId: string) {
+    const order = await this.reconciledPayment(id, { clinicId, kind: MONO_DIAGNOSTIC });
+    const webhook = await this.prisma.auditLog.findFirst({
+      where: { clinicId, action: DIAGNOSTIC_WEBHOOK, details: { path: ['orderId'], equals: order.orderId } }, select: { createdAt: true },
+    });
+    return {
+      ...this.paymentStatus(order, this.diagnosticEnabled()),
+      diagnostic: { invoiceId: order.monoInvoiceId, reference: order.orderId, webhookReceivedAt: webhook?.createdAt ?? null },
+    };
+  }
+
+  async payment(id: string, scope: Scope, owner: boolean) {
+    return this.paymentStatus(await this.reconciledPayment(id, { ...scope, kind: { not: MONO_DIAGNOSTIC } }), owner);
+  }
+
+  private async reconciledPayment(id: string, scope: Prisma.BillingPaymentWhereInput) {
+    const order = await this.prisma.billingPayment.findFirst({ where: { ...scope, id } });
+    if (!order) throw new NotFoundException();
+    await this.reconcile(order);
+    return this.prisma.billingPayment.findUniqueOrThrow({ where: { id } });
+  }
+
+  private paymentStatus(order: BillingPayment, canResume: boolean) {
+    const { id, status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, kind } = order;
+    return {
+      id, status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, kind,
+      review: status === 'PENDING' && !order.monoInvoiceId && !!order.monoExpiresAt && order.monoExpiresAt <= new Date(),
+      url: canResume ? this.checkoutUrl(order) : null,
+    };
+  }
+
+  async callback(raw?: Buffer, signature?: string) {
+    if (!raw || !signature || !(await this.mono.validSignature(raw, signature))) throw new BadRequestException('bad_signature');
+    const event = readMonoStatus(JSON.parse(raw.toString('utf8')));
+    if (!event) throw new BadRequestException('billing_invalid_status');
+    await this.applyStatus(event);
+  }
+
+  async reconcilePending() {
+    if (!this.mono.configured) return;
+    const now = new Date();
+    const batch = await this.prisma.billingPayment.findMany({
+      where: {
+        AND: [{ OR: [monoPending, { monoInvoiceId: { not: null }, status: { in: ['PAID', 'EXPIRED'] }, createdAt: { gte: new Date(now.getTime() - 30 * DAY) } }] },
+          { OR: [{ monoCheckedAt: null }, { monoCheckedAt: { lte: new Date(now.getTime() - 60_000) } }] }],
+      },
+      orderBy: [{ monoCheckedAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }],
+      take: 10,
+    });
+    // Entries fail independently. The timeout on every request bounds the scheduler work.
+    for (const row of batch) await this.reconcile(row);
+  }
+
+  private async reconcile(order: BillingPayment) {
+    if (!this.mono.configured || !order.monoExpiresAt) return;
+    const now = new Date();
+    if (!order.monoInvoiceId && (order.status !== 'PENDING' || now.getTime() - order.createdAt.getTime() < 15_000)) return;
+    // One status query per invoice per interval, even across API replicas.
+    const interval = order.monoInvoiceId ? CHECK_INTERVAL : 60_000;
+    const claimed = await this.prisma.billingPayment.updateMany({
+      where: { id: order.id, OR: [{ monoCheckedAt: null }, { monoCheckedAt: { lte: new Date(now.getTime() - interval) } }] },
+      data: { monoCheckedAt: now },
+    });
+    if (!claimed.count) return;
+    try {
+      const invoice = order.monoInvoiceId ?? await this.mono.findInvoice(order.orderId, order.createdAt);
+      if (invoice) await this.applyStatus(await this.mono.status(invoice), order.id, !order.monoInvoiceId);
+    } catch (e) {
+      if (!(e instanceof MonoRequestError)) throw e;
     }
+  }
+
+  private async applyStatus(event: MonoStatus, localId?: string, fromStatement = false) {
+    const linked = await this.prisma.billingPayment.findUnique({ where: { monoInvoiceId: event.invoiceId } });
+    const order = linked ?? (localId
+      ? await this.prisma.billingPayment.findUnique({ where: { id: localId } })
+      : typeof event.reference === 'string' ? await this.prisma.billingPayment.findUnique({ where: { orderId: event.reference } }) : null);
+    if (!order?.monoExpiresAt || (localId && order.id !== localId)) return;
+    const changedAt = new Date(event.modifiedDate);
+    const refund = this.refundAmount(event);
+    const target = event.status === 'success' ? 'PAID' : event.status === 'reversed' ? 'REVERSED' :
+      event.status === 'expired' ? 'EXPIRED' : event.status === 'failure' ? 'FAILED' : 'PENDING';
+    const notices = await this.prisma.$transaction(async (tx) => {
+      await this.lockScope(tx, { clinicId: order.clinicId, networkId: order.networkId });
+      const fresh = await tx.billingPayment.findUniqueOrThrow({ where: { id: order.id } });
+      if ((fresh.monoInvoiceId && fresh.monoInvoiceId !== event.invoiceId) ||
+          (event.reference !== undefined && event.reference !== fresh.orderId) ||
+          (!fresh.monoInvoiceId && !fromStatement && event.reference !== fresh.orderId)) return;
+      const stale = fresh.monoModifiedAt && changedAt < fresh.monoModifiedAt;
+      // A verified webhook is evidence of delivery even if the status API confirmed the payment first.
+      const diagnosticWebhook = fresh.kind === MONO_DIAGNOSTIC && !localId && target === 'PAID' && !refund;
+      if (stale && !diagnosticWebhook) return;
+      const auditAction = (action: string) => fresh.kind === MONO_DIAGNOSTIC ? DIAGNOSTIC_AUDIT_PREFIX + action : 'billing.' + action;
+      const audit = (action: string, details: Prisma.InputJsonObject) => tx.auditLog.create({
+        data: { clinicId: fresh.clinicId, action: auditAction(action), details: { orderId: fresh.orderId, ...details } },
+      });
+      const audited = (action: string) => tx.auditLog.findFirst({
+        where: { clinicId: fresh.clinicId, action: auditAction(action), details: { path: ['orderId'], equals: fresh.orderId } },
+        select: { id: true },
+      });
+      if (event.amount !== fresh.amountMinor || event.ccy !== fresh.currency || refund > fresh.amountMinor ||
+          (event.status === 'success' && event.finalAmount !== undefined &&
+            (!Number.isSafeInteger(event.finalAmount) || event.finalAmount < 0 || event.finalAmount > fresh.amountMinor))) {
+        if (stale || await audited('mismatch')) return;
+        await audit('mismatch', { expected: fresh.amountMinor, got: event.amount, currency: event.ccy });
+        return { mismatch: true };
+      }
+      if (diagnosticWebhook && !(await audited('webhook'))) await audit('webhook', { invoiceId: event.invoiceId });
+      if (stale) return;
+      if (fresh.status === 'REVERSED') return;
+      const sameTime = fresh.monoModifiedAt?.getTime() === changedAt.getTime();
+      if (sameTime && target === 'PENDING' && fresh.status !== 'PENDING') return;
+      if ((fresh.status === 'PAID' || fresh.status === 'EXPIRED') && ['FAILED', 'PENDING'].includes(target)) return;
+      if (fresh.status === 'PAID' && target === 'EXPIRED') return;
+
+      const provider = { monoInvoiceId: event.invoiceId, monoModifiedAt: changedAt };
+      if (target === 'REVERSED' || refund > fresh.refundedMinor) {
+        const refundedMinor = Math.max(refund, fresh.refundedMinor);
+        const reversed = target === 'REVERSED' || refundedMinor === fresh.amountMinor || !fresh.paidAt;
+        await tx.billingPayment.update({ where: { id: fresh.id }, data: { ...provider, status: reversed ? 'REVERSED' : 'PAID', refundedMinor } });
+        await audit(reversed ? 'reversed' : 'refunded', { refundedMinor, amountMinor: fresh.amountMinor });
+        return { reversal: true, refundedMinor };
+      }
+      if (fresh.status === 'PAID') {
+        if (!sameTime) await tx.billingPayment.update({ where: { id: fresh.id }, data: provider });
+        return;
+      }
+      if (target !== 'PAID') {
+        await tx.billingPayment.update({ where: { id: fresh.id }, data: { ...provider, status: target } });
+        return;
+      }
+      await tx.billingPayment.update({ where: { id: fresh.id }, data: { ...provider, status: 'PAID', paidAt: changedAt } });
+      const exceptions = await this.grant(tx, fresh, changedAt);
+      await audit('paid', { kind: fresh.kind, plan: fresh.plan, amountMinor: fresh.amountMinor, networkId: fresh.networkId });
+      for (const action of exceptions) await audit(action, { kind: fresh.kind, amountMinor: fresh.amountMinor, networkId: fresh.networkId, setupMinor: fresh.setupMinor });
+      return { paid: true, exceptions };
+    });
+    if (order.kind === MONO_DIAGNOSTIC) return;
+    if (notices?.mismatch) {
+      await this.toServiceOwner(`mono: сума або валюта не збігається ${order.orderId}`,
+        `Оплату ${order.orderId} не застосовано. Очікували ${order.amountMinor} (код ${order.currency}), отримали ${event.amount} (код ${event.ccy}). Суми в мінімальних одиницях. Перевірте рахунок у кабінеті mono.`);
+    }
+    if (notices?.reversal) {
+      await this.toServiceOwner(`mono: повернення ${order.orderId}`, `За замовленням ${order.orderId} повернено ${notices.refundedMinor / 100} грн. Доступ та ліміти не змінено. Перевірте оплату вручну.`);
+    }
+    if (notices?.paid) {
+      await this.notify(order.clinicId, 'Оплату отримано', `Дякуємо! Оплату ${(order.amountMinor / 100).toFixed(2)} грн отримано.`).catch(() => undefined);
+      for (const action of notices.exceptions) {
+        const detail = action === 'setup_duplicate' ? `Підключення вже оплачене. Перевірте повернення ${order.setupMinor / 100} грн.` :
+          action === 'period_duplicate' ? 'Період мережі вже оплачений. Перевірте повернення всієї суми.' :
+          'Склад мережі або належність філіалу змінилися. Перевірте оплату та доступ.';
+        await this.toServiceOwner(`mono: перевірка оплати ${order.orderId}`, `Замовлення ${order.orderId}. ${detail}`);
+      }
+    }
+  }
+
+  private refundAmount(event: MonoStatus) {
+    if (event.status === 'reversed') return event.amount;
+    if (event.status !== 'success') return 0;
+    const cancellations = Array.isArray(event.cancelList) ? event.cancelList : [];
+    const cancelled = cancellations.filter((c) => c?.status === 'success' && c.ccy === event.ccy && Number.isSafeInteger(c.amount) && c.amount > 0)
+      .reduce((sum, c) => sum + c.amount, 0);
+    return Math.max(cancelled, Number.isSafeInteger(event.finalAmount) ? event.amount - event.finalAmount! : 0);
+  }
+
+  private async grant(tx: Prisma.TransactionClient, order: BillingPayment, now: Date): Promise<string[]> {
+    const { clinicId, networkId, kind, setupMinor, periodFrom } = order;
+    if (kind === MONO_DIAGNOSTIC) return [];
+    if (kind === 'AI_PACK') {
+      await tx.clinic.update({ where: { id: clinicId }, data: { aiPurchased: { increment: order.packReplies } } });
+      return [];
+    }
+    if (kind === 'BRANCH_SETUP' && networkId) {
+      const branch = await tx.clinic.findFirst({ where: { id: clinicId, networkId }, select: { id: true } });
+      if (!branch) return ['scope_changed'];
+      const update = await tx.clinic.updateMany({ where: { id: clinicId, networkId, branchSetupPaidAt: null }, data: { branchSetupPaidAt: now } });
+      return update.count ? [] : ['setup_duplicate'];
+    }
+    if (kind === 'NETWORK' && networkId) {
+      const n = await tx.network.findUniqueOrThrow({ where: { id: networkId }, select: { paidUntil: true, setupPaidAt: true } });
+      if (periodFrom && n.paidUntil && n.paidUntil > periodFrom) return ['period_duplicate'];
+      const from = n.paidUntil && n.paidUntil > now ? n.paidUntil : now;
+      const to = addMonth(from);
+      await tx.billingPayment.update({ where: { id: order.id }, data: { periodFrom: from, periodTo: to } });
+      await tx.network.update({ where: { id: networkId }, data: { billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, ...(setupMinor && !n.setupPaidAt ? { setupPaidAt: now } : {}) } });
+      const branches = await tx.clinic.findMany({ where: { networkId, id: { in: order.branchIds } }, select: { id: true, limitOverrides: true }, orderBy: { id: 'asc' } });
+      for (const branch of branches) {
+        await tx.clinic.update({ where: { id: branch.id }, data: { plan: 'NETWORK', billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, aiMonthlyLimit: effectiveLimits('NETWORK', branch.limitOverrides).aiRepliesPerMonth } });
+      }
+      const exceptions: string[] = [];
+      if (setupMinor && n.setupPaidAt) exceptions.push('setup_duplicate');
+      if (branches.length !== order.branchIds.length) exceptions.push('scope_changed');
+      return exceptions;
+    }
+    if (kind !== 'SUBSCRIPTION') throw new Error('invalid_billing_purchase');
+    const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { paidUntil: true, networkId: true, limitOverrides: true, setupPaidAt: true } });
+    if (c.networkId) return ['scope_changed'];
+    const plan = order.plan ?? 'START';
+    const from = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
+    const to = addMonth(from);
+    await tx.billingPayment.update({ where: { id: order.id }, data: { periodFrom: from, periodTo: to } });
+    await tx.clinic.update({
+      where: { id: clinicId },
+      data: { plan, billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, aiMonthlyLimit: effectiveLimits(plan, c.limitOverrides).aiRepliesPerMonth, ...(setupMinor && !c.setupPaidAt ? { setupPaidAt: now } : {}) },
+    });
+    return setupMinor && c.setupPaidAt ? ['setup_duplicate'] : [];
   }
 
   // The service owner (PLATFORM_ADMIN_EMAILS): what needs a person's decision about money
@@ -227,7 +428,10 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       const until = c.paidUntil!;
       const graceEnd = new Date(until.getTime() + GRACE_DAYS * DAY);
       const step = now >= graceEnd ? 'LAPSED' : now >= until ? 'PAST_DUE' : 'SOON';
-      if (step !== 'SOON' && c.billingStatus !== step) await this.prisma.clinic.update({ where: { id: c.id }, data: { billingStatus: step } });
+      if (step !== 'SOON' && c.billingStatus !== step) {
+        const changed = await this.prisma.clinic.updateMany({ where: { id: c.id, paidUntil: until, billingStatus: c.billingStatus }, data: { billingStatus: step } });
+        if (!changed.count) continue;
+      }
       const action = `billing.notice.${step.toLowerCase()}`;
       const sent = await this.prisma.auditLog.findFirst({ where: { clinicId: c.id, action, createdAt: { gt: new Date(until.getTime() - 40 * DAY) } }, select: { id: true } });
       if (sent) continue;
@@ -243,7 +447,7 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
   // The network's monthly payment for its current branches plus the standard onboarding once (the first branch). Only the network's owner pays.
   async networkOverview(networkId: string) {
     const n = await this.prisma.network.findUniqueOrThrow({ where: { id: networkId }, include: { clinics: { select: { id: true, name: true, branchSetupQuoteUah: true, branchSetupPaidAt: true }, orderBy: { name: 'asc' } } } });
-    const payments = await this.prisma.billingPayment.findMany({ where: { networkId }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, kind: true, clinicId: true, amountMinor: true, setupMinor: true, status: true, createdAt: true, paidAt: true } });
+    const payments = await this.prisma.billingPayment.findMany({ where: { networkId }, orderBy: { createdAt: 'desc' }, take: 20, select: { ...paymentDetails, clinicId: true } });
     // What the next payment does, shown before paying. The owner's rule (approved 2026-11-16, no proration): to add a branch during a paid period the
     // owner PREPAYS the next network period at the price including it; once that payment is confirmed the new branch gets access at once, and its
     // access until that period starts is complimentary. The payment charges the monthly amount for ALL current branches (plus the first onboarding
@@ -252,7 +456,9 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     // when the next period is already prepaid, or a payment window was opened minutes ago, no new purchase is offered.
     const now = new Date();
     const from = n.paidUntil && n.paidUntil > now ? n.paidUntil : now;
-    const block = await this.networkCheckoutBlock(networkId, n.paidUntil, now);
+    const pending = await this.prisma.billingPayment.findFirst({ where: { networkId, ...monoPending }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+    const networkPending = await this.prisma.billingPayment.count({ where: { networkId, kind: 'NETWORK', ...monoPending } });
+    const block = this.networkAlreadyPrepaid(n.paidUntil, now) ? 'next_period_paid' : networkPending ? 'payment_pending' : null;
     const to = addMonth(from);
     const monthly = networkMonthlyUah(n.clinics.length);
     const states = await this.prisma.clinic.findMany({ where: { networkId }, orderBy: { name: 'asc' }, select: { name: true, plan: true, billingStatus: true, paidUntil: true } });
@@ -277,8 +483,8 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       uncoveredAfterPrepaid: block === 'next_period_paid' ? states.filter((b) => !onNetwork(b)).map((b) => b.name) : [],
     };
     return {
-      configured: !!this.keys(),
-      sandbox: liqpaySandbox(),
+      configured: this.mono.configured,
+      pendingPaymentId: pending?.id ?? null,
       nextPayment,
       status: n.billingStatus,
       paidUntil: n.paidUntil,
@@ -288,47 +494,42 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       setupUah: n.setupPaidAt ? null : SETUP_FEE_UAH,
       // a further branch's onboarding: only an amount the service owner quoted for it can be paid
       branchSetups: n.clinics.filter((c) => c.branchSetupQuoteUah && !c.branchSetupPaidAt).map((c) => ({ clinicId: c.id, name: c.name, quoteUah: c.branchSetupQuoteUah })),
-      checking: payments.some((p) => p.status === 'PENDING' && Date.now() - p.createdAt.getTime() < 30 * 60_000),
       payments,
     };
   }
 
-  async networkCheckout(networkId: string) {
-    const keys = this.keys();
-    if (!keys) throw new BadRequestException('billing_not_configured');
-    const n = await this.prisma.network.findUniqueOrThrow({ where: { id: networkId }, select: { name: true, setupPaidAt: true, clinics: { select: { id: true }, orderBy: { createdAt: 'asc' } } } });
-    if (!n.clinics.length) throw new BadRequestException('network_no_branches');
-    const now = new Date();
-    const paidUntil = (await this.prisma.network.findUniqueOrThrow({ where: { id: networkId }, select: { paidUntil: true } })).paidUntil;
-    const block = await this.networkCheckoutBlock(networkId, paidUntil, now);
-    if (block) throw new BadRequestException(block === 'next_period_paid' ? 'network_next_period_paid' : 'network_payment_pending');
-    const periodFrom = paidUntil && paidUntil > now ? paidUntil : now;
-    const setupMinor = n.setupPaidAt ? 0 : SETUP_FEE_UAH * 100;
-    const amountMinor = networkMonthlyUah(n.clinics.length) * 100 + setupMinor;
-    const orderId = this.orderId(n.clinics[0].id);
-    await this.prisma.billingPayment.create({ data: { clinicId: n.clinics[0].id, networkId, orderId, kind: 'NETWORK', plan: 'NETWORK', amountMinor, setupMinor, periodFrom } });
-    return this.form(orderId, amountMinor, `LANKA: мережа «${n.name}», ${n.clinics.length} філ.${setupMinor ? ' + підключення' : ''}`, keys);
+  networkCheckout(networkId: string, now = new Date()) {
+    return this.purchase({ networkId }, 'NETWORK', now, async (tx) => {
+      const n = await tx.network.findUniqueOrThrow({ where: { id: networkId }, select: { name: true, setupPaidAt: true, paidUntil: true, clinics: { select: { id: true }, orderBy: { createdAt: 'asc' } } } });
+      if (!n.clinics.length) throw new BadRequestException('network_no_branches');
+      if (this.networkAlreadyPrepaid(n.paidUntil, now)) throw new BadRequestException('network_next_period_paid');
+      const periodFrom = n.paidUntil && n.paidUntil > now ? n.paidUntil : now;
+      const setupMinor = n.setupPaidAt ? 0 : SETUP_FEE_UAH * 100;
+      const amountMinor = networkMonthlyUah(n.clinics.length) * 100 + setupMinor;
+      return {
+        order: { clinicId: n.clinics[0].id, networkId, kind: 'NETWORK', plan: 'NETWORK', amountMinor, setupMinor, periodFrom, periodTo: addMonth(periodFrom), branchIds: n.clinics.map((c) => c.id) },
+        description: `LANKA: мережа «${n.name}», ${n.clinics.length} філ.`,
+      };
+    });
   }
 
-  // Why no network purchase is offered now (null: it is). The next period is already prepaid when the paid end lies more than one month ahead
-  // (the current period plus a prepaid one); a payment window opened in the last 15 minutes is waiting for LiqPay's confirmation.
-  private async networkCheckoutBlock(networkId: string, paidUntil: Date | null, now: Date): Promise<'next_period_paid' | 'payment_pending' | null> {
-    if (paidUntil && paidUntil.getTime() > addMonth(now).getTime() + 60_000) return 'next_period_paid';
-    const pending = await this.prisma.billingPayment.count({ where: { networkId, kind: 'NETWORK', status: 'PENDING', createdAt: { gt: new Date(now.getTime() - 15 * 60_000) } } });
-    return pending ? 'payment_pending' : null;
+  // A network may prepay its next period once.
+  private networkAlreadyPrepaid(paidUntil: Date | null, now: Date) {
+    return !!paidUntil && paidUntil.getTime() > addMonth(now).getTime() + 60_000;
   }
 
-  async branchSetupCheckout(networkId: string, clinicId: string) {
-    const keys = this.keys();
-    if (!keys) throw new BadRequestException('billing_not_configured');
-    const c = await this.prisma.clinic.findFirst({ where: { id: clinicId, networkId }, select: { id: true, name: true, branchSetupQuoteUah: true, branchSetupPaidAt: true } });
-    if (!c) throw new BadRequestException('branch_not_found');
-    if (!c.branchSetupQuoteUah || c.branchSetupQuoteUah < BRANCH_SETUP_MIN_UAH) throw new BadRequestException('branch_setup_not_quoted');
-    if (c.branchSetupPaidAt) throw new BadRequestException('branch_setup_paid');
-    const orderId = this.orderId(c.id);
-    const amountMinor = c.branchSetupQuoteUah * 100;
-    await this.prisma.billingPayment.create({ data: { clinicId: c.id, networkId, orderId, kind: 'BRANCH_SETUP', amountMinor } });
-    return this.form(orderId, amountMinor, `LANKA: підключення філіалу «${c.name}»`, keys);
+  branchSetupCheckout(networkId: string, clinicId: string, now = new Date()) {
+    return this.purchase({ networkId, clinicId }, 'BRANCH_SETUP', now, async (tx) => {
+      const c = await tx.clinic.findFirst({ where: { id: clinicId, networkId }, select: { name: true, branchSetupQuoteUah: true, branchSetupPaidAt: true } });
+      if (!c) throw new BadRequestException('branch_not_found');
+      if (!c.branchSetupQuoteUah || c.branchSetupQuoteUah < BRANCH_SETUP_MIN_UAH) throw new BadRequestException('branch_setup_not_quoted');
+      if (c.branchSetupPaidAt) throw new BadRequestException('branch_setup_paid');
+      const amountMinor = c.branchSetupQuoteUah * 100;
+      return {
+        order: { clinicId, networkId, kind: 'BRANCH_SETUP', amountMinor, setupMinor: amountMinor },
+        description: `LANKA: підключення філіалу «${c.name}»`,
+      };
+    });
   }
 
   // A network moves through ACTIVE -> PAST_DUE -> LAPSED like a clinic, and its branches with it; its owners get one reminder per step
@@ -340,8 +541,12 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       const graceEnd = new Date(until.getTime() + GRACE_DAYS * DAY);
       const step = now >= graceEnd ? 'LAPSED' : now >= until ? 'PAST_DUE' : 'SOON';
       if (step !== 'SOON' && n.billingStatus !== step) {
-        await this.prisma.network.update({ where: { id: n.id }, data: { billingStatus: step } });
-        await this.prisma.clinic.updateMany({ where: { networkId: n.id }, data: { billingStatus: step } });
+        const changed = await this.prisma.$transaction(async (tx) => {
+          const network = await tx.network.updateMany({ where: { id: n.id, paidUntil: until, billingStatus: n.billingStatus }, data: { billingStatus: step } });
+          if (network.count) await tx.clinic.updateMany({ where: { networkId: n.id, plan: 'NETWORK' }, data: { billingStatus: step } });
+          return network.count;
+        });
+        if (!changed) continue;
       }
       const action = `billing.network.${step.toLowerCase()}`;
       const anchor = n.clinics[0]?.id;

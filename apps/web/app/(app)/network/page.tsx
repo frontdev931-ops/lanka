@@ -1,11 +1,12 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { api } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
 import { MoneyTotal, currencyCell, fmtDate, fmtNumber, fmtTotals } from '../../../lib/ui';
 import { Alert, Badge, Card, Empty, Loading, PageHeader } from '../../../components/ui';
 import { useConfirm } from '../../../components/ConfirmDialog';
+import { BillingPaymentStatus, type BillingCheckout } from '../../../components/BillingPaymentStatus';
 
 interface NetBranch {
   id: string;
@@ -48,14 +49,13 @@ interface Summary {
 }
 interface Billing {
   configured: boolean;
-  sandbox: boolean;
   status: string;
   paidUntil: string | null;
   branches: number;
   monthlyUah: number;
   setupUah: number | null;
   branchSetups: { clinicId: string; name: string; quoteUah: number }[];
-  checking: boolean;
+  pendingPaymentId: string | null;
   // what the next payment does (the server's rule): the amount now, the month it covers, the renewal after it, who gets paid access with it
   nextPayment: { chargeNowUah: number; monthlyUah: number; setupUah: number | null; coversFrom: string; coversTo: string; renewal: { date: string; amountUah: number }; branchesGettingAccess: string[]; branchesCovered: string[]; complimentaryUntil: string | null; blocked: 'next_period_paid' | 'payment_pending' | null; uncoveredAfterPrepaid: string[] };
 }
@@ -72,12 +72,6 @@ interface Report {
   columns: { key: string; label: string }[];
   rows: Record<string, unknown>[];
 }
-interface Form {
-  url: string;
-  data: string;
-  signature: string;
-}
-
 const PERIODS = [7, 30, 90] as const;
 
 // "Reports and analytics" → "Network" (shown only to a member of a network). Everything here is computed by the server per branch with that branch's own
@@ -106,14 +100,14 @@ export default function NetworkPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
-  const [form, setForm] = useState<Form | null>(null);
-  const formRef = useRef<HTMLFormElement>(null);
+  const [payment, setPayment] = useState<{ networkId: string; id: string } | null>(null);
 
   const loadNets = useCallback(() => {
     api<Net[]>('/billing/networks')
       .then((n) => {
         setNets(n);
-        setNetId((cur) => cur || n[0]?.id || '');
+        const requested = new URLSearchParams(window.location.search).get('network');
+        setNetId((cur) => cur || n.find((net) => net.id === requested)?.id || n[0]?.id || '');
       })
       .catch((e) => setError((e as Error).message));
     api<{ id: string; name: string; role: string }[]>('/auth/clinics').then(setOwn).catch(() => undefined);
@@ -143,8 +137,15 @@ export default function NetworkPage() {
     api<Report>(`/network/${netId}/reports/${reportId}`).then(setReport).catch((e) => setError((e as Error).message));
   }, [netId, reportId]);
   useEffect(() => {
-    if (form) formRef.current?.submit();
-  }, [form]);
+    const query = new URLSearchParams(window.location.search);
+    const networkId = query.get('network');
+    const id = query.get('payment');
+    if (networkId && id) setPayment({ networkId, id });
+  }, []);
+  const refreshPayment = useCallback(() => {
+    if (netId) void api<Billing>(`/billing/network/${encodeURIComponent(netId)}`).then(setBill).catch(() => undefined);
+    loadNets();
+  }, [netId, loadNets]);
 
   const run = async (fn: () => Promise<unknown>, ok?: string) => {
     setBusy(true);
@@ -160,7 +161,14 @@ export default function NetworkPage() {
       setBusy(false);
     }
   };
-  const pay = (path: string) => run(async () => setForm(await api<Form>(path, { method: 'POST' })));
+  const pay = (path: string) => run(async () => {
+    const result = await api<BillingCheckout>(path, { method: 'POST' });
+    if (result.url) window.location.assign(result.url);
+    else {
+      setPayment({ networkId: netId, id: result.id });
+      refreshPayment();
+    }
+  });
   const money = (list: MoneyTotal[]) => fmtTotals(list, t('billing.uah'), t('money.unknown'));
   const pct = (v: number | null) => (v === null ? '—' : `${fmtNumber(v)}%`);
 
@@ -202,6 +210,8 @@ export default function NetworkPage() {
     </div>
   );
   const freeClinics = own.filter((c) => c.role === 'OWNER' && !nets.some((n) => n.branches.some((b) => b.id === c.id)));
+
+  const trackedPayment = payment?.networkId === net?.id ? payment?.id : bill?.pendingPaymentId;
 
   return (
     <>
@@ -373,8 +383,8 @@ export default function NetworkPage() {
 
       {bill && net && (
         <Card title={t('net.billing')}>
-          {bill.sandbox && <Alert tone="warn">{t('billing.sandbox')}</Alert>}
-          {bill.checking && <Alert tone="info">{t('billing.checking')}</Alert>}
+          {!bill.configured && <Alert tone="warn">{t('billing.notConfigured')}</Alert>}
+          {trackedPayment && <BillingPaymentStatus key={net.id + ':' + trackedPayment} path={`/billing/network/${encodeURIComponent(net.id)}/payments/${encodeURIComponent(trackedPayment)}`} onSettled={refreshPayment} />}
           <p className="rule" style={{ marginTop: 0 }}>{t('net.price', { n: bill.branches, sum: fmtNumber(bill.monthlyUah) })}</p>
           <p className="muted" style={{ fontSize: 13 }}>{bill.paidUntil ? t('net.paidUntil', { date: fmtDate(bill.paidUntil) }) : t('net.notPaid')}</p>
           {/* everything the next payment does, before the person pays */}
@@ -405,12 +415,12 @@ export default function NetworkPage() {
           {owner ? (
             <>
               <button type="button" className="btn btn-primary" disabled={busy || !bill.configured || !!bill.nextPayment.blocked} onClick={() => pay(`/billing/network/${net.id}/checkout`)}>
-                {t('net.pay', { sum: fmtNumber(bill.nextPayment.chargeNowUah) })}
+                {t('billing.pay')}
               </button>
               {bill.branchSetups.map((b) => (
                 <div key={b.clinicId} className="toolbar" style={{ marginTop: 10 }}>
                   <span>{t('net.branchSetup', { name: b.name, sum: fmtNumber(b.quoteUah) })}</span>
-                  <button type="button" className="btn" disabled={busy || !bill.configured} onClick={() => pay(`/billing/network/${net.id}/branch-setup/${b.clinicId}`)}>{t('net.payBranchSetup')}</button>
+                  <button type="button" className="btn" disabled={busy || !bill.configured} onClick={() => pay(`/billing/network/${net.id}/branch-setup/${b.clinicId}`)}>{t('billing.pay')}</button>
                 </div>
               ))}
               <p className="muted" style={{ fontSize: 13 }}>{t('net.branchSetupRule')}</p>
@@ -517,12 +527,6 @@ export default function NetworkPage() {
         </Card>
       )}
 
-      {form && (
-        <form ref={formRef} method="POST" action={form.url} acceptCharset="utf-8" style={{ display: 'none' }}>
-          <input type="hidden" name="data" value={form.data} />
-          <input type="hidden" name="signature" value={form.signature} />
-        </form>
-      )}
     </>
   );
 }

@@ -30,9 +30,8 @@ A document for whoever puts LANKA on a hosting provider. What is ready in the co
 | API | `PLATFORM_REQUIRE_2FA` | set to `false` for the temporary exception. Use `true` to restore mandatory platform 2FA |
 | API | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | phone push notifications for staff; generate the pair once with `npm run vapid` in `apps/api`; keep the private key secret |
 | API | `META_APP_SECRET`, `META_VERIFY_TOKEN` | Instagram: the secret of the service's Meta app (checks the signature of every webhook) and a random string you also enter in the Meta webhook settings; without them Instagram messages are ignored |
-| API | `LIQPAY_PUBLIC_KEY`, `LIQPAY_PRIVATE_KEY` | LiqPay merchant keys; without them online payment is off. The payment callback address is `https://lankaclinic.app/backend/billing/liqpay/callback` |
+| API | `MONO_ACQUIRING_TOKEN` | Server-only plata by mono merchant token. See [payment setup and verification](07-mono-billing.md). |
 | API | `BILLING_ENFORCED`, `USD_UAH_RATE` | `BILLING_ENFORCED=false` turns the payment lock off (on by default in production); `USD_UAH_RATE` is no longer used: since 2026-11-12 the one-off connection is a fixed 4,990 UAH |
-| API | `LIQPAY_SANDBOX` | `1` = LiqPay test mode for checking the payment path on a staging server (test cards, nothing charged); ignored when `NODE_ENV=production` |
 | API | (deployment step, website forms) | The build of 2026-11-17 refuses anonymous server-to-server form posts. Before deploying, find the clinics whose website server posts enquiries (production clinics with `leadEnabled = true`); each gets its server secret (owner, Settings → Channels → Website, available on the new build) installed on that server, pointing at `/backend/leads/v1/enquiries`, in an agreed switch-over window right after the deployment, with the site keeping its own copy of enquiries until a test enquiry arrives. Anonymous access is not restored. See `docs/06-website-integration.md`. |
 | API | `WEBSITE_ALLOW_LOCALHOST` | Must stay **unset** in production (it is ignored there anyway). In development, `true` lets `http://localhost` / `http://127.0.0.1` be listed as a website for forms and the chat widget. |
 | API | `AGENT_AUTO_DIALOGS` | optional. Only for the restricted test mode of the autonomous agent (a list `<clinicId>\|<CHANNEL>\|<chatId>,...` set by the service owner). A Pro clinic that switched its agent on itself does not need it |
@@ -90,7 +89,7 @@ The code was tested only on fakes: field names in webhooks and the send call mus
 - The repository should be **private**: it holds policy drafts, the name of the first clinic and the internal documentation.
 - `.env.example` files hold no real values; the only password in the repository is the public development database password `stomat:stomat` (docker-compose, CI, tests). The server refuses to start in production with it.
 - The seed script (`prisma/seed.ts`) creates a user with a known password and refuses to run in production.
-- Production start checks (`common/config.ts`): secrets of 32+ characters, different from each other; https address; a mail key and sender; no development database password; no development switches (`REQUIRE_EMAIL_VERIFICATION=false`, `RATE_LIMIT_IP_MULTIPLIER`); LiqPay keys while the payment lock is on; Meta values consistent.
+- Production start checks (`common/config.ts`): secrets of 32+ characters, different from each other; https address; a mail key and sender; no development database password; no development switches (`REQUIRE_EMAIL_VERIFICATION=false`, `RATE_LIMIT_IP_MULTIPLIER`); Meta values consistent.
 - Keys that appeared in chats or screenshots are reissued before real use (the Cliniccards key was reissued on 2026-10-29); the development `.env` has weaker secrets than production needs and must not be reused there.
 
 ## Backups

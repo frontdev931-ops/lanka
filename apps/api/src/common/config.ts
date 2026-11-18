@@ -23,8 +23,6 @@ export function configProblems(env: NodeJS.ProcessEnv = process.env): string[] {
   // Switches that exist for development and tests only
   if (env.REQUIRE_EMAIL_VERIFICATION === 'false') problems.push('REQUIRE_EMAIL_VERIFICATION=false допустим только в разработке');
   if (Number(env.RATE_LIMIT_IP_MULTIPLIER ?? 1) > 1) problems.push('RATE_LIMIT_IP_MULTIPLIER больше 1 допустим только в тестах: лимиты попыток по адресу ослаблены');
-  // Online payment: while the payment lock is on and there are no LiqPay keys, nobody can pay and every new clinic stays locked out
-  if (env.BILLING_ENFORCED !== 'false' && (!env.LIQPAY_PUBLIC_KEY || !env.LIQPAY_PRIVATE_KEY)) problems.push('Не заданы LIQPAY_PUBLIC_KEY и LIQPAY_PRIVATE_KEY, а блокировка до оплаты включена: новые клиники не смогут оплатить. Задайте ключи или BILLING_ENFORCED=false');
   // Meta: a secret without the verify token (or the other way round) leaves the webhooks deaf; the login needs all three values
   if ((env.META_APP_SECRET || env.META_INSTAGRAM_APP_SECRET) && !env.META_VERIFY_TOKEN) problems.push('META_VERIFY_TOKEN не задан: Meta не сможет подтвердить адрес вебхуков');
   if (env.META_CONFIG_ID && !(env.META_APP_ID && env.META_APP_SECRET)) problems.push('META_CONFIG_ID задан без META_APP_ID и META_APP_SECRET: вход через Facebook не заработает');

@@ -316,6 +316,16 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Онлайн-оплата ещё не настроена',
     en: 'Online payment is not set up yet',
   },
+  billing_payment_pending: {
+    uk: 'Завершіть або перевірте відкритий платіж за тариф перед вибором іншого',
+    ru: 'Завершите или проверьте открытый платёж за тариф перед выбором другого',
+    en: 'Finish or check the open plan payment before choosing another plan',
+  },
+  billing_provider_unavailable: {
+    uk: 'Платіжний сервіс тимчасово недоступний',
+    ru: 'Платёжный сервис временно недоступен',
+    en: 'Payment service temporarily unavailable',
+  },
   fx_unavailable: {
     uk: 'Не вдалося отримати курс долара: спробуйте за кілька хвилин',
     ru: 'Не удалось получить курс доллара: попробуйте через несколько минут',
@@ -588,11 +598,6 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     uk: 'Наступний період мережі вже оплачено. Щоб додати філіал до вже оплаченого періоду, напишіть нам: hello@lankaclinic.app',
     ru: 'Следующий период сети уже оплачен. Чтобы добавить филиал к уже оплаченному периоду, напишите нам: hello@lankaclinic.app',
     en: 'The network’s next period is already paid. To add a branch to an already paid period, write to us: hello@lankaclinic.app',
-  },
-  network_payment_pending: {
-    uk: 'Оплату мережі вже відкрито й вона чекає підтвердження LiqPay. Зачекайте кілька хвилин, щоб не оплатити той самий період двічі',
-    ru: 'Оплата сети уже открыта и ждёт подтверждения LiqPay. Подождите несколько минут, чтобы не оплатить тот же период дважды',
-    en: 'A network payment is already open and waiting for LiqPay’s confirmation. Wait a few minutes so the same period is not paid twice',
   },
   network_not_found: { uk: 'Мережу не знайдено', ru: 'Сеть не найдена', en: 'Network not found' },
   network_branch: { uk: 'Цей філіал оплачується мережею', ru: 'Этот филиал оплачивается сетью', en: 'This branch is paid by its network' },

@@ -75,7 +75,10 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
-    api<Me>('/auth/me').then(setMe).catch(() => undefined);
+    const load = () => api<Me>('/auth/me').then(setMe).catch(() => undefined);
+    void load();
+    window.addEventListener('stomat:me-changed', load);
+    return () => window.removeEventListener('stomat:me-changed', load);
   }, []);
   useEffect(() => {
     if (!canAudit || me?.billing?.blocked) return;

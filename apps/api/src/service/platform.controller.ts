@@ -12,7 +12,7 @@ class ClinicPatchDto {
   @IsOptional() @IsBoolean() suspended?: boolean;
   @IsOptional() @IsObject() limits?: Record<string, unknown>;
   @IsOptional() @IsInt() @Min(0) @Max(1_000_000) aiMonthlyLimit?: number;
-  // Manual billing (a deal outside LiqPay, a correction)
+  // Manual billing (a deal outside online acquiring, a correction)
   @IsOptional() @IsIn(['AWAITING_PAYMENT', 'ACTIVE', 'PAST_DUE', 'LAPSED']) billingStatus?: string;
   @IsOptional() @IsDateString() paidUntil?: string;
   @IsOptional() @IsInt() @Min(0) @Max(1_000_000) aiPurchased?: number;

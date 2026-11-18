@@ -1052,7 +1052,7 @@ model InboundEvent {
   @@index([clinicId, status])
 }
 
-// One LiqPay order. kind: SUBSCRIPTION (first one also carries the setup fee), AI_PACK.
+// One billing order. The first SUBSCRIPTION or NETWORK order can include a setup fee.
 // status: PENDING, PAID, FAILED. The callback is idempotent by orderId.
 model BillingPayment {
   id          String    @id @default(cuid())
@@ -1060,12 +1060,14 @@ model BillingPayment {
   // a network payment (kind NETWORK: the monthly network subscription; BRANCH_SETUP: a quoted branch onboarding); clinicId is then the branch it was
   // started from (NETWORK) or the branch being onboarded (BRANCH_SETUP)
   networkId   String?
-  // NETWORK: the start of the network period this payment buys (one period is granted once, also when two payment windows are both paid)
+  // The paid period or, for an AI pack, the billing period used for its purchase cap.
   periodFrom  DateTime?
+  periodTo    DateTime?
   orderId     String    @unique
   kind        String
   plan        String?
-  // Amount in UAH kopecks (what LiqPay charges)
+  // Currency is numeric ISO 4217. Historical payments were also in UAH.
+  currency    Int       @default(980)
   amountMinor Int
   // The setup fee included in the amount (kopecks), for the receipt
   setupMinor  Int       @default(0)
@@ -1073,11 +1075,20 @@ model BillingPayment {
   packReplies Int       @default(0)
   status      String    @default("PENDING")
   providerRef String?
+  branchIds   String[]  @default([])
+  monoInvoiceId String? @unique
+  monoPageUrl String?
+  monoExpiresAt DateTime?
+  monoModifiedAt DateTime?
+  monoCheckedAt DateTime?
+  refundedMinor Int     @default(0)
   createdAt   DateTime  @default(now())
   paidAt      DateTime?
   clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@index([clinicId, createdAt])
+  @@index([networkId, kind, status])
+  @@index([status, monoCheckedAt])
 }
 
 // One write to the clinic's system. The unique key makes a repeated request return the first result instead of writing again.

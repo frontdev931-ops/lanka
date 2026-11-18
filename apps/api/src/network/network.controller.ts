@@ -200,6 +200,12 @@ export class NetworkBillingController {
     return this.billing.networkOverview(id);
   }
 
+  @Get('network/:id/payments/:paymentId')
+  async payment(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('paymentId') paymentId: string) {
+    const { network } = await this.network.access(u.userId, id);
+    return this.billing.payment(paymentId, { networkId: id }, network.role === 'OWNER');
+  }
+
   @Post('network/:id/checkout')
   @HttpCode(200)
   async checkout(@CurrentUser() u: AuthUser, @Param('id') id: string) {

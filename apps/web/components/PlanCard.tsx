@@ -32,7 +32,9 @@ export function PlanCard() {
 
   const load = useCallback(() => api<Overview>('/service/usage').then(setO).catch((e) => setError((e as Error).message)), []);
   useEffect(() => {
-    load();
+    void load();
+    window.addEventListener('stomat:me-changed', load);
+    return () => window.removeEventListener('stomat:me-changed', load);
   }, [load]);
 
   if (!o) return error ? <Alert tone="error">{error}</Alert> : null;
