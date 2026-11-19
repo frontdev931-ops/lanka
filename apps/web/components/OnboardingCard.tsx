@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { Key, useI18n } from '../lib/i18n';
-import { Card } from './ui';
+import { Badge, Card } from './ui';
 
 interface Step {
   key: string;
@@ -21,6 +21,8 @@ export function OnboardingCard() {
   const { t } = useI18n();
   const [steps, setSteps] = useState<Step[] | null>(null);
   const [complete, setComplete] = useState(false);
+  // PENDING: paid, the launch is being prepared (the paid month starts on the launch day)
+  const [launch, setLaunch] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
   useEffect(() => {
     try {
@@ -28,14 +30,15 @@ export function OnboardingCard() {
     } catch {
       // no storage: the card simply stays
     }
-    api<{ steps: Step[]; complete: boolean }>('/onboarding')
+    api<{ steps: Step[]; complete: boolean; launch?: string | null }>('/onboarding')
       .then((r) => {
         setSteps(r.steps);
+        setLaunch(r.launch ?? null);
         setComplete(r.complete);
       })
       .catch(() => setSteps(null));
   }, []);
-  if (!steps || (complete && hidden) || steps.every((s) => s.done)) return null;
+  if (!steps || (!launch && ((complete && hidden) || steps.every((s) => s.done)))) return null;
   const done = steps.filter((s) => s.done).length;
   return (
     <Card
@@ -59,6 +62,11 @@ export function OnboardingCard() {
         ) : undefined
       }
     >
+      {launch === 'PENDING' && (
+        <p className="rule" style={{ marginTop: 0 }}>
+          <Badge tone="amber">{t('billing.launchPendingBadge')}</Badge> {t('ob.launchPending')}
+        </p>
+      )}
       <p className="rule" style={{ marginTop: 0 }}>{t('ob.intro', { done, total: steps.length })}</p>
       <ul className="agent-steps">
         {steps.map((s) => (

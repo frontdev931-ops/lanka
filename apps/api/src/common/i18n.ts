@@ -321,6 +321,31 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Завершите или проверьте открытый платёж за тариф перед выбором другого',
     en: 'Finish or check the open plan payment before choosing another plan',
   },
+  launch_pending: {
+    uk: 'Запуск уже оплачено й готується. Оплачений місяць почнеться в день запуску',
+    ru: 'Запуск уже оплачен и готовится. Оплаченный месяц начнётся в день запуска',
+    en: 'The launch is already paid and being prepared. The paid month starts on the launch day',
+  },
+  launch_pending_sending: {
+    uk: 'Поки готуємо запуск, повідомлення пацієнтам не надсилаються. Надсилання можна увімкнути після старту оплаченого місяця',
+    ru: 'Пока готовим запуск, сообщения пациентам не отправляются. Отправку можно включить после старта оплаченного месяца',
+    en: 'While the launch is being prepared, nothing is sent to patients. Sending can be switched on after the paid month starts',
+  },
+  launch_not_pending: {
+    uk: 'Клініка не очікує запуску',
+    ru: 'Клиника не ожидает запуска',
+    en: 'The clinic is not waiting for a launch',
+  },
+  launch_payment_missing: {
+    uk: 'Немає підтвердженої оплати запуску без повернення',
+    ru: 'Нет подтверждённой оплаты запуска без возврата',
+    en: 'There is no confirmed launch payment without a refund',
+  },
+  launch_changed: {
+    uk: 'Стан оплати змінився. Оновіть сторінку',
+    ru: 'Состояние оплаты изменилось. Обновите страницу',
+    en: 'The payment state changed. Reload the page',
+  },
   billing_provider_unavailable: {
     uk: 'Платіжний сервіс тимчасово недоступний',
     ru: 'Платёжный сервис временно недоступен',

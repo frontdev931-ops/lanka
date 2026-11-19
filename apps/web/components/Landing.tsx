@@ -423,7 +423,9 @@ export default function Landing({ lang }: { lang: Locale }) {
                   <p className="lp-plan-lead">{p.lead}</p>
                   <div className="lp-price">{p.from && <small>{p.from} </small>}{p.price} <span>{L.pricing.perMonth}</span></div>
                   {p.extra && <p className="lp-plan-extra">{p.extra}</p>}
+                  {p.launch && <p className="lp-plan-extra">{p.launch}</p>}
                   <ul className="lp-checks">{p.lines.map((l) => <li key={l}><Icon name="check" size={18} />{l}</li>)}</ul>
+                  {p.limits && <ul className="lp-plan-limits">{p.limits.map((l) => <li key={l}>{l}</li>)}</ul>}
                   {p.note && <p className="lp-plan-note">{p.note}</p>}
                   {/* billing is not changed yet: every offer leads to the request form, not to a payment */}
                   <button type="button" className={`btn${p.note ? '' : ' btn-primary'}`} onClick={() => setContact(true)}>{p.cta ?? L.pricing.cta}</button>
@@ -438,6 +440,8 @@ export default function Landing({ lang }: { lang: Locale }) {
               </div>
               <div>
                 <ul className="lp-checks">{L.pricing.setup.lines.map((l) => <li key={l}><Icon name="check" size={18} />{l}</li>)}</ul>
+                <b className="lp-setup-sub">{L.pricing.setup.proT}</b>
+                <ul className="lp-checks">{L.pricing.setup.pro.map((l) => <li key={l}><Icon name="check" size={18} />{l}</li>)}</ul>
                 <p className="lp-small">{L.pricing.setup.other}</p>
               </div>
             </div>

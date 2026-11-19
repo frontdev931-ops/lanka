@@ -113,7 +113,7 @@ export function IntegrationCard() {
       {status?.lastRun?.status === 'FAILED' && !running && <Alert tone="warn">{t(`int.err.${status.lastRun.errorKind ?? 'other'}`)}</Alert>}
 
       <Card
-        title="Cliniccards"
+        title={t('int.cardTitle')}
         actions={
           <>
             <Badge tone={state.tone}>{state.label}</Badge>

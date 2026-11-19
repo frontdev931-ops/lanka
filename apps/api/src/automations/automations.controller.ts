@@ -94,6 +94,8 @@ export class AutomationsController {
   async settings(@CurrentUser() u: AuthUser, @Body() dto: SettingsDto) {
     const data = { ...(dto.autoSendService !== undefined ? { autoSendService: dto.autoSendService } : {}), ...(dto.sendingEnabled !== undefined ? { sendingEnabled: dto.sendingEnabled } : {}), ...(dto.assumeConsent !== undefined ? { assumeConsent: dto.assumeConsent } : {}) };
     if (!Object.keys(data).length) throw new BadRequestException('nothing_to_change');
+    // while the launch is being prepared nothing is sent to patients: the sending switch opens after the paid month starts
+    if (dto.sendingEnabled && (await this.prisma.clinic.findUniqueOrThrow({ where: { id: u.clinicId }, select: { billingStatus: true } })).billingStatus === 'LAUNCH_PENDING') throw new BadRequestException('launch_pending_sending');
     const c = await this.prisma.clinic.update({ where: { id: u.clinicId }, data, select: { autoSendService: true, sendingEnabled: true, assumeConsent: true } });
     await this.prisma.auditLog.create({ data: { clinicId: u.clinicId, userId: u.userId, action: 'automation.settings', details: data } });
     return c;

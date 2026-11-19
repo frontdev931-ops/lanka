@@ -1,6 +1,6 @@
 import type { Locale } from './i18n';
 
-// Text of the public landing page. Prices and limits repeat apps/api/src/service/plans.ts (PLANS, AI_PACK, SETUP_FEE_UAH): change both together.
+// Text of the public landing page. Prices and limits repeat apps/api/src/service/plans.ts (PLANS, LAUNCH_FEE_UAH, AI_PACK, NETWORK_PRICE): change both together.
 // Rules for this text:
 //   - benefits are what LANKA lets a clinic do, never measured results (there are no validated conversion, savings or ROI figures);
 //   - three levels are kept apart: standard features; features that depend on a channel, a plan, a permission or controlled activation (said beside
@@ -52,7 +52,7 @@ export interface LandingText {
     ready: { icons: ChannelIconKey[]; name: string; what: string; note?: string }[];
     customTitle: string;
     custom: { t: string; d: string }[];
-    // standard help with the start (part of the setup fee), apart from the individual work
+    // standard help with the start (part of the one-time launch), apart from the individual work
     onboarding: { title: string; items: string[]; note: string };
     support: { t: string; d: string; write: string; call: string };
     journeyLabel: string;
@@ -65,10 +65,11 @@ export interface LandingText {
     sub: string;
     perMonth: string;
     // from: a "from" mark before the price; note: a line under the list (the network offer is individual work, not yet a product)
-    plans: { name: string; price: string; from?: string; extra?: string; lead: string; lines: string[]; note?: string; cta?: string }[];
+    // launch: the one-time launch and the first payment under the price; lines: the benefits first; limits: below them, smaller
+    plans: { name: string; price: string; from?: string; extra?: string; launch?: string; lead: string; lines: string[]; limits?: string[]; note?: string; cta?: string }[];
     cta: string;
-    // the one-time setup is apart from the subscription: price, what it includes, what is priced separately
-    setup: { t: string; price: string; label: string; next: string; lines: string[]; other: string };
+    // the one-time launch (2026-11-19): Start's work (lines), what Pro adds (proT, pro), when the paid month starts (next), what is quoted apart (other)
+    setup: { t: string; price: string; label: string; next: string; lines: string[]; proT: string; pro: string[]; other: string };
     pack: { t: string; d: string };
     custom: { t: string; d: string };
     details: { summary: string; items: string[] };
@@ -169,7 +170,7 @@ const uk: LandingText = {
       { t: 'Інша медична система', d: 'Інша система обліку чи джерело даних — за наявності API або вивантаження.' },
       { t: 'Ваші звіти й процеси', d: 'Власні звіти, правила повідомлень і порядок роботи команди.' },
     ],
-    onboarding: { title: 'Допоможемо налаштувати й почати роботу', items: ['Підключимо Cliniccards і завантажимо дані', 'Налаштуємо обрані канали: Telegram-бот, а на «Про» — Instagram і Messenger', 'Допоможемо підготувати знання клініки для відповідей ШІ', 'Покажемо команді, де звіти, розмови й заявки'], note: 'Входить у підключення. Підключення наявних форм можна замовити в налаштуваннях. Доробку сайту, нестандартні форми й інші системи оцінюємо окремо.' },
+    onboarding: { title: 'Допоможемо налаштувати й почати роботу', items: ['Підключимо Cliniccards і завантажимо дані', 'Налаштуємо обрані канали: Telegram-бот, а на «Про» — Instagram і Messenger', 'Допоможемо підготувати знання клініки для відповідей ШІ', 'Покажемо команді, де звіти, розмови й заявки'], note: 'Входить у разовий запуск. Підключення наявних форм можна замовити в налаштуваннях. Доробку сайту, нестандартні форми й інші системи оцінюємо окремо.' },
     support: { t: 'Підтримка, до якої можна звернутися', d: 'Допоможемо з налаштуваннями, відповімо на запитання й розберемося, якщо щось не працює.', write: 'Написати', call: 'Замовити дзвінок' },
     journeyLabel: 'Як це має працювати із сайтом',
     journey: ['Заявка із сайту', 'Звернення в LANKA', 'Опрацювання командою', 'Запис'],
@@ -181,12 +182,12 @@ const uk: LandingText = {
     sub: 'Одна ціна на клініку, без оплати за кожного пацієнта.',
     perMonth: 'грн/міс',
     plans: [
-      { name: 'Старт', price: '1 990', lead: 'Звіти, повторні візити й Telegram для невеликої клініки.', lines: ['До 5 користувачів LANKA (не лікарів у Cliniccards)', '2 000 повідомлень пацієнтам і 500 відповідей ШІ на місяць', 'Готові звіти, воронка, експорт', 'Telegram: листування, заявки, нагадування, чернетки ШІ', 'Заявки з форм сайту', 'Щотижневе зведення'] },
-      { name: 'Про', price: '3 990', lead: 'ШІ-адміністратор, який опрацьовує звернення й допомагає довести їх до запису, плюс Instagram і Messenger.', lines: ['До 30 користувачів', '10 000 повідомлень і 3 000 відповідей ШІ на місяць', 'Усе зі «Старту»', 'ШІ-адміністратор в Instagram і Messenger: клініка вмикає його сама після налаштування', 'Instagram і Facebook Messenger', 'ШІ-помічник керівника: звіти за доступними даними', 'Щоденне зведення й сигнали'] },
+      { name: 'Старт', price: '1 990', launch: '+ 4 990 грн разовий запуск · перша оплата 6 980 грн', lead: 'Контроль клініки та повторних візитів.', lines: ['Готові звіти й конструктор звітів з експортом в Excel і PDF', 'Воронка пацієнтів: хто не дійшов до лікування й кому час на повторний візит', 'Заявки з форм вашого сайту в одному журналі', 'Telegram-бот: нагадування про візити, листування й чернетки відповідей ШІ', 'Щотижневе зведення для керівника'], limits: ['До 5 користувачів LANKA (облікові записи команди, не лікарі з Cliniccards)', '2 000 повідомлень пацієнтам і 500 відповідей ШІ на місяць'] },
+      { name: 'Про', price: '4 990', launch: '+ 4 990 грн разовий запуск · перша оплата 9 980 грн', lead: 'Обробка звернень з ШІ та контроль роботи клініки.', lines: ['ШІ-адміністратор у Telegram, Instagram і Messenger відповідає пацієнтам і готує заявку на запис; власник вмикає його після налаштування', 'Розмови з усіх каналів в одній скриньці команди, з передачею людині', 'ШІ-помічник керівника: питання про дані клініки, відповідь звітом', 'Щоденне зведення й сигнали керівнику про відхилення', 'Усе, що є у «Старті»'], limits: ['До 30 користувачів LANKA', '10 000 повідомлень і 3 000 відповідей ШІ на місяць', 'Instagram і Messenger — після підключення сторінок клініки в Meta'] },
       { name: 'Мережа', price: '7 990', from: 'від', extra: '2 філіали; кожен наступний — +2 990 грн/міс', lead: 'Для клінік із кількома філіалами.', lines: ['«Про» для кожного філіалу', 'Спільна аналітика й порівняння філіалів', 'Звіти й доступи по мережі'], note: 'Індивідуальне впровадження. Склад і строки погоджуємо до оплати. Мережеві можливості ще не готові до самостійного підключення.', cta: 'Обговорити підключення' },
     ],
     cta: 'Обговорити підключення',
-    setup: { t: 'Разове підключення', price: '4 990 грн', label: 'за одну клініку, окремо від щомісячної підписки', next: 'Наступний філіал — від 2 990 грн за тієї самої системи й типового налаштування.', lines: ['Стандартна інтеграція', 'Налаштування каналів і функцій, доступних за вашим тарифом', 'Допомога зі стартом', 'Навчання команди'], other: 'Доробка сайту, нестандартна інтеграція форм, інші системи й індивідуальні доробки оцінюються окремо.' },
+    setup: { t: 'Разовий запуск', price: '4 990 грн', label: 'за одну клініку, однаково для «Старту» і «Про», окремо від підписки', next: 'Оплачений місяць починається в день запуску, який погоджуємо з клінікою, а не в день оплати. Після запуску підписка продовжується без повторної оплати запуску.', lines: ['Підключення Cliniccards вашої клініки й перевірка перших даних', 'Telegram і стандартні нагадування', 'Погоджені наявні форми одного сайту через підтримуване під’єднання', 'Одна зустріч із командою й перевірка запуску'], proT: '«Про» додатково: стандартне налаштування агента в погодженому обсязі', pro: ['Знання для ШІ-адміністратора й погоджені послуги', 'Канали, доступні в тарифі', 'Передача розмови людині й перевірка погоджених сценаріїв', 'Зведення й сигнали для керівника'], other: 'Нестандартні інтеграції, доробку сайту й власні сценарії оцінюємо окремо. Наступний філіал мережі — від 2 990 грн за тієї самої системи й типового налаштування.' },
     pack: { t: 'Додаткові відповіді ШІ — 500 за 390 грн', d: 'Купуються в кабінеті й не згоряють.' },
     custom: { t: 'Індивідуальне підключення', d: 'Доробка сайту, нестандартні форми, рекламні форми, інша система: ціну називаємо після оцінки.' },
     details: {
@@ -316,7 +317,7 @@ const ru: LandingText = {
       { t: 'Другая медицинская система', d: 'Другая система учёта или источник данных — при наличии API или выгрузки.' },
       { t: 'Ваши отчёты и процессы', d: 'Собственные отчёты, правила сообщений и порядок работы команды.' },
     ],
-    onboarding: { title: 'Поможем настроить и начать работу', items: ['Подключим Cliniccards и загрузим данные', 'Настроим выбранные каналы: Telegram-бот, а на «Про» — Instagram и Messenger', 'Поможем подготовить знания клиники для ответов ИИ', 'Покажем команде, где отчёты, разговоры и заявки'], note: 'Входит в подключение. Подключение существующих форм можно заказать в настройках. Доработку сайта, нестандартные формы и другие системы оцениваем отдельно.' },
+    onboarding: { title: 'Поможем настроить и начать работу', items: ['Подключим Cliniccards и загрузим данные', 'Настроим выбранные каналы: Telegram-бот, а на «Про» — Instagram и Messenger', 'Поможем подготовить знания клиники для ответов ИИ', 'Покажем команде, где отчёты, разговоры и заявки'], note: 'Входит в разовый запуск. Подключение существующих форм можно заказать в настройках. Доработку сайта, нестандартные формы и другие системы оцениваем отдельно.' },
     support: { t: 'Поддержка, к которой можно обратиться', d: 'Поможем с настройками, ответим на вопросы и разберёмся, если что-то не работает.', write: 'Написать', call: 'Заказать звонок' },
     journeyLabel: 'Как это должно работать с сайтом',
     journey: ['Заявка с сайта', 'Обращение в LANKA', 'Обработка командой', 'Запись'],
@@ -328,12 +329,12 @@ const ru: LandingText = {
     sub: 'Одна цена на клинику, без оплаты за каждого пациента.',
     perMonth: 'грн/мес',
     plans: [
-      { name: 'Старт', price: '1 990', lead: 'Отчёты, повторные визиты и Telegram для небольшой клиники.', lines: ['До 5 пользователей LANKA (не врачей в Cliniccards)', '2 000 сообщений пациентам и 500 ответов ИИ в месяц', 'Готовые отчёты, воронка, экспорт', 'Telegram: переписка, заявки, напоминания, черновики ИИ', 'Заявки из форм сайта', 'Еженедельная сводка'] },
-      { name: 'Про', price: '3 990', lead: 'ИИ-администратор, который обрабатывает обращения и помогает довести их до записи, плюс Instagram и Messenger.', lines: ['До 30 пользователей', '10 000 сообщений и 3 000 ответов ИИ в месяц', 'Всё из «Старта»', 'ИИ-администратор в Instagram и Messenger: клиника включает его сама после настройки', 'Instagram и Facebook Messenger', 'ИИ-помощник руководителя: отчёты по доступным данным', 'Ежедневная сводка и сигналы'] },
+      { name: 'Старт', price: '1 990', launch: '+ 4 990 грн разовый запуск · первая оплата 6 980 грн', lead: 'Контроль клиники и повторных визитов.', lines: ['Готовые отчёты и конструктор отчётов с экспортом в Excel и PDF', 'Воронка пациентов: кто не дошёл до лечения и кому пора на повторный визит', 'Заявки из форм вашего сайта в одном журнале', 'Telegram-бот: напоминания о визитах, переписка и черновики ответов ИИ', 'Еженедельная сводка для руководителя'], limits: ['До 5 пользователей LANKA (учётные записи команды, не врачи из Cliniccards)', '2 000 сообщений пациентам и 500 ответов ИИ в месяц'] },
+      { name: 'Про', price: '4 990', launch: '+ 4 990 грн разовый запуск · первая оплата 9 980 грн', lead: 'Обработка обращений с ИИ и контроль работы клиники.', lines: ['ИИ-администратор в Telegram, Instagram и Messenger отвечает пациентам и готовит заявку на запись; владелец включает его после настройки', 'Разговоры из всех каналов в одном ящике команды, с передачей человеку', 'ИИ-помощник руководителя: вопрос о данных клиники, ответ отчётом', 'Ежедневная сводка и сигналы руководителю об отклонениях', 'Всё, что есть в «Старте»'], limits: ['До 30 пользователей LANKA', '10 000 сообщений и 3 000 ответов ИИ в месяц', 'Instagram и Messenger — после подключения страниц клиники в Meta'] },
       { name: 'Сеть', price: '7 990', from: 'от', extra: '2 филиала; каждый следующий — +2 990 грн/мес', lead: 'Для клиник с несколькими филиалами.', lines: ['«Про» для каждого филиала', 'Общая аналитика и сравнение филиалов', 'Отчёты и доступы по сети'], note: 'Индивидуальное внедрение. Состав и сроки согласуем до оплаты. Сетевые возможности ещё не готовы к самостоятельному подключению.', cta: 'Обсудить подключение' },
     ],
     cta: 'Обсудить подключение',
-    setup: { t: 'Разовое подключение', price: '4 990 грн', label: 'за одну клинику, отдельно от ежемесячной подписки', next: 'Следующий филиал — от 2 990 грн при той же системе и типовой настройке.', lines: ['Стандартная интеграция', 'Настройка каналов и функций, доступных по вашему тарифу', 'Помощь со стартом', 'Обучение команды'], other: 'Доработка сайта, нестандартная интеграция форм, другие системы и индивидуальные доработки оцениваются отдельно.' },
+    setup: { t: 'Разовый запуск', price: '4 990 грн', label: 'за одну клинику, одинаково для «Старта» и «Про», отдельно от подписки', next: 'Оплаченный месяц начинается в день запуска, который согласуем с клиникой, а не в день оплаты. После запуска подписка продлевается без повторной оплаты запуска.', lines: ['Подключение Cliniccards вашей клиники и проверка первых данных', 'Telegram и стандартные напоминания', 'Согласованные существующие формы одного сайта через поддерживаемое подключение', 'Одна встреча с командой и проверка запуска'], proT: '«Про» дополнительно: стандартная настройка агента в согласованном объёме', pro: ['Знания для ИИ-администратора и согласованные услуги', 'Каналы, доступные в тарифе', 'Передача разговора человеку и проверка согласованных сценариев', 'Сводка и сигналы для руководителя'], other: 'Нестандартные интеграции, доработку сайта и собственные сценарии оцениваем отдельно. Следующий филиал сети — от 2 990 грн при той же системе и типовой настройке.' },
     pack: { t: 'Дополнительные ответы ИИ — 500 за 390 грн', d: 'Покупаются в кабинете и не сгорают.' },
     custom: { t: 'Индивидуальное подключение', d: 'Доработка сайта, нестандартные формы, рекламные формы, другая система: цену называем после оценки.' },
     details: {
@@ -463,7 +464,7 @@ const en: LandingText = {
       { t: 'Another practice system', d: 'Another records system or data source, if it has an API or an export.' },
       { t: 'Your reports and processes', d: 'Custom reports, messaging rules and team workflows.' },
     ],
-    onboarding: { title: 'We help you set up and get started', items: ['We connect Cliniccards and load the data', 'We set up the channels you choose: the Telegram bot, and on Pro also Instagram and Messenger', 'We help prepare the clinic’s information for AI replies', 'We show the team where reports, conversations and requests are'], note: 'Included in the setup fee. You can request help connecting existing forms in Settings. We quote separately for website changes, non-standard forms and other systems.' },
+    onboarding: { title: 'We help you set up and get started', items: ['We connect Cliniccards and load the data', 'We set up the channels you choose: the Telegram bot, and on Pro also Instagram and Messenger', 'We help prepare the clinic’s information for AI replies', 'We show the team where reports, conversations and requests are'], note: 'Included in the one-time launch. You can request help connecting existing forms in Settings. We quote separately for website changes, non-standard forms and other systems.' },
     support: { t: 'Support you can reach', d: 'We help with settings, answer questions and look into it when something does not work.', write: 'Write to us', call: 'Request a call' },
     journeyLabel: 'How it should work with your website',
     journey: ['Website request', 'Inquiry in LANKA', 'Handled by the team', 'Appointment'],
@@ -475,12 +476,12 @@ const en: LandingText = {
     sub: 'One price per clinic, no fee per patient.',
     perMonth: 'UAH/mo',
     plans: [
-      { name: 'Start', price: '1 990', lead: 'Reports, repeat visits and Telegram for a smaller clinic.', lines: ['Up to 5 LANKA users (not the doctors in Cliniccards)', '2,000 messages to patients and 500 AI replies a month', 'Ready reports, the funnel, exports', 'Telegram: conversations, requests, reminders, AI drafts', 'Website form enquiries', 'Weekly summary'] },
-      { name: 'Pro', price: '3 990', lead: 'An AI front desk that handles inquiries and helps them reach a booking, plus Instagram and Messenger.', lines: ['Up to 30 users', '10,000 messages and 3,000 AI replies a month', 'Everything in Start', 'AI front desk in Instagram and Messenger: the clinic turns it on itself after setup', 'Instagram and Facebook Messenger', 'Manager’s AI assistant: reports from the available data', 'Daily summary and signals'] },
+      { name: 'Start', price: '1 990', launch: '+ 4,990 UAH one-time launch · first payment 6,980 UAH', lead: 'Control of the clinic and repeat visits.', lines: ['Ready reports and a report builder with Excel and PDF export', 'The patient funnel: who did not reach treatment and who is due a repeat visit', 'Enquiries from your website forms in one journal', 'Telegram bot: visit reminders, conversations and AI reply drafts', 'A weekly summary for the manager'], limits: ['Up to 5 LANKA users (team accounts, not the doctors from Cliniccards)', '2,000 messages to patients and 500 AI replies a month'] },
+      { name: 'Pro', price: '4 990', launch: '+ 4,990 UAH one-time launch · first payment 9,980 UAH', lead: 'AI handling of enquiries and control of the clinic’s work.', lines: ['AI front desk in Telegram, Instagram and Messenger answers patients and prepares a booking request; the owner turns it on after setup', 'Conversations from all channels in one team inbox, with handoff to a person', 'Manager’s AI assistant: a question about the clinic’s data, answered with a report', 'A daily summary and signals to the manager about deviations', 'Everything in Start'], limits: ['Up to 30 LANKA users', '10,000 messages and 3,000 AI replies a month', 'Instagram and Messenger once the clinic’s pages are connected in Meta'] },
       { name: 'Network', price: '7 990', from: 'from', extra: '2 branches; each further one +2,990 UAH/mo', lead: 'For clinics with several branches.', lines: ['Pro for every branch', 'Shared analytics and branch comparison', 'Reports and access across the network'], note: 'Individual implementation. We agree the scope and timing before payment. The network features are not yet ready for self-service.', cta: 'Discuss a connection' },
     ],
     cta: 'Discuss a connection',
-    setup: { t: 'One-time setup', price: '4 990 UAH', label: 'per clinic, separate from the monthly subscription', next: 'Each further branch from 2,990 UAH with the same system and a standard setup.', lines: ['Standard integration', 'Setting up the channels and features your plan includes', 'Help getting started', 'Team training'], other: 'Website changes, non-standard form integrations, other systems and individual customisation are assessed separately.' },
+    setup: { t: 'One-time launch', price: '4,990 UAH', label: 'per clinic, the same for Start and Pro, separate from the subscription', next: 'The paid month starts on the launch day we agree with the clinic, not on the payment day. After the launch the subscription renews with no launch fee again.', lines: ['Connecting your clinic’s Cliniccards and checking the first data', 'Telegram and the standard reminders', 'The agreed existing forms of one website through the supported connection', 'One session with the team and a launch check'], proT: 'Pro also: the standard agent setup within the agreed scope', pro: ['Knowledge for the AI front desk and the agreed services', 'The channels your plan includes', 'Handoff to a person and a check of the agreed scenarios', 'The manager’s summary and signals'], other: 'Non-standard integrations, website changes and custom scenarios are quoted separately. A further network branch from 2,990 UAH with the same system and a standard setup.' },
     pack: { t: 'Extra AI replies: 500 for 390 UAH', d: 'Bought in the workspace; they do not expire.' },
     custom: { t: 'Individual connection', d: 'Website changes, non-standard forms, ad forms, another system: priced after an assessment.' },
     details: {

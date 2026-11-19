@@ -1,6 +1,7 @@
-import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Patch, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, NotFoundException, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
 import { assertAutoServiceSet, configuredAutoServiceIds } from '../automations/agent-auto-gate';
+import { BillingService, launchEligible } from '../billing/billing.service';
 import { AuthGuard, AuthUser, CurrentUser } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLAN_KEYS, PLANS, effectiveLimits, monthStart } from './plans';
@@ -35,7 +36,10 @@ class ContactHandledDto {
 @Controller('platform')
 @UseGuards(AuthGuard, PlatformAdminGuard)
 export class PlatformController {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private billing: BillingService,
+  ) {}
 
   @Get('clinics')
   async clinics() {
@@ -48,6 +52,11 @@ export class PlatformController {
       this.prisma.aiUsage.groupBy({ by: ['clinicId'], where: { ok: true, createdAt: { gte: since } }, _count: true, _sum: { inputTokens: true, outputTokens: true } }),
       this.prisma.integration.findMany({ where: { provider: 'CLINICCARDS' }, select: { clinicId: true, lastSyncAt: true } }),
     ]);
+    // A clinic preparing its launch whose launch payment was partly refunded has no eligible payment left: support resolves the payment (REVIEW)
+    const pendingIds = clinics.filter((c) => c.billingStatus === 'LAUNCH_PENDING').map((c) => c.id);
+    const eligible = new Set(pendingIds.length
+      ? (await this.prisma.billingPayment.findMany({ where: launchEligible({ in: pendingIds }), select: { clinicId: true } })).map((p) => p.clinicId)
+      : []);
     const by = <T extends { clinicId: string }>(rows: T[]) => new Map(rows.map((r) => [r.clinicId, r]));
     const m = by(members), pa = by(patients), me = by(messages), a = by(ai), sy = by(sync);
     return clinics.map((c) => ({
@@ -57,6 +66,8 @@ export class PlatformController {
       plan: c.plan,
       bookingWriteEnabled: c.bookingWriteEnabled,
       billingStatus: c.billingStatus,
+      // the launch payment was partly refunded before the start: the month cannot be started until the payment is resolved
+      launchReview: c.billingStatus === 'LAUNCH_PENDING' && !eligible.has(c.id),
       paidUntil: c.paidUntil,
       aiPurchased: c.aiPurchased,
       limits: effectiveLimits(c.plan, c.limitOverrides),
@@ -84,6 +95,19 @@ export class PlatformController {
     const r = await this.prisma.contactRequest.updateMany({ where: { id, clinicId: null }, data: { handledAt: dto.handled ? new Date() : null } });
     if (!r.count) throw new NotFoundException();
     return { ok: true };
+  }
+
+  // A new clinic paid its plan with the launch (LAUNCH_PENDING): the service owner starts its first paid month after the launch is agreed with
+  // the clinic. GET shows the dates it would get now; POST starts it (once; a repeat returns the started month).
+  @Get('clinics/:id/launch')
+  launchPreview(@Param('id') id: string) {
+    return this.billing.launchPreview(id);
+  }
+
+  @Post('clinics/:id/launch')
+  @HttpCode(200)
+  launch(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.billing.activateLaunch(id, u.userId);
   }
 
   @Get('plans')

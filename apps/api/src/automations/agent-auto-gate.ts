@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { accessBlocked, billingEnforced, hasFeature } from '../service/plans';
+import { accessBlocked, billingEnforced, hasFeature, launchPending } from '../service/plans';
 
 export type AutoDenied = 'web_not_included' | 'agent_mode_off' | 'auto_off' | 'dialog_not_listed' | 'sending_off' | 'not_cabinets' | 'no_test_service' | 'clinic_suspended' | 'channel_not_supported' | 'plan_without_agent' | 'billing_blocked';
 
@@ -60,6 +60,8 @@ export class AgentAutoGate {
   async denied(clinicId: string, channel: string, chatId: string): Promise<AutoDenied | null> {
     const c = await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { aiAgentMode: true, aiAgentAuto: true, agentAutoScope: true, sendingEnabled: true, scheduleMode: true, suspendedAt: true, plan: true, billingStatus: true, paidUntil: true, isDemo: true, aiWebAuto: true } });
     if (!c) return 'auto_off';
+    // the launch is being prepared: the paid month has not started, the agent never sends (in any scope)
+    if (launchPending(c)) return 'billing_blocked';
     if (c.agentAutoScope === 'CLINIC') {
       if (!hasFeature(c.plan, 'patient_agent')) return 'plan_without_agent';
       if (billingEnforced() && accessBlocked(c)) return 'billing_blocked';

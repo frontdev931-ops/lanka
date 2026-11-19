@@ -175,8 +175,10 @@ export class AgentApprovalService {
     const cancelStep = !!snap.step && CANCEL_STEPS.includes(snap.step.kind);
     if (cancelStep && !auto) return refuse('not_allowed');
 
-    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { sendingEnabled: true, aiAgentMode: true } });
+    const clinic = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { sendingEnabled: true, aiAgentMode: true, billingStatus: true } });
     if (!clinic.aiAgentMode) return refuse('agent_mode_off');
+    // while the launch is being prepared an approved draft executes nothing: no message and no visit in the clinic's system
+    if (clinic.billingStatus === 'LAUNCH_PENDING') return refuse(visit ? 'write_disabled' : 'sending_disabled');
     if (!clinic.sendingEnabled && !visit) return refuse('sending_disabled');
     const ch = await this.prisma.patientChannel.findFirst({ where: { clinicId, channel: row.channel, externalId: row.chatId }, select: { optedOutAt: true, patientId: true } });
     if (ch?.optedOutAt && !visit) return refuse('opted_out');

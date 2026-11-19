@@ -12,7 +12,7 @@ export type Feature = 'ai_autoreply' | 'multi_channel' | 'advanced_analytics' | 
 
 export const PLANS: Record<string, { label: string; limits: Limits; priceUah: number; features: Feature[] }> = {
   START: { label: 'Start', limits: { users: 5, messagesPerMonth: 2000, aiRepliesPerMonth: 500 }, priceUah: 1990, features: [] },
-  PRO: { label: 'Pro', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 3990, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent'] },
+  PRO: { label: 'Pro', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 4990, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent'] },
   // A branch of a paid network: the Pro capabilities and Pro allowances, per branch (no shared pool); paid by the network (NETWORK_PRICE below)
   NETWORK: { label: 'Network', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 0, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent'] },
   // Individual terms: only the overrides apply (a missing one falls back to the Pro level); everything is included
@@ -23,8 +23,18 @@ export const PLAN_KEYS = Object.keys(PLANS);
 // Plans a clinic can buy by itself
 export const SELLABLE_PLANS = ['START', 'PRO'];
 
-// The one-time standard onboarding of a clinic, a fixed sum in hryvnias (paid with the first month)
+// The one-time standard onboarding of a NETWORK (its first branch), a fixed sum in hryvnias (paid with the first network month)
 export const SETUP_FEE_UAH = 4990;
+// The one-time assisted launch of a single clinic (2026-11-19, corrected the same day: one fee for both plans), paid with the first month and
+// charged once per clinic (Clinic.setupPaidAt): 4 990 UAH. Start: Cliniccards, Telegram and reminders, agreed website forms, one team session;
+// Pro also the standard agent setup within the agreed scope (knowledge, the plan's channels, handoff and scenario checks, the digest and
+// signals). A plan change after the launch never charges it again. Custom integrations and development are quoted separately.
+export const LAUNCH_FEE_UAH: Record<string, number> = { START: 4990, PRO: 4990 };
+export const launchFeeUah = (plan: string) => LAUNCH_FEE_UAH[plan] ?? LAUNCH_FEE_UAH.START;
+// The monthly price a clinic pays for a plan: the price stored when it paid for that plan (Clinic.renewalPlan/renewalPriceUah; clinics that
+// paid before 2026-11-19 keep the price list of that time, set by the migration), otherwise the current list price. Never by name or email.
+export const monthlyPriceUah = (c: { renewalPlan: string | null; renewalPriceUah: number | null }, plan: string) =>
+  c.renewalPlan === plan && c.renewalPriceUah ? c.renewalPriceUah : PLANS[plan].priceUah;
 // The network offer (2026-11-16): 7 990 UAH a month includes two branches, each further branch 2 990 UAH a month; the first onboarding is the standard
 // one (SETUP_FEE_UAH); a further comparable branch's onboarding is quoted individually, from BRANCH_SETUP_MIN_UAH (never charged without a quote)
 export const NETWORK_PRICE = { baseUah: 7990, includedBranches: 2, extraBranchUah: 2990 };
@@ -52,6 +62,10 @@ export const periodStart = (c: { periodStartsAt: Date | null }, now = new Date()
 
 // Billing is enforced in production, and in tests that switch it on
 export const billingEnforced = () => (process.env.BILLING_ENFORCED ? process.env.BILLING_ENFORCED === 'true' : process.env.NODE_ENV === 'production');
+
+// LAUNCH_PENDING: the first payment (plan + one month + launch) is confirmed, the launch is being prepared. The clinic may set itself up, but the
+// paid month has not started and nothing goes out to patients until the service owner starts it (POST /platform/clinics/:id/launch).
+export const launchPending = (c: { billingStatus: string }) => c.billingStatus === 'LAUNCH_PENDING';
 
 // A clinic is locked out of real data before the first payment and after the grace days. Demo clinics (isDemo) are never locked.
 export function accessBlocked(c: { billingStatus: string; paidUntil: Date | null; isDemo?: boolean }, now = new Date()): boolean {

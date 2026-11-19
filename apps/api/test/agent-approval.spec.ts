@@ -263,6 +263,10 @@ describe('перегляд і одобрення чернетки агента �
     const c = await priceDraft();
     await prisma.clinic.update({ where: { id: c.c.clinicId }, data: { aiAgentMode: false } });
     expect((await approve(c.c, c.v, 'SEND_TIMES').expect(200)).body).toMatchObject({ outcome: 'REFUSED', code: 'agent_mode_off' });
+    // paid, the launch is being prepared: the draft can be made and read, an approval executes nothing even with sending on
+    const d = await priceDraft();
+    await prisma.clinic.update({ where: { id: d.c.clinicId }, data: { billingStatus: 'LAUNCH_PENDING' } });
+    expect((await approve(d.c, d.v, 'SEND_TIMES').expect(200)).body).toMatchObject({ outcome: 'REFUSED', code: 'sending_disabled' });
     expect(transport.sent).toHaveLength(0);
     // without the agent the draft endpoint is the old one (its shape) and nothing is stored
     const plain = await agentClinic({ agent: false });

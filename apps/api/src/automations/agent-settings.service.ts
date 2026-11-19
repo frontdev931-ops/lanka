@@ -2,7 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { Provider } from '@prisma/client';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { accessBlocked, billingEnforced, hasFeature } from '../service/plans';
+import { accessBlocked, billingEnforced, hasFeature, launchPending } from '../service/plans';
 import { MAX_AUTO_SERVICES, assertAutoServiceSet, autoServices, configuredAutoServiceIds } from './agent-auto-gate';
 
 // What has to be true before the clinic's owner may switch the autonomous agent on. The same list is shown in Settings with a way to fix each item.
@@ -37,7 +37,7 @@ export class AgentSettingsService {
     ]);
     const met: Record<AgentPrerequisite, boolean> = {
       plan: hasFeature(c.plan, 'patient_agent'),
-      billing: !(billingEnforced() && accessBlocked(c)),
+      billing: !launchPending(c) && !(billingEnforced() && accessBlocked(c)),
       ai: ai.available && c.aiEnabled,
       sending: c.sendingEnabled,
       channel: channels > 0,

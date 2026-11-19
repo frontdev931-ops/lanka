@@ -8,6 +8,7 @@ import { PlatformWebsiteController } from '../src/automations/platform-website.c
 import { LeadsService } from '../src/automations/leads.service';
 import { WebsiteRequestsService } from '../src/automations/website-requests.service';
 import { AuthController } from '../src/auth/auth.controller';
+import { BillingService } from '../src/billing/billing.service';
 import { AuthService } from '../src/auth/auth.service';
 import { MailService } from '../src/auth/mail.service';
 import { RateLimitService } from '../src/auth/rate-limit.service';
@@ -53,6 +54,7 @@ const http = () => request(app.getHttpServer());
 const auth = (sub: string) => ({ Authorization: `Bearer ${app.get(JwtService).sign({ sub, clinicId: clinic.id })}` });
 const protectedRoutes = [
   ['get', '/platform/clinics'], ['patch', '/platform/clinics/fixture'],
+  ['get', '/platform/clinics/fixture/launch'], ['post', '/platform/clinics/fixture/launch'],
   ['get', '/platform/plans'], ['get', '/platform/contact-requests'], ['patch', '/platform/contact-requests/fixture'],
   ['get', '/platform/website-requests'], ['get', '/platform/clinics/fixture/website'],
   ['patch', '/platform/clinics/fixture/website'], ['patch', '/platform/clinics/fixture/website/requests/fixture'],
@@ -67,6 +69,7 @@ beforeAll(async () => {
       AuthService, TwoFactorService,
       { provide: PrismaService, useValue: prisma },
       { provide: LeadsService, useValue: {} },
+      { provide: BillingService, useValue: {} },
       { provide: WebsiteRequestsService, useValue: { openRequests: async () => [] } },
       { provide: MailService, useValue: {} },
       { provide: RateLimitService, useValue: { assertBelow: async () => {}, hit: async () => {}, reset: async () => {} } },

@@ -136,7 +136,7 @@ export class OutboxService {
   // other tests or earlier runs left in a shared database are neither sent nor counted)
   async process(now = new Date(), scope?: { clinicId?: string }): Promise<{ sent: number; failed: number; skipped: number }> {
     const out = { sent: 0, failed: 0, skipped: 0 };
-    const due = await this.prisma.outboundMessage.findMany({ where: { status: 'APPROVED', scheduledFor: { lte: now }, ...(scope?.clinicId ? { clinicId: scope.clinicId } : {}), clinic: { sendingEnabled: true, suspendedAt: null } }, orderBy: { scheduledFor: 'asc' }, take: 200 });
+    const due = await this.prisma.outboundMessage.findMany({ where: { status: 'APPROVED', scheduledFor: { lte: now }, ...(scope?.clinicId ? { clinicId: scope.clinicId } : {}), clinic: { sendingEnabled: true, suspendedAt: null, billingStatus: { not: 'LAUNCH_PENDING' } } }, orderBy: { scheduledFor: 'asc' }, take: 200 });
     const inWindow = inSendWindow(now);
     const tokens = new Map<string, string | null>();
     const confirmFor = new Map<string, boolean>();

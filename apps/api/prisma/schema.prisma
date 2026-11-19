@@ -54,202 +54,208 @@ enum SyncStatus {
 }
 
 model Clinic {
-  id                       String               @id @default(cuid())
-  name                     String
+  id                        String               @id @default(cuid())
+  name                      String
   // The logo from the clinic's profile in Cliniccards (an image data URI, checked on load)
-  logo                     String?
+  logo                      String?
   // The data processing agreement accepted by the owner on behalf of the clinic
-  termsVersion             String?
-  termsAcceptedAt          DateTime?
-  termsAcceptedById        String?
+  termsVersion              String?
+  termsAcceptedAt           DateTime?
+  termsAcceptedById         String?
   // The clinic's working hours by weekday: { "1": {"from":"09:00","to":"20:00"}, ..., "7": null }.
   // 1 is Monday, null is a day off. Needed for free windows when Cliniccards has no doctor shifts.
-  workHours                Json?
-  createdAt                DateTime             @default(now())
-  memberships              Membership[]
-  integrations             Integration[]
-  patients                 Patient[]
-  visits                   Visit[]
-  syncRuns                 SyncRun[]
-  auditLogs                AuditLog[]
-  tasks                    Task[]
-  planItems                PlanItem[]
-  payments                 Payment[]
-  bookingAttempts          BookingAttempt[]
-  kbItems                  KbItem[]
-  metaSessions             MetaConnectSession[]
-  automations              Automation[]
-  automationRuns           AutomationRun[]
-  waitlistEntries          WaitlistEntry[]
-  slotOffers               SlotOffer[]
-  scheduledReports         ScheduledReport[]
-  alertRules               AlertRule[]
-  invoices                 Invoice[]
-  shifts                   Shift[]
-  blocks                   ReservedBlock[]
-  invitations              Invitation[]
-  contactLogs              ContactLog[]
-  imports                  ImportBatch[]
-  reminders                Reminder[]
-  treatmentPlans           TreatmentPlan[]
-  cabinets                 Cabinet[]
-  inquiries                Inquiry[]
+  workHours                 Json?
+  createdAt                 DateTime             @default(now())
+  memberships               Membership[]
+  integrations              Integration[]
+  patients                  Patient[]
+  visits                    Visit[]
+  syncRuns                  SyncRun[]
+  auditLogs                 AuditLog[]
+  tasks                     Task[]
+  planItems                 PlanItem[]
+  payments                  Payment[]
+  bookingAttempts           BookingAttempt[]
+  kbItems                   KbItem[]
+  metaSessions              MetaConnectSession[]
+  automations               Automation[]
+  automationRuns            AutomationRun[]
+  waitlistEntries           WaitlistEntry[]
+  slotOffers                SlotOffer[]
+  scheduledReports          ScheduledReport[]
+  alertRules                AlertRule[]
+  invoices                  Invoice[]
+  shifts                    Shift[]
+  blocks                    ReservedBlock[]
+  invitations               Invitation[]
+  contactLogs               ContactLog[]
+  imports                   ImportBatch[]
+  reminders                 Reminder[]
+  treatmentPlans            TreatmentPlan[]
+  cabinets                  Cabinet[]
+  inquiries                 Inquiry[]
   // Service messages (appointment reminders, a no-show) go out without the staff's confirmation. Marketing always goes through confirmation.
-  autoSendService          Boolean              @default(false)
+  autoSendService           Boolean              @default(false)
   // The master safety switch: while it is off, no message to a patient goes out (setup, queue and confirmation work)
-  sendingEnabled           Boolean              @default(false)
+  sendingEnabled            Boolean              @default(false)
   // The AI assistant: one key for the whole service (AI_API_KEY on the server), the clinic only turns it on and gets a monthly limit of replies
-  aiEnabled                Boolean              @default(false)
-  aiMonthlyLimit           Int                  @default(500)
+  aiEnabled                 Boolean              @default(false)
+  aiMonthlyLimit            Int                  @default(500)
   // The staff alert "the AI allowance is used up" (one per exhaustion episode, see AiService.limitAlert). aiLimitAlertAt: the Telegram message of the current
   // episode was really delivered. aiLimitAlertTryAt: the last claimed attempt (stops concurrent requests and paces the retries). Both are cleared when the budget is back.
-  aiLimitAlertAt           DateTime?
-  aiLimitAlertTryAt        DateTime?
+  aiLimitAlertAt            DateTime?
+  aiLimitAlertTryAt         DateTime?
   // The Telegram request of the current episode ended without an answer (a timeout, a network failure): Telegram may or may not have taken the message.
   // It is NOT counted as delivered, and it is not sent again in this episode (a repeat could be a duplicate); the in-app notice stays. Cleared with the two above.
-  aiLimitAlertUnknownAt    DateTime?
+  aiLimitAlertUnknownAt     DateTime?
   // Allow the AI to create an appointment itself. Always off by default; it cannot be turned on until the connector can write to the clinic's system
-  aiAutoBooking            Boolean              @default(false)
+  aiAutoBooking             Boolean              @default(false)
   // Foundation of the AI administrator-agent (see .claude/docs/agent-administrator.md). Both are off by default and set only by the service owner.
   // aiAgentMode: turns on the agent's drafts for staff (the code reads it in the draft, approval and autonomy paths; with it off the old bot works as before).
   // funnelEventsEnabled: the only switch of the collection of funnel events and of the dialogue state rows; with it off nothing is written.
-  aiAgentMode              Boolean              @default(false)
-  funnelEventsEnabled      Boolean              @default(false)
+  aiAgentMode               Boolean              @default(false)
+  funnelEventsEnabled       Boolean              @default(false)
   // The agent's limited AUTONOMOUS mode (answers, offers times, asks, books after the patient's consent without a button): off by default, never implied by
   // aiAgentMode, and effective only for the dialogs listed in the server variable AGENT_AUTO_DIALOGS and only for the services of its explicit set
-  aiAgentAuto              Boolean              @default(false)
+  aiAgentAuto               Boolean              @default(false)
   // The set of services the autonomous mode may book (approved, active services of this clinic, at most five), chosen by the service owner. Authoritative once
   // agentAutoServicesSet is true (an empty set disables autonomy); before that the older single agentAutoServiceId still applies (kept for compatibility).
   // Where the autonomous mode applies. DIALOGS: the restricted test mode, only the dialogs of the server list AGENT_AUTO_DIALOGS (set by the service owner).
   // CLINIC: the clinic's owner switched the agent on for the whole clinic (needs the plan feature patient_agent, checked again at every action).
-  agentAutoScope           String               @default("DIALOGS")
-  agentAutoServiceIds      String[]             @default([])
-  agentAutoServicesSet     Boolean              @default(false)
-  agentAutoServiceId       String?
-  conversationStates       ConversationState[]
-  funnelEvents             FunnelEvent[]
-  agentDrafts              AgentDraft[]
+  agentAutoScope            String               @default("DIALOGS")
+  agentAutoServiceIds       String[]             @default([])
+  agentAutoServicesSet      Boolean              @default(false)
+  agentAutoServiceId        String?
+  conversationStates        ConversationState[]
+  funnelEvents              FunnelEvent[]
+  agentDrafts               AgentDraft[]
   // The AI replies to patients itself on safe topics (booking, reschedule, cancel, history); anything else it hands to a person. Off by default
   // What patients may be told about the clinic in a chat: set by the clinic itself (Cliniccards does not give them to us)
   // The doctor a new patient without preferences is booked to (the id in Cliniccards, and the name as it was when it was chosen)
   // HOW the schedule is organised: DOCTORS (by the doctors) or CABINETS (by the cabinets, through ONE shared account of Cliniccards used as doctor_id).
   // It is separate from the way a request is handled (a request for an administrator or the automatic booking).
-  scheduleMode             String               @default("DOCTORS")
+  scheduleMode              String               @default("DOCTORS")
   // The currency in which this clinic's Cliniccards keeps payments, invoices, card balances and plan totals. Cliniccards sends amounts without a
   // currency, so it is never inferred: the clinic's owner states it (who and when are kept). null = not stated yet: amounts are shown as "currency not
   // confirmed". Loaded rows get it as their own stamp (currency below), so a later change does not relabel what was already loaded.
-  sourceCurrency           String?
-  sourceCurrencyStatedAt   DateTime?
-  sourceCurrencyStatedById String?
+  sourceCurrency            String?
+  sourceCurrencyStatedAt    DateTime?
+  sourceCurrencyStatedById  String?
   // The currency of treatment-plan TOTALS, stated separately (2026-11-16): Cliniccards documents them in the main currency at each plan's own rate,
   // but a clinic keeping some plans in another currency must be able to leave plans unconfirmed while stating payments. null = not stated.
-  planCurrency             String?
-  planCurrencyStatedAt     DateTime?
-  planCurrencyStatedById   String?
-  sharedDoctorId           String?
-  sharedDoctorName         String?
+  planCurrency              String?
+  planCurrencyStatedAt      DateTime?
+  planCurrencyStatedById    String?
+  sharedDoctorId            String?
+  sharedDoctorName          String?
   // Days with other hours or a day off: [{date, closed, from?, to?}] on top of workHours
-  workHoursExceptions      Json                 @default("[]")
+  workHoursExceptions       Json                 @default("[]")
   // Where workHours came from: CLINICCARDS (GET /schedule-settings) or MANUAL (typed by the clinic); null while they were never set.
   // The default 09:00-20:00 shown in the form is NOT a setting and is never stored by itself.
-  workHoursSource          String?
-  workHoursUpdatedAt       DateTime?
+  workHoursSource           String?
+  workHoursUpdatedAt        DateTime?
   // Holidays of the clinic from Cliniccards (dates, closed days)
-  workHoursHolidays        Json                 @default("[]")
+  workHoursHolidays         Json                 @default("[]")
   // The last time the price list was read from Cliniccards, and how many positions it had
-  priceListSyncedAt        DateTime?
-  priceListCount           Int?
+  priceListSyncedAt         DateTime?
+  priceListCount            Int?
   // Why the last price list was not applied in full (for example too many positions disappeared at once), or null
-  priceListNote            String?
-  primaryDoctorId          String?
-  primaryDoctorName        String?
-  publicAddress            String?
-  publicPhone              String?
-  publicDirections         String?
-  aiAutoReply              Boolean              @default(false)
+  priceListNote             String?
+  primaryDoctorId           String?
+  primaryDoctorName         String?
+  publicAddress             String?
+  publicPhone               String?
+  publicDirections          String?
+  aiAutoReply               Boolean              @default(false)
   // How many AI replies one chat gets per day (a guard against loops and cost), and how long the AI stays silent after a person answered (0: no pause)
-  aiRepliesPerChatDay      Int                  @default(20)
-  aiPauseMinutes           Int                  @default(30)
+  aiRepliesPerChatDay       Int                  @default(20)
+  aiPauseMinutes            Int                  @default(30)
   // The owner confirms that the clinic's standard patient consent covers informational and advertising messages. Then "Unknown" counts as consent; "Withdrawn" always blocks
-  assumeConsent            Boolean              @default(false)
+  assumeConsent             Boolean              @default(false)
   // The manager's digest in Telegram: OFF, DAILY or WEEKLY, the hour in Kyiv time, the weekday (1 = Monday) for WEEKLY
-  digestFrequency          String               @default("OFF")
-  digestHour               Int                  @default(9)
-  digestWeekday            Int                  @default(1)
-  lastDigestAt             DateTime?
+  digestFrequency           String               @default("OFF")
+  digestHour                Int                  @default(9)
+  digestWeekday             Int                  @default(1)
+  lastDigestAt              DateTime?
   // A link where to send satisfied patients to leave a public review (Google and the like)
-  reviewUrl                String?
+  reviewUrl                 String?
   // Plan (TRIAL, START, PRO, CUSTOM), individual limits on top of the plan and suspension of the clinic by the service owner
-  plan                     String               @default("START")
-  limitOverrides           Json?
-  // Billing: AWAITING_PAYMENT (registered, not paid: no access to real data), ACTIVE, PAST_DUE (paid period ended, grace days), LAPSED (grace over: blocked, data kept)
-  billingStatus            String               @default("AWAITING_PAYMENT")
+  plan                      String               @default("START")
+  limitOverrides            Json?
+  // Billing: AWAITING_PAYMENT (registered, not paid: no access to real data), LAUNCH_PENDING (first payment confirmed, launch being prepared: setup
+  // allowed, nothing sent to patients, the paid month not started), ACTIVE, PAST_DUE (paid period ended, grace days), LAPSED (grace over: blocked, data kept)
+  billingStatus             String               @default("AWAITING_PAYMENT")
   // A visitor's copy of the demo clinic: made-up data, never billed, nothing is really sent
   // Writing appointments and patients to the clinic's system: set only by the service owner after the live verification
   // Chat widget for the clinic's own website: a public key, the sites it may run on and the greeting
-  widgetKey                String?              @unique
-  widgetEnabled            Boolean              @default(false)
-  widgetOrigins            Json                 @default("[]")
-  widgetGreeting           String?
+  widgetKey                 String?              @unique
+  widgetEnabled             Boolean              @default(false)
+  widgetOrigins             Json                 @default("[]")
+  widgetGreeting            String?
   // Appearance of the widget (2026-11-17): the accent colour (#rrggbb) and the corner of the launcher (RIGHT or LEFT)
-  widgetColor              String?
-  widgetPosition           String               @default("RIGHT")
+  widgetColor               String?
+  widgetPosition            String               @default("RIGHT")
   // The first visitor message really received from an allowed site: "configured" is not "verified"
-  widgetVerifiedAt         DateTime?
+  widgetVerifiedAt          DateTime?
   // The AI (the agent's autonomous mode and the older automatic reply) may answer the website chat by itself: the owner's explicit choice, off by
   // default; installing or enabling the widget never sets it
-  aiWebAuto                Boolean              @default(false)
+  aiWebAuto                 Boolean              @default(false)
   // Enquiries from the clinic's website forms (2026-11-17): leadKey is the PUBLIC form key a browser page carries (it works only from the listed sites);
   // a website's server sends with the separate secret, kept only as its SHA-256 (shown once, its last characters kept as a hint)
-  leadKey                  String?              @unique
-  leadEnabled              Boolean              @default(false)
-  leadOrigins              Json                 @default("[]")
-  leadFormConfig           Json?
+  leadKey                   String?              @unique
+  leadEnabled               Boolean              @default(false)
+  leadOrigins               Json                 @default("[]")
+  leadFormConfig            Json?
   websiteConnectionRequests ContactRequest[]
-  leadSecretHash           String?              @unique
-  leadSecretHint           String?
+  leadSecretHash            String?              @unique
+  leadSecretHint            String?
   // The first enquiry really accepted from a website form
-  leadVerifiedAt           DateTime?
-  bookingWriteEnabled      Boolean              @default(false)
-  isDemo                   Boolean              @default(false)
-  demoExpiresAt            DateTime?
+  leadVerifiedAt            DateTime?
+  bookingWriteEnabled       Boolean              @default(false)
+  isDemo                    Boolean              @default(false)
+  demoExpiresAt             DateTime?
   // End of the paid month; the plan's allowances renew on every payment (periodStartsAt)
-  paidUntil                DateTime?
-  periodStartsAt           DateTime?
-  setupPaidAt              DateTime?
+  paidUntil                 DateTime?
+  periodStartsAt            DateTime?
+  // The one-time launch is paid (also while the billing status is LAUNCH_PENDING: paid, the launch is being prepared, the month not started)
+  setupPaidAt               DateTime?
+  // The monthly price stored for the plan the clinic paid for (2026-11-19): renewals of that plan keep it; another plan uses the list price.
+  // Clinics that paid before the new price list got their price of that time from the migration.
+  renewalPlan               String?
+  renewalPriceUah           Int?
   // AI replies bought in packs; they carry over and are spent only after the monthly included replies
-  aiPurchased              Int                  @default(0)
-  aiPackCapPerMonth        Int                  @default(5)
-  suspendedAt              DateTime?
+  aiPurchased               Int                  @default(0)
+  aiPackCapPerMonth         Int                  @default(5)
+  suspendedAt               DateTime?
   // The owner requires two-factor sign-in from all the clinic's staff
-  require2fa               Boolean              @default(false)
+  require2fa                Boolean              @default(false)
   // The AI assistant for the manager: free questions about the clinic's data, answered with a report. Separate from replies to patients
-  aiAssistantEnabled       Boolean              @default(false)
-  channelLinks             ChannelLink[]
-  patientChannels          PatientChannel[]
-  automationRules          AutomationRule[]
-  outbox                   OutboundMessage[]
-  chatMessages             ChatMessage[]
-  inboundEvents            InboundEvent[]
-  billingPayments          BillingPayment[]
+  aiAssistantEnabled        Boolean              @default(false)
+  channelLinks              ChannelLink[]
+  patientChannels           PatientChannel[]
+  automationRules           AutomationRule[]
+  outbox                    OutboundMessage[]
+  chatMessages              ChatMessage[]
+  inboundEvents             InboundEvent[]
+  billingPayments           BillingPayment[]
   // A branch of a network (null: a standalone clinic). A branch keeps its own Cliniccards key, data, staff, allowances and settings; the network
   // only adds the consolidated views for people who already have a management role in the branch, and pays for the branches together.
-  networkId                String?
-  network                  Network?             @relation(fields: [networkId], references: [id], onDelete: SetNull)
+  networkId                 String?
+  network                   Network?             @relation(fields: [networkId], references: [id], onDelete: SetNull)
   // The onboarding of an additional comparable branch is quoted individually by the service owner (from 2 990 UAH): the amount the network owner may
   // pay for it, set explicitly per branch; null = no quote, nothing to pay. Paid once.
-  branchSetupQuoteUah      Int?
-  branchSetupPaidAt        DateTime?
-  bookingRequests          BookingRequest[]
-  aiUsages                 AiUsage[]
-  campaigns                Campaign[]
-  savedReports             SavedReport[]
-  digestRecipients         DigestRecipient[]
-  reviews                  Review[]
-  pushSubscriptions        PushSubscription[]
-  chatBotResumes           ChatBotResume[]
-  doctors                  Doctor[]
-  doctorAvailability       DoctorAvailability[]
+  branchSetupQuoteUah       Int?
+  branchSetupPaidAt         DateTime?
+  bookingRequests           BookingRequest[]
+  aiUsages                  AiUsage[]
+  campaigns                 Campaign[]
+  savedReports              SavedReport[]
+  digestRecipients          DigestRecipient[]
+  reviews                   Review[]
+  pushSubscriptions         PushSubscription[]
+  chatBotResumes            ChatBotResume[]
+  doctors                   Doctor[]
+  doctorAvailability        DoctorAvailability[]
 }
 
 // A staff invitation by link. Only the token's hash is in the database: the link cannot be recovered from it.
@@ -621,12 +627,12 @@ model AuthToken {
 
 // The platform inbox holds public callbacks and authenticated requests to connect an existing clinic website.
 model ContactRequest {
-  id        String    @id @default(cuid())
-  phone     String?
-  name      String?
-  lang      String    @default("uk")
-  createdAt DateTime  @default(now())
-  handledAt DateTime?
+  id            String    @id @default(cuid())
+  phone         String?
+  name          String?
+  lang          String    @default("uk")
+  createdAt     DateTime  @default(now())
+  handledAt     DateTime?
   clinicId      String?
   clinic        Clinic?   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   email         String?
@@ -1055,39 +1061,43 @@ model InboundEvent {
 // One billing order. The first SUBSCRIPTION or NETWORK order can include a setup fee.
 // status: PENDING, PAID, FAILED. The callback is idempotent by orderId.
 model BillingPayment {
-  id          String    @id @default(cuid())
-  clinicId    String
+  id                      String    @id @default(cuid())
+  clinicId                String
   // a network payment (kind NETWORK: the monthly network subscription; BRANCH_SETUP: a quoted branch onboarding); clinicId is then the branch it was
   // started from (NETWORK) or the branch being onboarded (BRANCH_SETUP)
-  networkId   String?
+  networkId               String?
   // The paid period or, for an AI pack, the billing period used for its purchase cap.
-  periodFrom  DateTime?
-  periodTo    DateTime?
-  orderId     String    @unique
-  kind        String
-  plan        String?
+  periodFrom              DateTime?
+  periodTo                DateTime?
+  orderId                 String    @unique
+  kind                    String
+  plan                    String?
   // Currency is numeric ISO 4217. Historical payments were also in UAH.
-  currency    Int       @default(980)
-  amountMinor Int
+  currency                Int       @default(980)
+  amountMinor             Int
   // The setup fee included in the amount (kopecks), for the receipt
-  setupMinor  Int       @default(0)
+  setupMinor              Int       @default(0)
   // The verified buyer and setup coverage captured for the single-clinic Pro check.
-  oneTimeProBuyerId String?
-  oneTimeProIncludesSetup Boolean @default(false)
+  oneTimeProBuyerId       String?
+  oneTimeProIncludesSetup Boolean   @default(false)
   // AI replies in a pack
-  packReplies Int       @default(0)
-  status      String    @default("PENDING")
-  providerRef String?
-  branchIds   String[]  @default([])
-  monoInvoiceId String? @unique
-  monoPageUrl String?
-  monoExpiresAt DateTime?
-  monoModifiedAt DateTime?
-  monoCheckedAt DateTime?
-  refundedMinor Int     @default(0)
-  createdAt   DateTime  @default(now())
-  paidAt      DateTime?
-  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  packReplies             Int       @default(0)
+  status                  String    @default("PENDING")
+  providerRef             String?
+  branchIds               String[]  @default([])
+  monoInvoiceId           String?   @unique
+  monoPageUrl             String?
+  monoExpiresAt           DateTime?
+  monoModifiedAt          DateTime?
+  monoCheckedAt           DateTime?
+  refundedMinor           Int       @default(0)
+  // A first payment with the launch (2026-11-19): confirmed, it records the plan and one prepaid month without starting it (periodFrom stays
+  // empty); the service owner starts the month after the launch is agreed. Who started it and when.
+  launchActivatedAt       DateTime?
+  launchActivatedBy       String?
+  createdAt               DateTime  @default(now())
+  paidAt                  DateTime?
+  clinic                  Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@index([clinicId, createdAt])
   @@index([networkId, kind, status])

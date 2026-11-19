@@ -14,6 +14,8 @@ interface Row {
   createdAt: string;
   plan: string;
   billingStatus: string;
+  // the launch payment was partly refunded before the start: support resolves the payment first
+  launchReview?: boolean;
   bookingWriteEnabled: boolean;
   paidUntil: string | null;
   limits: { users: number; messagesPerMonth: number; aiRepliesPerMonth: number };
@@ -65,6 +67,21 @@ export default function PlatformPage() {
     try {
       await api(`/platform/clinics/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
       setInfo(t('common.saved'));
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  // A new clinic paid its plan with the launch: its first paid month starts here, after the launch is agreed with the clinic. The dates are shown first.
+  const startLaunch = async (r: Row) => {
+    setError('');
+    try {
+      const p = await api<{ eligible: boolean; plan: string; from: string; to: string }>(`/platform/clinics/${r.id}/launch`);
+      if (!p.eligible) return setError(t('pf.launchNotEligible'));
+      if (!(await ask(t('pf.launchConfirm', { name: r.name, plan: p.plan === 'PRO' ? t('billing.pro') : p.plan === 'START' ? t('billing.start') : p.plan, from: fmtDate(p.from), to: fmtDate(p.to) }), { confirmLabel: t('pf.launchStart') }))) return;
+      const res = await api<{ already: boolean; from: string; to: string }>(`/platform/clinics/${r.id}/launch`, { method: 'POST' });
+      setInfo(t('pf.launchDone', { from: fmtDate(res.from), to: fmtDate(res.to) }));
       load();
     } catch (e) {
       setError((e as Error).message);
@@ -157,8 +174,11 @@ export default function PlatformPage() {
                       </select>
                     </td>
                     <td>
-                      <Badge tone={r.billingStatus === 'ACTIVE' ? 'green' : r.billingStatus === 'PAST_DUE' ? 'amber' : 'red'}>{r.billingStatus}</Badge>
-                      <div className="cell-sub">{r.paidUntil ? fmtDate(r.paidUntil) : '—'}</div>
+                      <div>
+                        <Badge tone={r.billingStatus === 'ACTIVE' ? 'green' : r.launchReview ? 'red' : r.billingStatus === 'PAST_DUE' || r.billingStatus === 'LAUNCH_PENDING' ? 'amber' : 'red'}>{r.launchReview ? t('pf.launchReviewBadge') : r.billingStatus === 'LAUNCH_PENDING' ? t('billing.launchPendingBadge') : r.billingStatus}</Badge>
+                        {r.launchReview && <div className="cell-sub">{t('pf.launchReviewHint')}</div>}
+                        <div className="cell-sub">{r.paidUntil ? fmtDate(r.paidUntil) : '—'}</div>
+                      </div>
                     </td>
                     <td>{r.users} / {r.limits.users}</td>
                     <td>{r.messagesThisMonth} / {r.limits.messagesPerMonth}</td>
@@ -175,7 +195,13 @@ export default function PlatformPage() {
                         >
                           {r.bookingWriteEnabled ? t('pf.bookingOff') : t('pf.bookingOn')}
                         </button>
-                        <button className="btn btn-sm" onClick={() => patch(r.id, { billingStatus: 'ACTIVE', paidUntil: new Date(Date.now() + 30 * 86_400_000).toISOString() })}>{t('pf.activate')}</button>
+                        {r.launchReview ? (
+                          <button className="btn btn-sm" disabled title={t('pf.launchReviewHint')}>{t('pf.launchStart')}</button>
+                        ) : r.billingStatus === 'LAUNCH_PENDING' ? (
+                          <button className="btn btn-sm btn-primary" onClick={() => startLaunch(r)}>{t('pf.launchStart')}</button>
+                        ) : (
+                          <button className="btn btn-sm" onClick={() => patch(r.id, { billingStatus: 'ACTIVE', paidUntil: new Date(Date.now() + 30 * 86_400_000).toISOString() })}>{t('pf.activate')}</button>
+                        )}
                         <button className="btn btn-sm" onClick={() => setCustom({ id: r.id, users: String(r.limits.users), messages: String(r.limits.messagesPerMonth), ai: String(r.limits.aiRepliesPerMonth) })}>{t('pf.limits')}</button>
                         <button
                           className="btn btn-sm"

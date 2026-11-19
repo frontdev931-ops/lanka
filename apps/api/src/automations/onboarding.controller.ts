@@ -33,7 +33,7 @@ export class OnboardingController {
     const cc = integrations.find((i) => i.provider === Provider.CLINICCARDS);
     const pro = hasFeature(c.plan, 'multi_channel');
     const steps = [
-      { key: 'payment', done: c.isDemo || c.billingStatus === 'ACTIVE' || c.billingStatus === 'PAST_DUE', required: true, link: '/settings?tab=billing' },
+      { key: 'payment', done: c.isDemo || ['ACTIVE', 'PAST_DUE', 'LAUNCH_PENDING'].includes(c.billingStatus), required: true, link: '/settings?tab=billing' },
       { key: 'cliniccards', done: !!cc?.lastSyncAt, required: true, link: '/settings' },
       { key: 'currency', done: !!c.sourceCurrency, required: true, link: '/settings' },
       { key: 'services', done: services > 0, required: true, link: '/knowledge' },
@@ -43,6 +43,7 @@ export class OnboardingController {
       ...(pro ? [{ key: 'meta', done: has(Provider.INSTAGRAM) || has(Provider.MESSENGER), required: false, link: '/settings?tab=channels' }] : []),
       ...(agent ? [{ key: 'agent', done: agent.active, required: false, link: '/ai-admin' }] : []),
     ];
-    return { plan: c.plan, steps, complete: steps.filter((s) => s.required).every((s) => s.done) };
+    // PENDING: paid, the launch is being prepared ("Оплачено · готуємо запуск"); the paid month starts when the service owner starts it
+    return { plan: c.plan, launch: c.billingStatus === 'LAUNCH_PENDING' ? 'PENDING' : null, steps, complete: steps.filter((s) => s.required).every((s) => s.done) };
   }
 }

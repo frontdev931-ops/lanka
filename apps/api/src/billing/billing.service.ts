@@ -3,7 +3,7 @@ import { BillingPayment, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { MailService } from '../auth/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AI_PACK, BRANCH_SETUP_MIN_UAH, GRACE_DAYS, PLANS, SELLABLE_PLANS, SETUP_FEE_UAH, effectiveLimits, networkMonthlyUah, periodStart } from '../service/plans';
+import { AI_PACK, BRANCH_SETUP_MIN_UAH, GRACE_DAYS, PLANS, SELLABLE_PLANS, SETUP_FEE_UAH, effectiveLimits, launchFeeUah, monthlyPriceUah, networkMonthlyUah, periodStart } from '../service/plans';
 import { INVOICE_VALIDITY, MONO_CURRENCY, MonoClient, MonoRequestError, MonoStatus, readMonoStatus } from './mono';
 import { DIAGNOSTIC_AUDIT_PREFIX, MONO_DIAGNOSTIC } from './mono-diagnostic';
 
@@ -21,6 +21,14 @@ const addMonth = (d: Date) => {
   r.setUTCMonth(r.getUTCMonth() + 1);
   return r;
 };
+// A clinic that was never activated (no launch paid, no paid period, still awaiting its first payment): only such a clinic pays the one-time
+// launch, and its confirmed first payment waits in LAUNCH_PENDING. Clinics activated before (online, by hand or historically) never go there.
+type LaunchState = { setupPaidAt: Date | null; paidUntil: Date | null; billingStatus: string };
+const neverActivated = (c: LaunchState) => !c.setupPaidAt && !c.paidUntil && c.billingStatus === 'AWAITING_PAYMENT';
+// The confirmed first payment that may start the first paid month: paid, nothing refunded, with the launch, not started yet
+export const launchEligible = (clinicId: string | { in: string[] }): Prisma.BillingPaymentWhereInput => ({
+  clinicId, networkId: null, kind: 'SUBSCRIPTION', status: 'PAID', paidAt: { not: null }, refundedMinor: 0, setupMinor: { gt: 0 }, launchActivatedAt: null, periodFrom: null,
+});
 
 @Injectable()
 export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
@@ -50,32 +58,44 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   async overview(clinicId: string, now = new Date()) {
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { networkId: true, plan: true, billingStatus: true, paidUntil: true, periodStartsAt: true, setupPaidAt: true, aiMonthlyLimit: true, aiPurchased: true, aiPackCapPerMonth: true, limitOverrides: true } });
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { networkId: true, plan: true, billingStatus: true, paidUntil: true, periodStartsAt: true, setupPaidAt: true, renewalPlan: true, renewalPriceUah: true, aiMonthlyLimit: true, aiPurchased: true, aiPackCapPerMonth: true, limitOverrides: true } });
     const since = periodStart(c, now);
     const [used, packs, payments] = await Promise.all([
       this.prisma.aiUsage.count({ where: { clinicId, ok: true, billable: true, createdAt: { gte: since } } }),
       this.prisma.billingPayment.count({ where: { clinicId, kind: 'AI_PACK', status: 'PAID', paidAt: { gte: since } } }),
       this.prisma.billingPayment.findMany({ where: { clinicId, kind: { not: MONO_DIAGNOSTIC } }, orderBy: { createdAt: 'desc' }, take: 20, select: paymentDetails }),
     ]);
-    const setupUah = c.setupPaidAt ? null : SETUP_FEE_UAH;
+    const isNew = neverActivated(c);
     const from = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
+    const launchPaid = c.billingStatus === 'LAUNCH_PENDING'
+      ? await this.prisma.billingPayment.findFirst({ where: launchEligible(clinicId), orderBy: { paidAt: 'asc' }, select: { plan: true, paidAt: true } })
+      : null;
     const pending = await this.prisma.billingPayment.findFirst({ where: { clinicId, networkId: null, kind: { not: MONO_DIAGNOSTIC }, ...monoPending }, orderBy: { createdAt: 'desc' }, select: { id: true } });
     return {
       configured: this.mono.configured,
       // a branch of a network is paid by its network (/billing/network/:id): its own payment page only points there
       network: c.networkId ? await this.prisma.network.findUnique({ where: { id: c.networkId }, select: { id: true, name: true } }) : null,
       pendingPaymentId: pending?.id ?? null,
-      nextPeriod: { from, to: addMonth(from) },
+      // A new clinic's first month starts on the launch day agreed with it (the service owner starts it), so no dates are promised before that
+      nextPeriod: isNew || c.billingStatus === 'LAUNCH_PENDING' ? null : { from, to: addMonth(from) },
+      monthStartsAtLaunch: isNew,
+      // LAUNCH_PENDING: paid, the launch is being prepared (the plan and one prepaid month are recorded; the month starts on activation)
+      // REVIEW: the launch payment was partly refunded before the start; nothing can be bought or started until support resolves the payment
+      launch: c.billingStatus === 'LAUNCH_PENDING'
+        ? launchPaid ? { state: 'PENDING', plan: launchPaid.plan ?? c.plan, paidAt: launchPaid.paidAt } : { state: 'REVIEW', plan: c.plan, paidAt: null }
+        : { state: isNew ? 'NONE' : 'DONE' },
+      // what the current plan renews at (the clinic's stored price; no launch fee after the launch)
+      renewal: !isNew && c.billingStatus !== 'LAUNCH_PENDING' && SELLABLE_PLANS.includes(c.plan) ? { plan: c.plan, priceUah: monthlyPriceUah(c, c.plan), date: c.paidUntil } : null,
       plan: c.plan,
       status: c.billingStatus,
       paidUntil: c.paidUntil,
       graceUntil: c.paidUntil ? new Date(c.paidUntil.getTime() + GRACE_DAYS * DAY) : null,
-      plans: SELLABLE_PLANS.map((k) => ({
-        key: k, priceUah: PLANS[k].priceUah, totalUah: PLANS[k].priceUah + (setupUah ?? 0),
-        limits: PLANS[k].limits, features: PLANS[k].features,
-      })),
+      plans: SELLABLE_PLANS.map((k) => {
+        const priceUah = monthlyPriceUah(c, k);
+        const launchUah = isNew ? launchFeeUah(k) : null;
+        return { key: k, priceUah, listPriceUah: PLANS[k].priceUah, launchUah, totalUah: priceUah + (launchUah ?? 0), limits: PLANS[k].limits, features: PLANS[k].features };
+      }),
       setupPaid: !!c.setupPaidAt,
-      setupUah,
       pack: { ...AI_PACK, bought: packs, cap: c.aiPackCapPerMonth, periodFrom: since, periodTo: c.paidUntil },
       ai: { included: c.aiMonthlyLimit, used, purchased: c.aiPurchased, remaining: Math.max(0, c.aiMonthlyLimit - used) + c.aiPurchased },
       limits: effectiveLimits(c.plan, c.limitOverrides),
@@ -158,19 +178,24 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
   checkout(clinicId: string, plan: string, now = new Date()) {
     if (!SELLABLE_PLANS.includes(plan)) throw new BadRequestException('bad_plan');
     return this.purchase({ clinicId, networkId: null }, 'SUBSCRIPTION', now, async (tx) => {
-      const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { limitOverrides: true, networkId: true, setupPaidAt: true, paidUntil: true } });
+      const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { limitOverrides: true, networkId: true, setupPaidAt: true, paidUntil: true, billingStatus: true, renewalPlan: true, renewalPriceUah: true } });
       if (c.networkId) throw new BadRequestException('network_branch');
+      // the first payment is confirmed and the launch is being prepared: the same launch is never bought again
+      if (c.billingStatus === 'LAUNCH_PENDING') throw new ConflictException('launch_pending');
       const [users, pending] = await Promise.all([
         tx.membership.count({ where: { clinicId } }),
         tx.invitation.count({ where: { clinicId, acceptedAt: null, expiresAt: { gt: now } } }),
       ]);
       if (users + pending > effectiveLimits(plan, c.limitOverrides).users) throw new BadRequestException('plan_users_over');
-      const setupMinor = c.setupPaidAt ? 0 : SETUP_FEE_UAH * 100;
-      const periodFrom = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
+      // The order is a snapshot: its amount never changes when the price list does. A new clinic's launch order has no period yet (it starts on
+      // activation); a renewal or plan change of an activated clinic buys the month after its paid period, at its stored price, without a launch.
+      const launch = neverActivated(c);
+      const setupMinor = launch ? launchFeeUah(plan) * 100 : 0;
+      const periodFrom = launch ? null : c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
       return {
         order: {
-          clinicId, kind: 'SUBSCRIPTION', plan, amountMinor: PLANS[plan].priceUah * 100 + setupMinor,
-          setupMinor, periodFrom, periodTo: addMonth(periodFrom),
+          clinicId, kind: 'SUBSCRIPTION', plan, amountMinor: monthlyPriceUah(c, plan) * 100 + setupMinor,
+          setupMinor, periodFrom, periodTo: periodFrom && addMonth(periodFrom),
         },
         description: `LANKA ${PLANS[plan].label}`,
       };
@@ -302,7 +327,26 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
         const reversed = target === 'REVERSED' || refundedMinor === fresh.amountMinor || !fresh.paidAt;
         await tx.billingPayment.update({ where: { id: fresh.id }, data: { ...provider, status: reversed ? 'REVERSED' : 'PAID', refundedMinor } });
         await audit(reversed ? 'reversed' : 'refunded', { refundedMinor, amountMinor: fresh.amountMinor });
-        return { reversal: true, refundedMinor };
+        // A refund of a launch payment whose month was never started: the payment can no longer start the month (launchEligible needs nothing
+        // refunded). FULL return (no money kept) while no other eligible payment holds the launch: the preparation is cancelled and the clinic is
+        // back to awaiting payment (data and settings kept). PARTIAL return: money is kept, and the billing model cannot credit it to a new
+        // purchase, so the clinic stays in LAUNCH_PENDING (no new purchase can be opened) and the service owner resolves the payment by hand.
+        let launchCancelled = false;
+        let launchReview = false;
+        if (fresh.kind === 'SUBSCRIPTION' && fresh.paidAt && fresh.setupMinor > 0 && !fresh.launchActivatedAt && !fresh.periodFrom &&
+            !(await tx.billingPayment.findFirst({ where: { ...launchEligible(fresh.clinicId), id: { not: fresh.id } }, select: { id: true } }))) {
+          if (reversed && refundedMinor === fresh.amountMinor) {
+            const c = await tx.clinic.updateMany({ where: { id: fresh.clinicId, billingStatus: 'LAUNCH_PENDING' }, data: { billingStatus: 'AWAITING_PAYMENT', setupPaidAt: null, renewalPlan: null, renewalPriceUah: null } });
+            if (c.count) {
+              launchCancelled = true;
+              await audit('launch_cancelled', { refundedMinor });
+            }
+          } else if ((await tx.clinic.findUnique({ where: { id: fresh.clinicId }, select: { billingStatus: true } }))?.billingStatus === 'LAUNCH_PENDING') {
+            launchReview = true;
+            await audit('launch_review', { refundedMinor, keptMinor: fresh.amountMinor - refundedMinor });
+          }
+        }
+        return { reversal: true, refundedMinor, launchCancelled, launchReview };
       }
       if (fresh.status === 'PAID') {
         if (!sameTime) await tx.billingPayment.update({ where: { id: fresh.id }, data: provider });
@@ -325,14 +369,23 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
         `Оплату ${order.orderId} не застосовано. Очікували ${order.amountMinor} (код ${order.currency}), отримали ${event.amount} (код ${event.ccy}). Суми в мінімальних одиницях. Перевірте рахунок у кабінеті mono.`);
     }
     if (notices?.reversal) {
-      await this.toServiceOwner(`mono: повернення ${order.orderId}`, `За замовленням ${order.orderId} повернено ${notices.refundedMinor / 100} грн. Доступ та ліміти не змінено. Перевірте оплату вручну.`);
+      await this.toServiceOwner(`mono: повернення ${order.orderId}`, notices.launchCancelled
+        ? `За замовленням ${order.orderId} повернено ${notices.refundedMinor / 100} грн до старту оплаченого місяця. Підготовку запуску скасовано, клініка знову очікує оплати.`
+        : notices.launchReview
+          ? `За замовленням ${order.orderId} частково повернено ${notices.refundedMinor / 100} грн до старту оплаченого місяця, решта лишилась у вас. Запуск і нову оплату для клініки зупинено: вирішіть оплату вручну.`
+          : `За замовленням ${order.orderId} повернено ${notices.refundedMinor / 100} грн. Доступ та ліміти не змінено. Перевірте оплату вручну.`);
     }
     if (notices?.paid) {
-      await this.notify(order.clinicId, 'Оплату отримано', `Дякуємо! Оплату ${(order.amountMinor / 100).toFixed(2)} грн отримано.`).catch(() => undefined);
+      const preparing = order.kind === 'SUBSCRIPTION' && order.setupMinor > 0 && (await this.prisma.clinic.findUnique({ where: { id: order.clinicId }, select: { billingStatus: true } }))?.billingStatus === 'LAUNCH_PENDING';
+      await this.notify(order.clinicId, 'Оплату отримано', preparing
+        ? `Дякуємо! Оплату ${(order.amountMinor / 100).toFixed(2)} грн отримано. Готуємо запуск: оплачений місяць почнеться в день запуску, який ми погодимо з вами.`
+        : `Дякуємо! Оплату ${(order.amountMinor / 100).toFixed(2)} грн отримано.`).catch(() => undefined);
+      if (preparing) await this.toServiceOwner(`оплачено запуск ${order.orderId}`, `Клініка оплатила тариф ${order.plan ?? ''} із запуском (замовлення ${order.orderId}). Після погодження запуску почніть оплачений місяць на сторінці /platform.`);
       for (const action of notices.exceptions) {
         const detail = action === 'setup_duplicate' ? `Підключення вже оплачене. Перевірте повернення ${order.setupMinor / 100} грн.` :
           action === 'period_duplicate' ? 'Період мережі вже оплачений. Перевірте повернення всієї суми.' :
           action === 'one_time_pro_duplicate' ? 'Разову оплату Pro вже застосовано. Перевірте другий платіж у mono.' :
+          action === 'launch_duplicate' ? 'Запуск уже оплачено й готується. Перевірте повернення другого платежу.' :
           'Склад мережі або належність філіалу змінилися. Перевірте оплату та доступ.';
         await this.toServiceOwner(`mono: перевірка оплати ${order.orderId}`, `Замовлення ${order.orderId}. ${detail}`);
       }
@@ -380,18 +433,69 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     if (kind !== 'SUBSCRIPTION') throw new Error('invalid_billing_purchase');
     // A different historical invoice may report late. Record the funds without granting a second period.
     if (order.oneTimeProBuyerId && await this.settledHistoricalProPayment(tx, clinicId, order.id)) return ['one_time_pro_duplicate'];
-    const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { paidUntil: true, networkId: true, limitOverrides: true, setupPaidAt: true } });
+    const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { paidUntil: true, networkId: true, limitOverrides: true, setupPaidAt: true, billingStatus: true } });
     if (c.networkId) return ['scope_changed'];
+    // The launch is already paid and being prepared: a second payment is recorded, nothing is granted (the service owner checks the refund)
+    if (c.billingStatus === 'LAUNCH_PENDING') return ['launch_duplicate'];
     const plan = order.plan ?? 'START';
+    const aiMonthlyLimit = effectiveLimits(plan, c.limitOverrides).aiRepliesPerMonth;
+    // the price of this plan is stored for its renewals (the historical one-time Pro check carries no list price)
+    const renewal = order.oneTimeProBuyerId ? {} : { renewalPlan: plan, renewalPriceUah: Math.round((order.amountMinor - setupMinor) / 100) };
+    if (setupMinor && neverActivated(c)) {
+      // A new clinic's first payment: the plan, the paid launch and one prepaid month are recorded; the month starts when the service owner
+      // starts it after the launch is agreed (activateLaunch). Until then the clinic sets itself up and nothing is sent to patients.
+      await tx.billingPayment.update({ where: { id: order.id }, data: { periodFrom: null, periodTo: null } });
+      await tx.clinic.update({ where: { id: clinicId }, data: { plan, billingStatus: 'LAUNCH_PENDING', setupPaidAt: now, sendingEnabled: false, aiMonthlyLimit, ...renewal } });
+      return [];
+    }
     const from = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
     const to = addMonth(from);
     await tx.billingPayment.update({ where: { id: order.id }, data: { periodFrom: from, periodTo: to } });
     await tx.clinic.update({
       where: { id: clinicId },
-      data: { plan, billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, aiMonthlyLimit: effectiveLimits(plan, c.limitOverrides).aiRepliesPerMonth,
+      data: { plan, billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, aiMonthlyLimit, ...renewal,
         ...((setupMinor || order.oneTimeProIncludesSetup) && !c.setupPaidAt ? { setupPaidAt: now } : {}) },
     });
     return setupMinor && c.setupPaidAt ? ['setup_duplicate'] : [];
+  }
+
+  // ---------- the first paid month of a new clinic (the service owner, /platform) ----------
+  // What starting the month would do now: the dates are shown before the confirmation
+  async launchPreview(clinicId: string, now = new Date()) {
+    const c = await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { billingStatus: true, plan: true } });
+    if (!c) throw new NotFoundException();
+    const p = c.billingStatus === 'LAUNCH_PENDING' ? await this.prisma.billingPayment.findFirst({ where: launchEligible(clinicId), orderBy: { paidAt: 'asc' }, select: { plan: true, paidAt: true, amountMinor: true } }) : null;
+    return { eligible: !!p, status: c.billingStatus, plan: p?.plan ?? c.plan, paidAt: p?.paidAt ?? null, amountMinor: p?.amountMinor ?? null, from: now, to: addMonth(now) };
+  }
+
+  // Starts the prepaid month from now, once: atomic (the clinic row is locked), idempotent (a repeat returns the started month), only with a
+  // confirmed, unrefunded launch payment. Records who started it and when.
+  async activateLaunch(clinicId: string, userId: string, now = new Date()) {
+    const r = await this.prisma.$transaction(async (tx) => {
+      await this.lockScope(tx, { clinicId });
+      const c = await tx.clinic.findUnique({ where: { id: clinicId }, select: { billingStatus: true, networkId: true, limitOverrides: true } });
+      if (!c) throw new NotFoundException();
+      if (c.billingStatus !== 'LAUNCH_PENDING') {
+        const done = await tx.billingPayment.findFirst({ where: { clinicId, kind: 'SUBSCRIPTION', launchActivatedAt: { not: null } }, orderBy: { launchActivatedAt: 'desc' }, select: { plan: true, periodFrom: true, periodTo: true, launchActivatedAt: true } });
+        if (done) return { already: true, plan: done.plan, from: done.periodFrom, to: done.periodTo, activatedAt: done.launchActivatedAt };
+        throw new BadRequestException('launch_not_pending');
+      }
+      if (c.networkId) throw new BadRequestException('network_branch');
+      const p = await tx.billingPayment.findFirst({ where: launchEligible(clinicId), orderBy: { paidAt: 'asc' } });
+      if (!p) throw new BadRequestException('launch_payment_missing');
+      const plan = p.plan ?? 'START';
+      const to = addMonth(now);
+      const marked = await tx.billingPayment.updateMany({ where: { id: p.id, launchActivatedAt: null }, data: { periodFrom: now, periodTo: to, launchActivatedAt: now, launchActivatedBy: userId } });
+      if (!marked.count) throw new ConflictException('launch_changed');
+      await tx.clinic.update({ where: { id: clinicId }, data: { plan, billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, aiMonthlyLimit: effectiveLimits(plan, c.limitOverrides).aiRepliesPerMonth } });
+      await tx.auditLog.create({ data: { clinicId, userId, action: 'billing.launch_activated', details: { orderId: p.orderId, plan, from: now.toISOString(), to: to.toISOString() } } });
+      return { already: false, plan, from: now, to, activatedAt: now };
+    });
+    if (!r.already) {
+      const day = (d: Date) => d.toISOString().slice(0, 10);
+      await this.notify(clinicId, 'Оплачений місяць почався', `Запуск завершено. Оплачений місяць діє з ${day(r.from!)} до ${day(r.to!)}.`).catch(() => undefined);
+    }
+    return r;
   }
 
   // The service owner (PLATFORM_ADMIN_EMAILS): what needs a person's decision about money
