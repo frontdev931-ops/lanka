@@ -35,6 +35,24 @@ export const launchFeeUah = (plan: string) => LAUNCH_FEE_UAH[plan] ?? LAUNCH_FEE
 // paid before 2026-11-19 keep the price list of that time, set by the migration), otherwise the current list price. Never by name or email.
 export const monthlyPriceUah = (c: { renewalPlan: string | null; renewalPriceUah: number | null }, plan: string) =>
   c.renewalPlan === plan && c.renewalPriceUah ? c.renewalPriceUah : PLANS[plan].priceUah;
+// Billing terms of a single clinic (2026-11-19): monthly, or one upfront annual payment = 12 calendar months for 10 monthly prices (no
+// automatic recurring charge). The annual price is derived from the clinic's applicable monthly price, so a stored price carries over
+// (Pro at 3 990 → 39 900 a year). The launch is never discounted. Usage limits stay monthly (periodStart below rolls month by month).
+export const BILLING_TERMS: Record<number, { months: number; paidMonths: number }> = { 1: { months: 1, paidMonths: 1 }, 12: { months: 12, paidMonths: 10 } };
+export const TERM_MONTHS = [1, 12];
+export const termPriceUah = (monthlyUah: number, months: number) => monthlyUah * BILLING_TERMS[months].paidMonths;
+
+// Calendar months: the same day of the month, or the last day of a shorter month (31 Jan + 1 = 28/29 Feb; 29 Feb 2028 + 12 = 28 Feb 2029);
+// the time of day is kept. Used for every paid period.
+export function addMonths(d: Date, n: number): Date {
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() + n;
+  const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  const r = new Date(d);
+  r.setUTCDate(1);
+  r.setUTCFullYear(y, m, Math.min(d.getUTCDate(), last));
+  return r;
+}
 // The network offer (2026-11-16): 7 990 UAH a month includes two branches, each further branch 2 990 UAH a month; the first onboarding is the standard
 // one (SETUP_FEE_UAH); a further comparable branch's onboarding is quoted individually, from BRANCH_SETUP_MIN_UAH (never charged without a quote)
 export const NETWORK_PRICE = { baseUah: 7990, includedBranches: 2, extraBranchUah: 2990 };
@@ -57,8 +75,15 @@ export function effectiveLimits(plan: string, overrides: unknown): Limits {
 
 export const monthStart = (now = new Date()) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
-// Where the current allowance period starts: the last payment, or the calendar month for clinics without one (manual or older clinics)
-export const periodStart = (c: { periodStartsAt: Date | null }, now = new Date()) => c.periodStartsAt ?? monthStart(now);
+// Where the current allowance period starts: the last payment, or the calendar month for clinics without one (manual or older clinics).
+// The allowance is monthly: from the payment it rolls on by calendar months (an annual payment gives twelve monthly allowances, not a pool).
+export function periodStart(c: { periodStartsAt: Date | null }, now = new Date()): Date {
+  if (!c.periodStartsAt) return monthStart(now);
+  if (c.periodStartsAt > now) return c.periodStartsAt;
+  let k = (now.getUTCFullYear() - c.periodStartsAt.getUTCFullYear()) * 12 + now.getUTCMonth() - c.periodStartsAt.getUTCMonth();
+  while (k > 0 && addMonths(c.periodStartsAt, k) > now) k--;
+  return addMonths(c.periodStartsAt, Math.max(0, k));
+}
 
 // Billing is enforced in production, and in tests that switch it on
 export const billingEnforced = () => (process.env.BILLING_ENFORCED ? process.env.BILLING_ENFORCED === 'true' : process.env.NODE_ENV === 'production');

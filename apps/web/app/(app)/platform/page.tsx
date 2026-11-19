@@ -46,12 +46,15 @@ export default function PlatformPage() {
   const [info, setInfo] = useState('');
   // "call me back" requests from the landing page
   const [contacts, setContacts] = useState<{ id: string; phone: string | null; name: string | null; lang: string; createdAt: string; handledAt: string | null }[]>([]);
+  // clinic owners asking to discuss connecting another clinic (Billing → "Маєте кілька клінік?")
+  const [clinicReqs, setClinicReqs] = useState<{ id: string; clinicId: string; email: string; name: string | null; comment: string | null; createdAt: string; handledAt: string | null; clinic: { name: string } }[]>([]);
   const [custom, setCustom] = useState<{ id: string; users: string; messages: string; ai: string } | null>(null);
 
   const load = useCallback(() => {
     api<Row[]>('/platform/clinics').then(setRows).catch((e) => setError((e as Error).message));
     api<PlanInfo[]>('/platform/plans').then(setPlans).catch(() => undefined);
     api<typeof contacts>('/platform/contact-requests').then(setContacts).catch(() => undefined);
+    api<typeof clinicReqs>('/platform/clinic-requests').then(setClinicReqs).catch(() => undefined);
   }, []);
   useEffect(() => {
     load();
@@ -77,9 +80,9 @@ export default function PlatformPage() {
   const startLaunch = async (r: Row) => {
     setError('');
     try {
-      const p = await api<{ eligible: boolean; plan: string; from: string; to: string }>(`/platform/clinics/${r.id}/launch`);
+      const p = await api<{ eligible: boolean; plan: string; months: number; from: string; to: string }>(`/platform/clinics/${r.id}/launch`);
       if (!p.eligible) return setError(t('pf.launchNotEligible'));
-      if (!(await ask(t('pf.launchConfirm', { name: r.name, plan: p.plan === 'PRO' ? t('billing.pro') : p.plan === 'START' ? t('billing.start') : p.plan, from: fmtDate(p.from), to: fmtDate(p.to) }), { confirmLabel: t('pf.launchStart') }))) return;
+      if (!(await ask(t('pf.launchConfirm', { name: r.name, plan: p.plan === 'PRO' ? t('billing.pro') : p.plan === 'START' ? t('billing.start') : p.plan, term: p.months === 12 ? t('billing.termYear') : t('billing.termMonth'), from: fmtDate(p.from), to: fmtDate(p.to) }), { confirmLabel: t('pf.launchStart') }))) return;
       const res = await api<{ already: boolean; from: string; to: string }>(`/platform/clinics/${r.id}/launch`, { method: 'POST' });
       setInfo(t('pf.launchDone', { from: fmtDate(res.from), to: fmtDate(res.to) }));
       load();
@@ -106,6 +109,41 @@ export default function PlatformPage() {
       </div>
 
       <PlatformWebsiteConnections clinics={rows} />
+
+      <Card flush title={t('pf.clinicReq.title')}>
+        <div id="platform-clinic-requests" />
+        <p className="rule" style={{ padding: '0 20px' }}>{t('pf.clinicReq.hint')}</p>
+        {clinicReqs.length === 0 ? (
+          <Empty title={t('pf.clinicReq.none')} />
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr><th>{t('pf.colWhen')}</th><th>{t('pf.colClinic')}</th><th>{t('pf.colContact')}</th><th>{t('pf.colComment')}</th><th>{t('pf.colState')}</th></tr>
+              </thead>
+              <tbody>
+                {clinicReqs.map((c) => (
+                  <tr key={c.id}>
+                    <td>{fmtDateTime(c.createdAt)}</td>
+                    <td>{c.clinic.name}</td>
+                    <td>{c.name ?? '—'}<div className="cell-sub"><a href={`mailto:${c.email}`}>{c.email}</a></div></td>
+                    <td>{c.comment ?? '—'}</td>
+                    <td>
+                      <Badge tone={c.handledAt ? 'gray' : 'amber'}>{c.handledAt ? t('pf.contactDone') : t('pf.contactNew')}</Badge>{' '}
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => api(`/platform/clinic-requests/${c.id}`, { method: 'PATCH', body: JSON.stringify({ handled: !c.handledAt }) }).then(load).catch((e) => setError((e as Error).message))}
+                      >
+                        {c.handledAt ? t('pf.markNew') : t('pf.markDone')}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       <Card flush title={t('pf.contacts')}>
         <p className="rule" style={{ padding: '0 20px' }}>{t('pf.contactsHint')}</p>

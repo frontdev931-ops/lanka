@@ -145,7 +145,8 @@ export default function Shell({ children }: { children: ReactNode }) {
 
   // The number of new requests to the administrator (from conversations): shown as a badge on the "Messages" item; the section is unavailable to a doctor
   useEffect(() => {
-    if (!me || me.role === 'DOCTOR') return;
+    // a clinic locked by billing (unpaid, lapsed) cannot read requests: no badge and no request that would be refused
+    if (!me || me.role === 'DOCTOR' || me.billing?.blocked) return;
     const load = () => api<{ newCount: number }>('/requests?status=NEW').then((r) => setNewRequests(r.newCount)).catch(() => {});
     load();
     const id = setInterval(load, 30000);

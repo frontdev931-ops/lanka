@@ -321,6 +321,21 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Завершите или проверьте открытый платёж за тариф перед выбором другого',
     en: 'Finish or check the open plan payment before choosing another plan',
   },
+  plan_change_support: {
+    uk: 'Зміна тарифу під час передплаченого періоду проходить через підтримку, щоб не втратити оплачений час. Напишіть нам',
+    ru: 'Смена тарифа во время предоплаченного периода проходит через поддержку, чтобы не потерять оплаченное время. Напишите нам',
+    en: 'A plan change during a prepaid period goes through support so that no paid time is lost. Please contact us',
+  },
+  bad_term: {
+    uk: 'Можна оплатити місяць або рік',
+    ru: 'Можно оплатить месяц или год',
+    en: 'You can pay for a month or a year',
+  },
+  clinic_request_open: {
+    uk: 'У клініки вже є відкритий запит на підключення ще однієї клініки',
+    ru: 'У клиники уже есть открытый запрос на подключение ещё одной клиники',
+    en: 'The clinic already has an open request to connect another clinic',
+  },
   launch_pending: {
     uk: 'Запуск уже оплачено й готується. Оплачений місяць почнеться в день запуску',
     ru: 'Запуск уже оплачен и готовится. Оплаченный месяц начнётся в день запуска',

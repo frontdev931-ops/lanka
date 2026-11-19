@@ -56,6 +56,9 @@ export default function SettingsPage() {
   const isOwner = role === 'OWNER';
   const canAudit = role === 'OWNER' || role === 'MANAGER';
   const [tab, setTab] = useState<Tab>('general');
+  // the tab of the address is read after the first render: until then (and until the role is known) no panel is mounted, so the General
+  // panel does not start its requests on the way to another tab (an unpaid clinic would get 403 for them)
+  const [tabReady, setTabReady] = useState(false);
   const canPay = canAudit && !me?.billing?.demo;
   const tabs: Tab[] = me?.billing?.blocked ? ['billing'] : canAudit ? TABS.filter((k) => k !== 'billing' || canPay) : role === 'ADMIN' ? ['general', 'team'] : ['general'];
   // the tab of the address (?tab=channels), also after the return from a Facebook or Instagram login; a tab the role cannot open falls back to the general one
@@ -63,6 +66,7 @@ export default function SettingsPage() {
     const q = new URLSearchParams(window.location.search).get('tab');
     if (q && MOVED[q]) router.replace(MOVED[q]);
     else if (q && (TABS as readonly string[]).includes(q)) setTab(q as Tab);
+    setTabReady(true);
   }, [router]);
   const shown: Tab = role && !tabs.includes(tab) ? tabs[0] : tab;
   const pick = (next: Tab) => {
@@ -103,7 +107,7 @@ export default function SettingsPage() {
     <>
       <PageHeader title={t('set.title')} subtitle={t(`set.sub.${shown}`)} />
       {tabs.length > 1 && <LineTabs id="set" label={t('set.title')} tabs={tabs} active={shown} onPick={pick} render={(k) => t(`set.tab.${k}`)} />}
-      {shown !== 'general' && (
+      {tabReady && role && shown !== 'general' && (
         <div role="tabpanel" id={`set-panel-${shown}`} aria-labelledby={`set-tab-${shown}`}>
           {shown === 'team' && <TeamAccess role={role} myEmail={me?.email ?? null} />}
           {shown === 'channels' && <ChannelSettings />}
@@ -115,7 +119,7 @@ export default function SettingsPage() {
           )}
         </div>
       )}
-      {shown === 'general' && (
+      {tabReady && role && shown === 'general' && (
       <div role={tabs.length > 1 ? 'tabpanel' : undefined} id="set-panel-general" aria-labelledby={tabs.length > 1 ? 'set-tab-general' : undefined}>
       {error && <Alert tone="error">{error}</Alert>}
 

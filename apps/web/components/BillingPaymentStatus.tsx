@@ -22,6 +22,8 @@ interface BillingPayment extends BillingCheckout {
   periodTo: string | null;
   refundedMinor: number;
   review: boolean;
+  // the term of a subscription: 1 = a month, 12 = a year (null for other purchases)
+  months?: number | null;
 }
 
 export function BillingPaymentStatus({ path, onSettled }: { path: string; onSettled?: () => void }) {
@@ -60,7 +62,7 @@ export function BillingPaymentStatus({ path, onSettled }: { path: string; onSett
   const checkButton = <button className="btn" disabled={refreshing} onClick={refresh}>{t('billing.refreshPayment')}</button>;
   if (error) return <Alert tone="error">{error}<div className="toolbar" style={{ marginTop: 8 }}>{checkButton}</div></Alert>;
   if (!payment) return <Alert tone="info">{t('billing.checking')}</Alert>;
-  const { status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, review, url } = payment;
+  const { status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, review, url, months } = payment;
   const label = review ? 'billing.review' : status === 'PAID' ? 'billing.confirmed' :
     status === 'EXPIRED' ? 'billing.st.EXPIRED' : status === 'FAILED' ? 'billing.st.FAILED' :
     status === 'REVERSED' ? 'billing.st.REVERSED' : 'billing.pendingPayment';
@@ -69,7 +71,7 @@ export function BillingPaymentStatus({ path, onSettled }: { path: string; onSett
   return (
     <Alert tone={status === 'PAID' && !refundedMinor ? 'success' : status === 'PENDING' && !review ? 'info' : 'warn'}>
       <strong role="status">{t(label)}</strong>
-      <div>{t('billing.total', { sum: sum(amountMinor) })}</div>
+      <div>{t('billing.total', { sum: sum(amountMinor) })}{months ? ` · ${months === 12 ? t('billing.termYear') : t('billing.termMonth')}` : ''}</div>
       {setupMinor > 0 && <div>{t('billing.setupLine', { sum: sum(setupMinor) })}</div>}
       {periodFrom && periodTo && <div>{t('billing.period', { from: fmtDate(periodFrom), to: fmtDate(periodTo) })}</div>}
       {refundedMinor > 0 && <div>{t('billing.refundedSum', { sum: sum(refundedMinor) })}</div>}

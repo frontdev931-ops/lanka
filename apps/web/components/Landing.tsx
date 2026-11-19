@@ -424,6 +424,7 @@ export default function Landing({ lang }: { lang: Locale }) {
                   <div className="lp-price">{p.from && <small>{p.from} </small>}{p.price} <span>{L.pricing.perMonth}</span></div>
                   {p.extra && <p className="lp-plan-extra">{p.extra}</p>}
                   {p.launch && <p className="lp-plan-extra">{p.launch}</p>}
+                  {p.annual && <p className="lp-plan-annual">{p.annual}</p>}
                   <ul className="lp-checks">{p.lines.map((l) => <li key={l}><Icon name="check" size={18} />{l}</li>)}</ul>
                   {p.limits && <ul className="lp-plan-limits">{p.limits.map((l) => <li key={l}>{l}</li>)}</ul>}
                   {p.note && <p className="lp-plan-note">{p.note}</p>}

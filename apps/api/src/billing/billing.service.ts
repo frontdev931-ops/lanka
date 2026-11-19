@@ -3,7 +3,7 @@ import { BillingPayment, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { MailService } from '../auth/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AI_PACK, BRANCH_SETUP_MIN_UAH, GRACE_DAYS, PLANS, SELLABLE_PLANS, SETUP_FEE_UAH, effectiveLimits, launchFeeUah, monthlyPriceUah, networkMonthlyUah, periodStart } from '../service/plans';
+import { AI_PACK, BILLING_TERMS, BRANCH_SETUP_MIN_UAH, GRACE_DAYS, PLANS, SELLABLE_PLANS, SETUP_FEE_UAH, TERM_MONTHS, addMonths, effectiveLimits, launchFeeUah, monthlyPriceUah, networkMonthlyUah, periodStart, termPriceUah } from '../service/plans';
 import { INVOICE_VALIDITY, MONO_CURRENCY, MonoClient, MonoRequestError, MonoStatus, readMonoStatus } from './mono';
 import { DIAGNOSTIC_AUDIT_PREFIX, MONO_DIAGNOSTIC } from './mono-diagnostic';
 
@@ -13,14 +13,21 @@ const monoPending: Prisma.BillingPaymentWhereInput = {
   monoExpiresAt: { not: null },
   OR: [{ status: 'PENDING' }, { status: 'FAILED', monoInvoiceId: { not: null } }],
 };
-const paymentDetails = { id: true, kind: true, plan: true, amountMinor: true, currency: true, setupMinor: true, packReplies: true, status: true, createdAt: true, paidAt: true, periodFrom: true, periodTo: true, refundedMinor: true } as const;
+const paymentDetails = { id: true, kind: true, plan: true, amountMinor: true, currency: true, setupMinor: true, packReplies: true, status: true, createdAt: true, paidAt: true, periodFrom: true, periodTo: true, refundedMinor: true, months: true, monthlyMinor: true } as const;
 type Scope = { clinicId: string; networkId?: string | null } | { networkId: string; clinicId?: never };
-type Quote = Pick<BillingPayment, 'clinicId' | 'kind' | 'amountMinor'> & Partial<Pick<BillingPayment, 'networkId' | 'periodFrom' | 'periodTo' | 'plan' | 'setupMinor' | 'packReplies' | 'branchIds'>>;
-const addMonth = (d: Date) => {
-  const r = new Date(d);
-  r.setUTCMonth(r.getUTCMonth() + 1);
-  return r;
-};
+type Quote = Pick<BillingPayment, 'clinicId' | 'kind' | 'amountMinor'> & Partial<Pick<BillingPayment, 'networkId' | 'periodFrom' | 'periodTo' | 'plan' | 'setupMinor' | 'packReplies' | 'branchIds' | 'months' | 'monthlyMinor'>>;
+// one calendar month (end of month and leap days handled by addMonths)
+const addMonth = (d: Date) => addMonths(d, 1);
+// the term of an order; orders made before terms existed are monthly
+const termOf = (o: { months: number | null }) => o.months ?? 1;
+// A plan change while time is prepaid would re-price that time: an annual change of plan, or any change while an annual period runs, goes
+// through support (the prepaid time is never erased or converted here)
+async function planChangeViaSupport(db: Prisma.TransactionClient | PrismaService, c: { id: string; plan: string; billingStatus: string; paidUntil: Date | null }, plan: string, months: number, now: Date) {
+  const running = (c.billingStatus === 'ACTIVE' || c.billingStatus === 'PAST_DUE') && !!c.paidUntil && c.paidUntil > now;
+  if (!running || c.plan === plan) return false;
+  if (months > 1) return true;
+  return !!(await db.billingPayment.findFirst({ where: { clinicId: c.id, kind: 'SUBSCRIPTION', status: 'PAID', months: { gt: 1 }, periodTo: { gt: now } }, select: { id: true } }));
+}
 // A clinic that was never activated (no launch paid, no paid period, still awaiting its first payment): only such a clinic pays the one-time
 // launch, and its confirmed first payment waits in LAUNCH_PENDING. Clinics activated before (online, by hand or historically) never go there.
 type LaunchState = { setupPaidAt: Date | null; paidUntil: Date | null; billingStatus: string };
@@ -58,7 +65,7 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   async overview(clinicId: string, now = new Date()) {
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { networkId: true, plan: true, billingStatus: true, paidUntil: true, periodStartsAt: true, setupPaidAt: true, renewalPlan: true, renewalPriceUah: true, aiMonthlyLimit: true, aiPurchased: true, aiPackCapPerMonth: true, limitOverrides: true } });
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { id: true, networkId: true, plan: true, billingStatus: true, paidUntil: true, periodStartsAt: true, setupPaidAt: true, renewalPlan: true, renewalPriceUah: true, aiMonthlyLimit: true, aiPurchased: true, aiPackCapPerMonth: true, limitOverrides: true } });
     const since = periodStart(c, now);
     const [used, packs, payments] = await Promise.all([
       this.prisma.aiUsage.count({ where: { clinicId, ok: true, billable: true, createdAt: { gte: since } } }),
@@ -68,8 +75,11 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     const isNew = neverActivated(c);
     const from = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
     const launchPaid = c.billingStatus === 'LAUNCH_PENDING'
-      ? await this.prisma.billingPayment.findFirst({ where: launchEligible(clinicId), orderBy: { paidAt: 'asc' }, select: { plan: true, paidAt: true } })
+      ? await this.prisma.billingPayment.findFirst({ where: launchEligible(clinicId), orderBy: { paidAt: 'asc' }, select: { plan: true, paidAt: true, months: true } })
       : null;
+    const viaSupport = Object.fromEntries(await Promise.all(SELLABLE_PLANS.map(async (k) => [k, {
+      monthly: await planChangeViaSupport(this.prisma, c, k, 1, now), annual: await planChangeViaSupport(this.prisma, c, k, 12, now),
+    }])));
     const pending = await this.prisma.billingPayment.findFirst({ where: { clinicId, networkId: null, kind: { not: MONO_DIAGNOSTIC }, ...monoPending }, orderBy: { createdAt: 'desc' }, select: { id: true } });
     return {
       configured: this.mono.configured,
@@ -78,11 +88,12 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       pendingPaymentId: pending?.id ?? null,
       // A new clinic's first month starts on the launch day agreed with it (the service owner starts it), so no dates are promised before that
       nextPeriod: isNew || c.billingStatus === 'LAUNCH_PENDING' ? null : { from, to: addMonth(from) },
+      nextPeriodAnnual: isNew || c.billingStatus === 'LAUNCH_PENDING' ? null : { from, to: addMonths(from, 12) },
       monthStartsAtLaunch: isNew,
       // LAUNCH_PENDING: paid, the launch is being prepared (the plan and one prepaid month are recorded; the month starts on activation)
       // REVIEW: the launch payment was partly refunded before the start; nothing can be bought or started until support resolves the payment
       launch: c.billingStatus === 'LAUNCH_PENDING'
-        ? launchPaid ? { state: 'PENDING', plan: launchPaid.plan ?? c.plan, paidAt: launchPaid.paidAt } : { state: 'REVIEW', plan: c.plan, paidAt: null }
+        ? launchPaid ? { state: 'PENDING', plan: launchPaid.plan ?? c.plan, paidAt: launchPaid.paidAt, months: termOf(launchPaid) } : { state: 'REVIEW', plan: c.plan, paidAt: null }
         : { state: isNew ? 'NONE' : 'DONE' },
       // what the current plan renews at (the clinic's stored price; no launch fee after the launch)
       renewal: !isNew && c.billingStatus !== 'LAUNCH_PENDING' && SELLABLE_PLANS.includes(c.plan) ? { plan: c.plan, priceUah: monthlyPriceUah(c, c.plan), date: c.paidUntil } : null,
@@ -93,7 +104,15 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       plans: SELLABLE_PLANS.map((k) => {
         const priceUah = monthlyPriceUah(c, k);
         const launchUah = isNew ? launchFeeUah(k) : null;
-        return { key: k, priceUah, listPriceUah: PLANS[k].priceUah, launchUah, totalUah: priceUah + (launchUah ?? 0), limits: PLANS[k].limits, features: PLANS[k].features };
+        const annualUah = termPriceUah(priceUah, 12);
+        return {
+          key: k, priceUah, listPriceUah: PLANS[k].priceUah, launchUah, totalUah: priceUah + (launchUah ?? 0),
+          // one upfront payment for 12 calendar months (10 monthly prices); the launch is not discounted
+          annualUah, annualSavingUah: priceUah * 12 - annualUah, annualTotalUah: annualUah + (launchUah ?? 0),
+          // a plan change while time is prepaid goes through support (see planChangeViaSupport)
+          viaSupport: viaSupport[k],
+          limits: PLANS[k].limits, features: PLANS[k].features,
+        };
       }),
       setupPaid: !!c.setupPaidAt,
       pack: { ...AI_PACK, bought: packs, cap: c.aiPackCapPerMonth, periodFrom: since, periodTo: c.paidUntil },
@@ -112,6 +131,7 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     scope: Scope, kind: string, now: Date,
     quote: (tx: Prisma.TransactionClient) => Promise<{ order: Quote; description: string }>,
     plan?: string,
+    months?: number,
   ) {
     if (!this.mono.configured) throw new ServiceUnavailableException('billing_not_configured');
     const active = { ...scope, kind, ...monoPending };
@@ -123,10 +143,11 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       const existing = await tx.billingPayment.findFirst({ where: active, orderBy: { createdAt: 'asc' } });
       if (existing) {
         // An outstanding historical Pro invoice still holds the subscription slot until mono resolves it.
-        if (existing.oneTimeProBuyerId || (plan && existing.plan !== plan)) throw new ConflictException('billing_payment_pending');
+        // another plan or another term: the open invoice is never changed or doubled; it has to be finished or expire first
+        if (existing.oneTimeProBuyerId || (plan && existing.plan !== plan) || (months && termOf(existing) !== months)) throw new ConflictException('billing_payment_pending');
         return { order: existing, description: null };
       }
-      if (before && (!plan || before.plan === plan)) {
+      if (before && (!plan || before.plan === plan) && (!months || termOf(before) === months)) {
         const settled = await tx.billingPayment.findFirst({ where: { id: before.id, status: { in: ['PAID', 'REVERSED'] } } });
         if (settled) return { order: settled, description: null };
       }
@@ -175,10 +196,11 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     });
   }
 
-  checkout(clinicId: string, plan: string, now = new Date()) {
+  checkout(clinicId: string, plan: string, months = 1, now = new Date()) {
     if (!SELLABLE_PLANS.includes(plan)) throw new BadRequestException('bad_plan');
+    if (!TERM_MONTHS.includes(months)) throw new BadRequestException('bad_term');
     return this.purchase({ clinicId, networkId: null }, 'SUBSCRIPTION', now, async (tx) => {
-      const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { limitOverrides: true, networkId: true, setupPaidAt: true, paidUntil: true, billingStatus: true, renewalPlan: true, renewalPriceUah: true } });
+      const c = await tx.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { id: true, plan: true, limitOverrides: true, networkId: true, setupPaidAt: true, paidUntil: true, billingStatus: true, renewalPlan: true, renewalPriceUah: true } });
       if (c.networkId) throw new BadRequestException('network_branch');
       // the first payment is confirmed and the launch is being prepared: the same launch is never bought again
       if (c.billingStatus === 'LAUNCH_PENDING') throw new ConflictException('launch_pending');
@@ -187,19 +209,22 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
         tx.invitation.count({ where: { clinicId, acceptedAt: null, expiresAt: { gt: now } } }),
       ]);
       if (users + pending > effectiveLimits(plan, c.limitOverrides).users) throw new BadRequestException('plan_users_over');
+      if (await planChangeViaSupport(tx, c, plan, months, now)) throw new BadRequestException('plan_change_support');
       // The order is a snapshot: its amount never changes when the price list does. A new clinic's launch order has no period yet (it starts on
       // activation); a renewal or plan change of an activated clinic buys the month after its paid period, at its stored price, without a launch.
       const launch = neverActivated(c);
       const setupMinor = launch ? launchFeeUah(plan) * 100 : 0;
       const periodFrom = launch ? null : c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
+      // the amounts come only from the server's prices (the stored monthly price x the paid months of the term, plus the launch once)
+      const monthly = monthlyPriceUah(c, plan);
       return {
         order: {
-          clinicId, kind: 'SUBSCRIPTION', plan, amountMinor: monthlyPriceUah(c, plan) * 100 + setupMinor,
-          setupMinor, periodFrom, periodTo: periodFrom && addMonth(periodFrom),
+          clinicId, kind: 'SUBSCRIPTION', plan, amountMinor: termPriceUah(monthly, months) * 100 + setupMinor,
+          setupMinor, months, monthlyMinor: monthly * 100, periodFrom, periodTo: periodFrom && addMonths(periodFrom, months),
         },
-        description: `LANKA ${PLANS[plan].label}`,
+        description: months === 12 ? `LANKA ${PLANS[plan].label}, 12 міс.` : `LANKA ${PLANS[plan].label}`,
       };
-    }, plan);
+    }, plan, months);
   }
 
   buyPack(clinicId: string, now = new Date()) {
@@ -231,7 +256,7 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
   private paymentStatus(order: BillingPayment, canResume: boolean) {
     const { id, status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, kind } = order;
     return {
-      id, status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, kind,
+      id, status, amountMinor, setupMinor, periodFrom, periodTo, refundedMinor, kind, months: kind === 'SUBSCRIPTION' ? termOf(order) : null,
       review: status === 'PENDING' && !order.monoInvoiceId && !!order.monoExpiresAt && order.monoExpiresAt <= new Date(),
       url: canResume ? this.checkoutUrl(order) : null,
     };
@@ -420,10 +445,13 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       const from = n.paidUntil && n.paidUntil > now ? n.paidUntil : now;
       const to = addMonth(from);
       await tx.billingPayment.update({ where: { id: order.id }, data: { periodFrom: from, periodTo: to } });
-      await tx.network.update({ where: { id: networkId }, data: { billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, ...(setupMinor && !n.setupPaidAt ? { setupPaidAt: now } : {}) } });
-      const branches = await tx.clinic.findMany({ where: { networkId, id: { in: order.branchIds } }, select: { id: true, limitOverrides: true }, orderBy: { id: 'asc' } });
+      await tx.network.update({ where: { id: networkId }, data: { billingStatus: 'ACTIVE', paidUntil: to, ...(n.paidUntil && n.paidUntil > now ? {} : { periodStartsAt: now }), ...(setupMinor && !n.setupPaidAt ? { setupPaidAt: now } : {}) } });
+      const branches = await tx.clinic.findMany({ where: { networkId, id: { in: order.branchIds } }, select: { id: true, limitOverrides: true, paidUntil: true }, orderBy: { id: 'asc' } });
       for (const branch of branches) {
-        await tx.clinic.update({ where: { id: branch.id }, data: { plan: 'NETWORK', billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, aiMonthlyLimit: effectiveLimits('NETWORK', branch.limitOverrides).aiRepliesPerMonth } });
+        // As for a single clinic: a branch whose paid period is still running (an early network payment, or an already-paid clinic that joined
+        // the network) keeps its monthly usage window and counters; the window restarts only for a branch with no running paid period
+        const running = !!branch.paidUntil && branch.paidUntil > now;
+        await tx.clinic.update({ where: { id: branch.id }, data: { plan: 'NETWORK', billingStatus: 'ACTIVE', paidUntil: to, ...(running ? {} : { periodStartsAt: now }), aiMonthlyLimit: effectiveLimits('NETWORK', branch.limitOverrides).aiRepliesPerMonth } });
       }
       const exceptions: string[] = [];
       if (setupMinor && n.setupPaidAt) exceptions.push('setup_duplicate');
@@ -440,7 +468,9 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
     const plan = order.plan ?? 'START';
     const aiMonthlyLimit = effectiveLimits(plan, c.limitOverrides).aiRepliesPerMonth;
     // the price of this plan is stored for its renewals (the historical one-time Pro check carries no list price)
-    const renewal = order.oneTimeProBuyerId ? {} : { renewalPlan: plan, renewalPriceUah: Math.round((order.amountMinor - setupMinor) / 100) };
+    const months = termOf(order);
+    const monthlyUah = order.monthlyMinor ? order.monthlyMinor / 100 : Math.round((order.amountMinor - setupMinor) / 100 / BILLING_TERMS[months].paidMonths);
+    const renewal = order.oneTimeProBuyerId ? {} : { renewalPlan: plan, renewalPriceUah: Math.round(monthlyUah) };
     if (setupMinor && neverActivated(c)) {
       // A new clinic's first payment: the plan, the paid launch and one prepaid month are recorded; the month starts when the service owner
       // starts it after the launch is agreed (activateLaunch). Until then the clinic sets itself up and nothing is sent to patients.
@@ -448,12 +478,16 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       await tx.clinic.update({ where: { id: clinicId }, data: { plan, billingStatus: 'LAUNCH_PENDING', setupPaidAt: now, sendingEnabled: false, aiMonthlyLimit, ...renewal } });
       return [];
     }
-    const from = c.paidUntil && c.paidUntil > now ? c.paidUntil : now;
-    const to = addMonth(from);
+    // the paid term from the later of the paid-through date and the confirmation
+    const running = !!c.paidUntil && c.paidUntil > now;
+    const from = running ? c.paidUntil! : now;
+    const to = addMonths(from, months);
     await tx.billingPayment.update({ where: { id: order.id }, data: { periodFrom: from, periodTo: to } });
     await tx.clinic.update({
       where: { id: clinicId },
-      data: { plan, billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, aiMonthlyLimit, ...renewal,
+      // An early renewal (monthly or annual) adds time after the paid one and keeps the monthly usage window where it is: the allowance
+      // window restarts only when a new paid period starts now (nothing was running). Repeated prepayment never gives an extra allowance.
+      data: { plan, billingStatus: 'ACTIVE', paidUntil: to, ...(running ? {} : { periodStartsAt: now }), aiMonthlyLimit, ...renewal,
         ...((setupMinor || order.oneTimeProIncludesSetup) && !c.setupPaidAt ? { setupPaidAt: now } : {}) },
     });
     return setupMinor && c.setupPaidAt ? ['setup_duplicate'] : [];
@@ -464,8 +498,10 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
   async launchPreview(clinicId: string, now = new Date()) {
     const c = await this.prisma.clinic.findUnique({ where: { id: clinicId }, select: { billingStatus: true, plan: true } });
     if (!c) throw new NotFoundException();
-    const p = c.billingStatus === 'LAUNCH_PENDING' ? await this.prisma.billingPayment.findFirst({ where: launchEligible(clinicId), orderBy: { paidAt: 'asc' }, select: { plan: true, paidAt: true, amountMinor: true } }) : null;
-    return { eligible: !!p, status: c.billingStatus, plan: p?.plan ?? c.plan, paidAt: p?.paidAt ?? null, amountMinor: p?.amountMinor ?? null, from: now, to: addMonth(now) };
+    const p = c.billingStatus === 'LAUNCH_PENDING' ? await this.prisma.billingPayment.findFirst({ where: launchEligible(clinicId), orderBy: { paidAt: 'asc' }, select: { plan: true, paidAt: true, amountMinor: true, months: true } }) : null;
+    // the dates of the term actually bought: 12 months for an annual payment, one for a monthly one
+    const months = p ? termOf(p) : 1;
+    return { eligible: !!p, status: c.billingStatus, plan: p?.plan ?? c.plan, paidAt: p?.paidAt ?? null, amountMinor: p?.amountMinor ?? null, months, from: now, to: addMonths(now, months) };
   }
 
   // Starts the prepaid month from now, once: atomic (the clinic row is locked), idempotent (a repeat returns the started month), only with a
@@ -476,20 +512,21 @@ export class BillingService implements OnApplicationBootstrap, OnModuleDestroy {
       const c = await tx.clinic.findUnique({ where: { id: clinicId }, select: { billingStatus: true, networkId: true, limitOverrides: true } });
       if (!c) throw new NotFoundException();
       if (c.billingStatus !== 'LAUNCH_PENDING') {
-        const done = await tx.billingPayment.findFirst({ where: { clinicId, kind: 'SUBSCRIPTION', launchActivatedAt: { not: null } }, orderBy: { launchActivatedAt: 'desc' }, select: { plan: true, periodFrom: true, periodTo: true, launchActivatedAt: true } });
-        if (done) return { already: true, plan: done.plan, from: done.periodFrom, to: done.periodTo, activatedAt: done.launchActivatedAt };
+        const done = await tx.billingPayment.findFirst({ where: { clinicId, kind: 'SUBSCRIPTION', launchActivatedAt: { not: null } }, orderBy: { launchActivatedAt: 'desc' }, select: { plan: true, periodFrom: true, periodTo: true, launchActivatedAt: true, months: true } });
+        if (done) return { already: true, plan: done.plan, months: termOf(done), from: done.periodFrom, to: done.periodTo, activatedAt: done.launchActivatedAt };
         throw new BadRequestException('launch_not_pending');
       }
       if (c.networkId) throw new BadRequestException('network_branch');
       const p = await tx.billingPayment.findFirst({ where: launchEligible(clinicId), orderBy: { paidAt: 'asc' } });
       if (!p) throw new BadRequestException('launch_payment_missing');
       const plan = p.plan ?? 'START';
-      const to = addMonth(now);
+      const months = termOf(p);
+      const to = addMonths(now, months);
       const marked = await tx.billingPayment.updateMany({ where: { id: p.id, launchActivatedAt: null }, data: { periodFrom: now, periodTo: to, launchActivatedAt: now, launchActivatedBy: userId } });
       if (!marked.count) throw new ConflictException('launch_changed');
       await tx.clinic.update({ where: { id: clinicId }, data: { plan, billingStatus: 'ACTIVE', paidUntil: to, periodStartsAt: now, aiMonthlyLimit: effectiveLimits(plan, c.limitOverrides).aiRepliesPerMonth } });
-      await tx.auditLog.create({ data: { clinicId, userId, action: 'billing.launch_activated', details: { orderId: p.orderId, plan, from: now.toISOString(), to: to.toISOString() } } });
-      return { already: false, plan, from: now, to, activatedAt: now };
+      await tx.auditLog.create({ data: { clinicId, userId, action: 'billing.launch_activated', details: { orderId: p.orderId, plan, months, from: now.toISOString(), to: to.toISOString() } } });
+      return { already: false, plan, months, from: now, to, activatedAt: now };
     });
     if (!r.already) {
       const day = (d: Date) => d.toISOString().slice(0, 10);

@@ -607,6 +607,221 @@ describe('покупка й підключення', () => {
     expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).paidUntil).toEqual(until);
   });
 });
+// Annual prepaid subscriptions (2026-11-19): 12 calendar months for 10 monthly prices, one upfront payment, launch not discounted
+describe('річна оплата', () => {
+  const MONTH = 86_400_000 * 27;
+  const annual = (token: string, plan: string, extra: object = {}) => http().post('/billing/checkout').set(auth(token)).send({ plan, months: 12, ...extra });
+
+  it('нова клініка: річні суми з публічної ціни, запуск без знижки; оплата чекає запуску, старт дає 12 місяців; повтори нічого не додають', async () => {
+    const c = await clinic();
+    const o = (await http().get('/billing').set(auth(c.token)).expect(200)).body;
+    expect(o.plans.map((p: Record<string, number>) => [p.key, p.annualUah, p.annualSavingUah, p.launchUah, p.annualTotalUah]))
+      .toEqual([['START', 19900, 3980, 4990, 24890], ['PRO', 49900, 9980, 4990, 54890]]);
+    // a price sent by the client is ignored; an unsupported term is refused
+    await http().post('/billing/checkout').set(auth(c.token)).send({ plan: 'PRO', months: 6 }).expect(400);
+    const r = await annual(c.token, 'PRO', { amountMinor: 100, priceUah: 1 }).expect(200);
+    const order = await prisma.billingPayment.findUniqueOrThrow({ where: { id: r.body.id } });
+    expect(order).toMatchObject({ amountMinor: 5489000, setupMinor: 499000, months: 12, monthlyMinor: 499000, periodFrom: null, periodTo: null });
+    expect(mono.invoices.get(order.orderId)!.merchantPaymInfo.basketOrder.map((i) => i.sum)).toEqual([4990000, 499000]);
+    // switching the toggle never changes or doubles the open invoice
+    await http().post('/billing/checkout').set(auth(c.token)).send({ plan: 'PRO' }).expect(409);
+    await annual(c.token, 'PRO').expect(200).expect(({ body }) => expect(body.id).toBe(order.id));
+    expect(await prisma.billingPayment.count({ where: { clinicId: c.clinicId } })).toBe(1);
+
+    await pay(order.orderId, order.amountMinor).expect(200);
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).toMatchObject({ billingStatus: 'LAUNCH_PENDING', paidUntil: null, renewalPlan: 'PRO', renewalPriceUah: 4990, aiMonthlyLimit: 3000 });
+    const preview = await billing.launchPreview(c.clinicId);
+    expect(preview).toMatchObject({ eligible: true, months: 12 });
+    const started = await activate(c.clinicId);
+    expect(started).toMatchObject({ already: false, months: 12 });
+    const cl = await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } });
+    const expected = new Date(started.from!); expected.setUTCFullYear(expected.getUTCFullYear() + 1);
+    // the same calendar day a year later (unless it is 29 February)
+    if (!(started.from!.getUTCMonth() === 1 && started.from!.getUTCDate() === 29)) expect(cl.paidUntil).toEqual(expected);
+    await pay(order.orderId, order.amountMinor).expect(200);
+    expect(await activate(c.clinicId)).toMatchObject({ already: true, to: cl.paidUntil });
+    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).paidUntil).toEqual(cl.paidUntil);
+    // the usage limits stay monthly: the allowance window starts at the start of the month
+    expect((await http().get('/billing').set(auth(c.token))).body.ai.included).toBe(3000);
+    // the history tells the term apart
+    expect((await http().get('/billing').set(auth(c.token))).body.payments[0]).toMatchObject({ months: 12, monthlyMinor: 499000 });
+  });
+
+  it('збережена ціна Pro 3 990: рік 39 900; продовження від кінця оплаченого; зміна тарифу на рік — через підтримку', async () => {
+    const owner = await clinic();
+    const started = new Date(Date.now() - 86_400_000);
+    const paidUntil = new Date(started); paidUntil.setUTCMonth(paidUntil.getUTCMonth() + 1);
+    await prisma.clinic.update({ where: { id: owner.clinicId }, data: { plan: 'PRO', billingStatus: 'ACTIVE', periodStartsAt: started, paidUntil, setupPaidAt: started, aiMonthlyLimit: 3000, renewalPlan: 'PRO', renewalPriceUah: 3990 } });
+    const o = (await http().get('/billing').set(auth(owner.token))).body;
+    expect(o.plans.find((p: { key: string }) => p.key === 'PRO')).toMatchObject({ priceUah: 3990, annualUah: 39900, launchUah: null, annualTotalUah: 39900, viaSupport: { monthly: false, annual: false } });
+    expect(o.plans.find((p: { key: string }) => p.key === 'START')).toMatchObject({ annualUah: 19900, viaSupport: { annual: true } });
+    expect((await annual(owner.token, 'START').expect(400)).body.message).toMatch(/підтримк/);
+    const r = await annual(owner.token, 'PRO').expect(200);
+    const order = await prisma.billingPayment.findUniqueOrThrow({ where: { id: r.body.id } });
+    expect(order).toMatchObject({ amountMinor: 3990000, setupMinor: 0, months: 12, monthlyMinor: 399000 });
+    await pay(order.orderId, order.amountMinor).expect(200);
+    const after = await prisma.clinic.findUniqueOrThrow({ where: { id: owner.clinicId } });
+    const expected = new Date(paidUntil); expected.setUTCFullYear(expected.getUTCFullYear() + 1);
+    expect(after).toMatchObject({ billingStatus: 'ACTIVE', plan: 'PRO', renewalPlan: 'PRO', renewalPriceUah: 3990 });
+    expect(after.paidUntil!.getTime()).toBeGreaterThanOrEqual(expected.getTime() - 3 * 86_400_000);
+    expect(await prisma.billingPayment.findUniqueOrThrow({ where: { id: order.id } })).toMatchObject({ periodFrom: paidUntil });
+    // while the annual period runs, a monthly switch to another plan goes through support too; the same plan renews normally
+    expect((await http().get('/billing').set(auth(owner.token))).body.plans.find((p: { key: string }) => p.key === 'START').viaSupport).toEqual({ monthly: true, annual: true });
+    await http().post('/billing/checkout').set(auth(owner.token)).send({ plan: 'START' }).expect(400);
+    expect((await checkoutOrder(owner.token, 'PRO')).amountMinor).toBe(399000);
+  });
+
+  it('дострокове продовження (місяць → рік і рік → рік) не скидає використання й не зсуває місячне вікно; ліміт лишається місячним', async () => {
+    const c = await clinic();
+    const started = new Date(Date.now() - 10 * 86_400_000);
+    const paidUntil = new Date(Date.now() + 20 * 86_400_000);
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'START', billingStatus: 'ACTIVE', periodStartsAt: started, paidUntil, setupPaidAt: started, aiEnabled: true, aiMonthlyLimit: 500, renewalPlan: 'START', renewalPriceUah: 1990 } });
+    await ai.complete(c.clinicId, 'chat_draft', 's', [{ role: 'user', content: 'x' }], 50, 'chat', true);
+    await ai.complete(c.clinicId, 'chat_draft', 's', [{ role: 'user', content: 'y' }], 50, 'chat', true);
+    for (let i = 0; i < 2; i++) {
+      const r = await annual(c.token, 'START').expect(200);
+      const order = await prisma.billingPayment.findUniqueOrThrow({ where: { id: r.body.id } });
+      await pay(order.orderId, order.amountMinor).expect(200);
+      const cl = await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } });
+      expect(cl.periodStartsAt).toEqual(started);
+      expect((await http().get('/billing').set(auth(c.token))).body.ai).toMatchObject({ included: 500, used: 2 });
+    }
+    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).paidUntil!.getTime()).toBeGreaterThan(paidUntil.getTime() + 700 * 86_400_000);
+  });
+
+  it('оплачено, готуємо запуск: власник відкриває Cliniccards і вводить ключ (не 403); надсилання й запис закриті', async () => {
+    process.env.BILLING_ENFORCED = 'true';
+    const prior = process.env.CLINICCARDS_BASE_URL;
+    // nothing leaves the machine: the key check goes to a closed local port
+    process.env.CLINICCARDS_BASE_URL = 'http://127.0.0.1:9/api';
+    try {
+      const c = await clinic();
+      const o = await checkoutOrder(c.token);
+      await pay(o.orderId, o.amountMinor).expect(200);
+      expect((await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).billingStatus).toBe('LAUNCH_PENDING');
+      await http().get('/integrations/cliniccards').set(auth(c.token)).expect(200);
+      await http().get('/integrations/cliniccards/runs').set(auth(c.token)).expect(200);
+      await http().get('/requests?status=NEW').set(auth(c.token)).expect(200);
+      const r = await http().put('/integrations/cliniccards/key').set(auth(c.token)).send({ apiKey: 'some-key-12345' });
+      expect(r.status).not.toBe(403);
+      await http().patch('/automations/settings').set(auth(c.token)).send({ sendingEnabled: true }).expect(400);
+      // an unpaid clinic stays closed
+      const unpaid = await clinic();
+      await http().get('/integrations/cliniccards').set(auth(unpaid.token)).expect(403);
+    } finally {
+      delete process.env.BILLING_ENFORCED;
+      if (prior === undefined) delete process.env.CLINICCARDS_BASE_URL;
+      else process.env.CLINICCARDS_BASE_URL = prior;
+    }
+  });
+
+  it('старе замовлення без терміну — один місяць; повне повернення річної оплати до запуску скасовує підготовку', async () => {
+    const c = await clinic();
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { billingStatus: 'ACTIVE', paidUntil: new Date(Date.now() - 1000), setupPaidAt: new Date(), periodStartsAt: new Date(Date.now() - 30 * 86_400_000) } });
+    const event = mono.event(rnd(), 199000);
+    await prisma.billingPayment.create({ data: { clinicId: c.clinicId, orderId: event.reference!, kind: 'SUBSCRIPTION', plan: 'START', amountMinor: 199000, monoInvoiceId: event.invoiceId, monoExpiresAt: new Date(Date.now() + 60_000) } });
+    await webhook(event).expect(200);
+    const until = (await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).paidUntil!.getTime();
+    expect(until - Date.now()).toBeGreaterThan(MONTH);
+    expect(until - Date.now()).toBeLessThan(32 * 86_400_000);
+
+    const n = await clinic();
+    const r = await annual(n.token, 'START').expect(200);
+    const order = await prisma.billingPayment.findUniqueOrThrow({ where: { id: r.body.id } });
+    expect(order.amountMinor).toBe(2489000);
+    await pay(order.orderId, order.amountMinor).expect(200);
+    await pay(order.orderId, order.amountMinor, 'reversed').expect(200);
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: n.clinicId } })).toMatchObject({ billingStatus: 'AWAITING_PAYMENT', paidUntil: null });
+    await expect(activate(n.clinicId)).rejects.toMatchObject({ message: 'launch_not_pending' });
+  });
+
+  it('календарні межі: кінець місяця, 29 лютого; місячне вікно ліміту в межах річного періоду', async () => {
+    const { addMonths, periodStart } = await import('../src/service/plans');
+    const d = (s: string) => new Date(s);
+    expect(addMonths(d('2027-01-31T10:00:00Z'), 1)).toEqual(d('2027-02-28T10:00:00Z'));
+    expect(addMonths(d('2028-01-31T10:00:00Z'), 1)).toEqual(d('2028-02-29T10:00:00Z'));
+    expect(addMonths(d('2028-02-29T10:00:00Z'), 12)).toEqual(d('2029-02-28T10:00:00Z'));
+    expect(addMonths(d('2027-03-31T00:00:00Z'), 12)).toEqual(d('2028-03-31T00:00:00Z'));
+    expect(addMonths(d('2027-12-15T00:00:00Z'), 1)).toEqual(d('2028-01-15T00:00:00Z'));
+    const start = d('2027-01-31T10:00:00Z');
+    expect(periodStart({ periodStartsAt: start }, d('2027-02-15T00:00:00Z'))).toEqual(start);
+    expect(periodStart({ periodStartsAt: start }, d('2027-03-05T00:00:00Z'))).toEqual(d('2027-02-28T10:00:00Z'));
+    expect(periodStart({ periodStartsAt: start }, d('2027-12-31T10:00:00Z'))).toEqual(d('2027-12-31T10:00:00Z'));
+    expect(periodStart({ periodStartsAt: start }, d('2027-12-31T09:59:00Z'))).toEqual(d('2027-11-30T10:00:00Z'));
+  });
+});
+
+// "Do you have several clinics?" (2026-11-19): a request for the service owner, stored before any mail, one open per clinic
+describe('запит на підключення ще однієї клініки', () => {
+  it('лише власник надсилає; клініка й людина з сесії; повтори й паралельні кліки дають один відкритий запит; стан після оновлення; інша клініка не бачить', async () => {
+    const c = await clinic();
+    const other = await clinic();
+    const manager = await member(c.token, 'MANAGER');
+    const admin = await member(c.token, 'ADMIN');
+    await http().post('/billing/additional-clinic').set(auth(manager)).send({}).expect(403);
+    await http().post('/billing/additional-clinic').set(auth(admin)).send({}).expect(403);
+    await http().get('/billing/additional-clinic').set(auth(admin)).expect(403);
+    expect((await http().get('/billing/additional-clinic').set(auth(manager)).expect(200)).body).toMatchObject({ request: null, network: null });
+    process.env.PLATFORM_ADMIN_EMAILS = 'svc-requests@example.com';
+    const send = jest.spyOn(mail, 'send').mockRejectedValueOnce(new Error('mail down'));
+    try {
+      // a body cannot pick another clinic: unknown fields are dropped, the clinic is the session's
+      const results = await Promise.all([0, 1, 2].map(() => http().post('/billing/additional-clinic').set(auth(c.token)).send({ comment: ' Друга клініка на Подолі ', clinicId: other.clinicId }).expect(200)));
+      expect(new Set(results.map((r) => r.body.request.id)).size).toBe(1);
+      expect(results.filter((r) => r.body.created)).toHaveLength(1);
+      // the mail failed, the request is kept
+      await new Promise((r) => setTimeout(r, 50));
+      expect(send).toHaveBeenCalledTimes(1);
+    } finally {
+      send.mockRestore();
+      delete process.env.PLATFORM_ADMIN_EMAILS;
+    }
+    const rows = await prisma.additionalClinicRequest.findMany({ where: { clinicId: { in: [c.clinicId, other.clinicId] } } });
+    expect(rows).toEqual([expect.objectContaining({ clinicId: c.clinicId, email: c.email, name: 'Анна', comment: 'Друга клініка на Подолі', handledAt: null })]);
+    // after a refresh the screen still shows it (also to the manager); the other clinic sees nothing
+    const id = rows[0].id;
+    expect((await http().get('/billing/additional-clinic').set(auth(c.token)).expect(200)).body.request).toMatchObject({ id, handledAt: null });
+    expect((await http().get('/billing/additional-clinic').set(auth(manager)).expect(200)).body.request).toMatchObject({ id });
+    expect((await http().get('/billing/additional-clinic').set(auth(other.token)).expect(200)).body.request).toBeNull();
+    // nothing about networks, plans or payments changed
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).toMatchObject({ networkId: null, billingStatus: 'AWAITING_PAYMENT' });
+    expect(await prisma.billingPayment.count({ where: { clinicId: c.clinicId } })).toBe(0);
+  });
+
+  it('у /platform: список, позначка «опрацьовано» зберігається; після неї можна новий запит; клініка-власник не має доступу до списку', async () => {
+    const c = await clinic();
+    await http().post('/billing/additional-clinic').set(auth(c.token)).send({}).expect(200);
+    await http().get('/platform/clinic-requests').set(auth(c.token)).expect(403);
+    const svc = await clinic();
+    const restore = await pinPlatformFixture(prisma, svc.email);
+    try {
+      const list = (await http().get('/platform/clinic-requests').set(auth(svc.token)).expect(200)).body as { id: string; clinicId: string; email: string; clinic: { name: string }; handledAt: string | null }[];
+      const row = list.find((r) => r.clinicId === c.clinicId)!;
+      expect(row).toMatchObject({ email: c.email, handledAt: null, clinic: { name: expect.stringContaining('Клініка') } });
+      await http().patch(`/platform/clinic-requests/${row.id}`).set(auth(svc.token)).send({ handled: true }).expect(200);
+      expect(await prisma.additionalClinicRequest.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ handledAt: expect.any(Date), handledBy: process.env.PLATFORM_OWNER_USER_ID });
+      expect((await http().get('/billing/additional-clinic').set(auth(c.token)).expect(200)).body.request).toBeNull();
+      const again = (await http().post('/billing/additional-clinic').set(auth(c.token)).send({}).expect(200)).body;
+      expect(again).toMatchObject({ created: true });
+      // reopening the old one while a newer one is open is refused, nothing is lost
+      await http().patch(`/platform/clinic-requests/${row.id}`).set(auth(svc.token)).send({ handled: false }).expect(409);
+      await http().patch('/platform/clinic-requests/nope').set(auth(svc.token)).send({ handled: true }).expect(404);
+    } finally {
+      await restore();
+    }
+  });
+
+  it('«Керувати мережею» лише власнику мережі; членство у філіалі без прав мережі нічого не дає', async () => {
+    const c = await clinic();
+    const manager = await member(c.token, 'MANAGER');
+    const ownerId = (await prisma.membership.findFirstOrThrow({ where: { clinicId: c.clinicId, role: 'OWNER' } })).userId;
+    const net = await prisma.network.create({ data: { name: `Мережа ${rnd()}`, members: { create: { userId: ownerId, role: 'OWNER' } } } });
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { networkId: net.id } });
+    expect((await http().get('/billing/additional-clinic').set(auth(c.token)).expect(200)).body.network).toMatchObject({ id: net.id, canManage: true });
+    expect((await http().get('/billing/additional-clinic').set(auth(manager)).expect(200)).body.network).toBeNull();
+  });
+});
+
 describe('historical mono payments', () => {
   async function proOwner() {
     const owner = await clinic();

@@ -548,6 +548,21 @@ body { -webkit-tap-highlight-color: transparent; }
 .plan-grid .rule-card { display: flex; flex-direction: column; gap: 4px; }
 .plan-grid .rule-card .btn { margin-top: auto; }
 .plan-current { border-color: var(--teal, #0f766e); }
+/* Start/Pro comparison: the cards share their rows (subgrid), so the same feature sits on the same line in both cards */
+.plan-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); column-gap: 12px; row-gap: 0; }
+.plan-compare .plan-col { display: grid; grid-row: span var(--card-rows); grid-template-rows: subgrid; row-gap: 0; margin-bottom: 12px; align-content: start; }
+.plan-compare .plan-col > * { padding: 3px 0; min-width: 0; }
+.plan-compare .stat-value { margin: 6px 0 2px; }
+.pc-group { margin-top: 10px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted, #5b6b73); }
+.pc-row { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; line-height: 1.35; }
+.pc-mark { flex: 0 0 16px; font-weight: 700; color: var(--teal, #0f766e); }
+.pc-no { color: var(--muted, #5b6b73); }
+.pc-no .pc-mark { color: var(--muted, #5b6b73); }
+.pc-note { display: block; font-size: 12px; color: var(--muted, #5b6b73); }
+.pc-limits .terms-list { margin: 4px 0 0; font-size: 13px; }
+.pc-action { align-self: end; padding-top: 8px !important; }
+.seg-term { margin-bottom: 12px; flex-wrap: wrap; }
+.seg-term .btn { flex: 1 1 auto; }
 
 /* ---------- public landing page ---------- */
 .btn-lg { padding: 13px 22px; font-size: 16px; min-height: 48px; }
@@ -915,6 +930,7 @@ figure.mock { margin: 0; }
 .lp-setup .lp-setup-sub { display: block; margin-top: 14px; font-size: 15px; }
 .lp-plan-limits { margin: -8px 0 20px; padding-left: 18px; font-size: 13px; color: var(--muted, #5b6b73); }
 .lp-plan-limits li { margin: 3px 0; }
+.lp-plan-annual { margin: 0 0 8px; font-size: 14px; color: var(--muted, #5b6b73); }
 .lp-extras-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* trust and FAQ */

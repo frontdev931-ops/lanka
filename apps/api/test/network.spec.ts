@@ -239,6 +239,43 @@ describe('мережа: оплата, права, дайджест', () => {
     expect(order((await http().post(`/billing/network/${s.net}/checkout`).set(auth(s.owner.token)).expect(200)).body).amount).toBe(7990 + 2990);
   });
 
+  it('дострокова оплата мережі продовжує доступ і не скидає використання та місячне вікно філіалів; вже оплачена клініка при вході в мережу теж; повтори нічого не змінюють', async () => {
+    const s = await setup();
+    const billing = app.get(BillingService);
+    const DAY = 86_400_000;
+    // branch B was a paid clinic of its own before joining: its window and usage must survive the change of payer
+    const bStart = new Date(Date.now() - 15 * DAY);
+    await prisma.clinic.update({ where: { id: s.b }, data: { billingStatus: 'ACTIVE', paidUntil: new Date(Date.now() + 15 * DAY), periodStartsAt: bStart } });
+    const used = (clinicId: string) => billing.overview(clinicId).then((o) => o.ai.used);
+    await prisma.aiUsage.createMany({ data: [{ clinicId: s.b, kind: 'chat_draft', ok: true, createdAt: new Date(Date.now() - 5 * DAY) }, { clinicId: s.b, kind: 'chat_draft', ok: true, createdAt: new Date(Date.now() - 2 * DAY) }] });
+
+    const first = (await http().post(`/billing/network/${s.net}/checkout`).set(auth(s.owner.token)).expect(200)).body;
+    await pay(order(first).order_id, Math.round(order(first).amount * 100)).expect(200);
+    let b = await prisma.clinic.findUniqueOrThrow({ where: { id: s.b } });
+    expect(b).toMatchObject({ plan: 'NETWORK', billingStatus: 'ACTIVE', periodStartsAt: bStart });
+    expect(await used(s.b)).toBe(2);
+    // branch A had no running period: its window starts with the network's payment (unchanged rule)
+    const aStart = (await prisma.clinic.findUniqueOrThrow({ where: { id: s.a } })).periodStartsAt!;
+    expect(Date.now() - aStart.getTime()).toBeLessThan(60_000);
+
+    // later in the month A has used some replies; the network prepays the next period early
+    const aEarlier = new Date(Date.now() - 10 * DAY);
+    await prisma.clinic.update({ where: { id: s.a }, data: { periodStartsAt: aEarlier } });
+    await prisma.aiUsage.createMany({ data: [{ clinicId: s.a, kind: 'chat_draft', ok: true, createdAt: new Date(Date.now() - 3 * DAY) }] });
+    const until = (await prisma.network.findUniqueOrThrow({ where: { id: s.net } })).paidUntil!;
+    const next = (await http().post(`/billing/network/${s.net}/checkout`).set(auth(s.owner.token)).expect(200)).body;
+    for (let i = 0; i < 2; i++) await pay(order(next).order_id, Math.round(order(next).amount * 100)).expect(200);
+    const a = await prisma.clinic.findUniqueOrThrow({ where: { id: s.a } });
+    b = await prisma.clinic.findUniqueOrThrow({ where: { id: s.b } });
+    expect(a.periodStartsAt).toEqual(aEarlier);
+    expect(b.periodStartsAt).toEqual(bStart);
+    expect(a.paidUntil!.getTime()).toBeGreaterThan(until.getTime() + 27 * DAY);
+    expect(b.paidUntil).toEqual(a.paidUntil);
+    expect(await used(s.a)).toBe(1);
+    expect(await used(s.b)).toBe(2);
+    expect(await prisma.auditLog.count({ where: { action: 'billing.paid', details: { path: ['networkId'], equals: s.net } } })).toBe(2);
+  });
+
   it('підключення наступного філіалу — лише сума, яку погодив власник сервісу (від 2 990), один раз', async () => {
     const s = await setup();
     await http().post(`/billing/network/${s.net}/branch-setup/${s.b}`).set(auth(s.owner.token)).expect(400);

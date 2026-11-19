@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Get, HttpCode, NotFoundException
 import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
 import { assertAutoServiceSet, configuredAutoServiceIds } from '../automations/agent-auto-gate';
 import { BillingService, launchEligible } from '../billing/billing.service';
+import { ClinicRequestsService } from '../billing/clinic-requests.service';
 import { AuthGuard, AuthUser, CurrentUser } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLAN_KEYS, PLANS, effectiveLimits, monthStart } from './plans';
@@ -39,7 +40,19 @@ export class PlatformController {
   constructor(
     private prisma: PrismaService,
     private billing: BillingService,
+    private clinicRequests: ClinicRequestsService,
   ) {}
+
+  // Requests to discuss connecting another clinic (from Billing); handled by hand, nothing is created automatically
+  @Get('clinic-requests')
+  additionalClinicRequests() {
+    return this.clinicRequests.list();
+  }
+
+  @Patch('clinic-requests/:id')
+  markClinicRequest(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ContactHandledDto) {
+    return this.clinicRequests.mark(id, dto.handled, u.userId);
+  }
 
   @Get('clinics')
   async clinics() {
