@@ -6,7 +6,6 @@ import { api, download } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
 import { fmtDateTime } from '../../../lib/ui';
 import { SecurityCard } from '../../../components/SecurityCard';
-import { PlanCard } from '../../../components/PlanCard';
 import { TeamAccess } from '../../../components/TeamAccess';
 import { IntegrationCard } from '../../../components/IntegrationCard';
 import { CurrencyCard } from '../../../components/CurrencyCard';
@@ -112,10 +111,7 @@ export default function SettingsPage() {
           {shown === 'team' && <TeamAccess role={role} myEmail={me?.email ?? null} />}
           {shown === 'channels' && <ChannelSettings />}
           {shown === 'billing' && (
-            <>
-              <PlanCard />
-              <BillingSettings canBuy={isOwner} />
-            </>
+            <BillingSettings canBuy={isOwner} />
           )}
         </div>
       )}

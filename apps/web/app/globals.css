@@ -563,6 +563,24 @@ body { -webkit-tap-highlight-color: transparent; }
 .pc-action { align-self: end; padding-top: 8px !important; }
 .seg-term { margin-bottom: 12px; flex-wrap: wrap; }
 .seg-term .btn { flex: 1 1 auto; }
+/* billing: the subscription summary, the plan choice and one order summary */
+.sub-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: flex-end; margin-bottom: 12px; }
+.sub-price { text-align: right; }
+.sub-price b { font-size: 18px; }
+.renew-panel { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.btn-link { background: none; border-color: transparent; box-shadow: none; color: var(--teal, #0f766e); }
+.back-link { padding-left: 0; margin-bottom: 8px; }
+.plan-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.plan-option { display: flex; flex-direction: column; gap: 4px; }
+.plan-option .btn { margin-top: auto; align-self: flex-start; }
+.pick-benefits { margin: 8px 0; padding-left: 18px; font-size: 14px; line-height: 1.4; }
+.pick-benefits li { margin: 3px 0; }
+.order-summary { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; }
+.order-lines { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 6px 0 10px; }
+.order-lines dt { color: var(--muted, #5b6b73); }
+.order-lines dd { margin: 0; text-align: right; }
+.compare-all { margin-top: 14px; }
+.compare-all > summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
 
 /* ---------- public landing page ---------- */
 .btn-lg { padding: 13px 22px; font-size: 16px; min-height: 48px; }

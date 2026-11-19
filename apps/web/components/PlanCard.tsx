@@ -24,6 +24,25 @@ const Meter = ({ label, used, limit }: { label: string; used: number; limit: num
   </div>
 );
 
+// The usage of this month against the plan's limits, without a card: used inside the billing summary (one place for the meters)
+export function UsageMeters() {
+  const { t } = useI18n();
+  const [o, setO] = useState<Overview | null>(null);
+  useEffect(() => {
+    api<Overview>('/service/usage').then(setO).catch(() => setO(null));
+  }, []);
+  if (!o) return null;
+  const u = o.usage;
+  return (
+    <div className="usage-meters">
+      <Meter label={t('plan.users')} used={u.users + u.pendingInvitations} limit={o.limits.users} />
+      <Meter label={t('plan.messages')} used={u.messagesThisMonth} limit={o.limits.messagesPerMonth} />
+      <Meter label={t('plan.ai')} used={u.aiRepliesThisMonth} limit={o.limits.aiRepliesPerMonth} />
+      <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>{t('plan.more', { patients: u.patients, bought: o.aiPurchased })}</p>
+    </div>
+  );
+}
+
 // Settings → "Payment": the clinic's plan, what it may use and what it has used this month (the two-factor requirement is in "Team and access")
 export function PlanCard() {
   const { t } = useI18n();

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { fmtDate } from '../lib/ui';
 import { Key, useI18n } from '../lib/i18n';
+import { LANDING } from '../lib/landing-text';
+import { UsageMeters } from './PlanCard';
 import { Alert, Badge, Card, Empty, Loading } from './ui';
 import { BillingPaymentStatus, type BillingCheckout, type PaymentState } from './BillingPaymentStatus';
 
@@ -16,7 +18,7 @@ interface Overview {
   nextPeriod: { from: string; to: string } | null;
   nextPeriodAnnual: { from: string; to: string } | null;
   monthStartsAtLaunch: boolean;
-  launch: { state: 'NONE' | 'DONE' } | { state: 'PENDING' | 'REVIEW'; plan: string; paidAt: string | null };
+  launch: { state: 'NONE' | 'DONE' } | { state: 'PENDING' | 'REVIEW'; plan: string; paidAt: string | null; months?: number };
   renewal: { plan: string; priceUah: number; date: string | null } | null;
   plan: string;
   status: 'AWAITING_PAYMENT' | 'LAUNCH_PENDING' | 'ACTIVE' | 'PAST_DUE' | 'LAPSED';
@@ -43,19 +45,24 @@ const COMPARE: { group: string; rows: { key: string; gate: string | null; note?:
   { group: 'ai', rows: [{ key: 'drafts', gate: null }, { key: 'agent', gate: 'patient_agent', note: true }, { key: 'assistant', gate: 'ai_assistant' }] },
   { group: 'management', rows: [{ key: 'weekly', gate: null }, { key: 'daily', gate: 'daily_digest' }, { key: 'signals', gate: 'advanced_analytics' }] },
 ];
-// rows of one card: header, price, each group heading and feature, limits, amounts, button (the cards share them through a subgrid)
-const CARD_ROWS = 2 + COMPARE.reduce((n, g) => n + 1 + g.rows.length, 0) + 3;
+// rows of one column of the full comparison: the header, each group heading and feature (the columns share them through a subgrid)
+const CARD_ROWS = 1 + COMPARE.reduce((n, g) => n + 1 + g.rows.length, 0);
+const SELLABLE_KEYS = ['START', 'PRO'];
 
 // Settings → "Payment" (the former /billing page): the plan, the first payment (connection + first month), renewal and the payment history.
 // One compact card for AI replies: how many are left this period and the button to buy a pack (POST /billing/ai-pack; only the owner pays, canBuy).
 export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [o, setO] = useState<Overview | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [paymentId, setPaymentId] = useState<string | null>(null);
   // the billing term shown and bought: 1 = monthly, 12 = one annual payment (the server prices it; the toggle never changes an open invoice)
   const [term, setTerm] = useState<1 | 12>(1);
+  // a subscribed clinic: its summary first; the plan choice and the renewal open on demand
+  const [screen, setScreen] = useState<'summary' | 'plans'>('summary');
+  const [renewing, setRenewing] = useState(false);
+  const [choice, setChoice] = useState<string | null>(null);
   // "Do you have several clinics?": the open request and the network link (only for the network's owner)
   const [more, setMore] = useState<{ request: { id: string; createdAt: string } | null; network: { id: string; name: string; canManage: boolean } | null } | null>(null);
   const [comment, setComment] = useState('');
@@ -111,106 +118,179 @@ export function BillingSettings({ canBuy = false }: { canBuy?: boolean } = {}) {
   const tracked = paymentId ?? o.pendingPaymentId;
   const active = o.status === 'ACTIVE' || o.status === 'PAST_DUE';
   const money = (minor: number) => `${(minor / 100).toLocaleString()} ${t('billing.uah')}`;
+  const uah = (n: number) => n.toLocaleString();
   const planName = (k: string) => (k === 'PRO' ? t('billing.pro') : k === 'START' ? t('billing.start') : k);
   const pending = o.launch.state === 'PENDING' || o.launch.state === 'REVIEW' ? o.launch : null;
+  // public presentation shared with the landing page (names, one positioning line, the short benefits); prices come from the server
+  const pub = LANDING[locale].pricing.plans;
+  const pubOf = (k: string) => (k === 'START' ? pub[0] : k === 'PRO' ? pub[1] : null);
+  // the screens: a subscribed clinic (active, past due or lapsed, with a renewal price) sees its summary; a new clinic chooses a plan
+  const subscribed = !!o.renewal && !pending;
+  const current = o.plans.find((p) => p.key === o.plan) ?? null;
+  const view = !subscribed ? 'plans' : screen;
+  const yearly = term === 12;
+  const chosen = choice ? o.plans.find((p) => p.key === choice) ?? null : null;
+
+  // one order summary for the chosen plan and term: subscription, the launch when it applies, the total and the dates it covers
+  const orderSummary = (p: Overview['plans'][number]) => {
+    const total = yearly ? p.annualTotalUah : p.totalUah;
+    const period = yearly ? o.nextPeriodAnnual : o.nextPeriod;
+    const viaSupport = yearly ? p.viaSupport.annual : p.viaSupport.monthly;
+    return (
+      <div className="order-summary" aria-live="polite">
+        <div className="pc-group" style={{ marginTop: 0 }}>{t('billing.order.title')}</div>
+        <dl className="order-lines">
+          <dt>{t('billing.order.plan')}</dt><dd>{planName(p.key)} · {yearly ? t('billing.termYear') : t('billing.termMonth')}</dd>
+          <dt>{t('billing.order.subscription')}</dt><dd>{yearly ? `${uah(p.annualUah)} ${t('billing.uah')}` : `${uah(p.priceUah)} ${t('billing.uah')}`}</dd>
+          {p.launchUah != null && (<><dt>{t('billing.order.launch')}</dt><dd>{uah(p.launchUah)} {t('billing.uah')}</dd></>)}
+          <dt><strong>{t('billing.order.total')}</strong></dt><dd><strong>{uah(total)} {t('billing.uah')}</strong></dd>
+          <dt>{t('billing.order.period')}</dt>
+          <dd>{period ? `${fmtDate(period.from)} — ${fmtDate(period.to)}` : o.monthStartsAtLaunch ? t('billing.order.atLaunch') : '—'}</dd>
+        </dl>
+        {!period && o.monthStartsAtLaunch && <p className="muted" style={{ fontSize: 13, margin: '0 0 4px' }}>{yearly ? t('billing.launchStartsAnnual') : t('billing.launchStarts')}</p>}
+        {yearly && <p className="muted" style={{ fontSize: 13, margin: '4px 0 0' }}>{t('billing.order.noAuto')}</p>}
+        {!canBuy ? (
+          <p className="muted" style={{ fontSize: 13 }}>{t('billing.order.ownerOnly')}</p>
+        ) : viaSupport ? (
+          <p className="muted" style={{ fontSize: 13 }}>{t('billing.viaSupport')}</p>
+        ) : (
+          <button className="btn btn-primary" disabled={busy || !o.configured} onClick={() => go('/billing/checkout', { plan: p.key, months: term }, total * 100)}>
+            {t('billing.order.pay', { sum: uah(total) })}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const termToggle = (
+    <div className="toolbar seg-term" role="group" aria-label={t('billing.term.label')}>
+      <button type="button" className={`btn${term === 1 ? ' btn-primary' : ''}`} aria-pressed={term === 1} onClick={() => setTerm(1)}>{t('billing.term.monthly')}</button>
+      <button type="button" className={`btn${term === 12 ? ' btn-primary' : ''}`} aria-pressed={term === 12} onClick={() => setTerm(12)}>{t('billing.term.annual')}</button>
+    </div>
+  );
 
   return (
     <>
       {error && <Alert tone="error">{error}</Alert>}
       {!o.configured && <Alert tone="warn">{t('billing.notConfigured')}</Alert>}
       {tracked && <BillingPaymentStatus key={tracked} path={`/billing/payments/${encodeURIComponent(tracked)}`} onSettled={load} />}
-      {o.status === 'AWAITING_PAYMENT' && <Alert tone="info">{t('billing.awaiting')}</Alert>}
-      {pending?.state === 'PENDING' && <Alert tone="info"><strong>{t('billing.launchPendingBadge')}.</strong> {t('billing.launchPending', { plan: planName(pending.plan) })}</Alert>}
+      {o.status === 'AWAITING_PAYMENT' && !pending && <Alert tone="info">{t('billing.awaiting')}</Alert>}
       {/* the launch payment was partly refunded before the start: no new purchase until support resolves it */}
       {pending?.state === 'REVIEW' && <Alert tone="warn">{t('billing.launchReview')}</Alert>}
-      {o.renewal && o.paidUntil && <Alert tone="info">{t('billing.renewalCard', { plan: planName(o.renewal.plan), date: fmtDate(o.paidUntil), sum: o.renewal.priceUah.toLocaleString() })}</Alert>}
       {o.status === 'LAPSED' && <Alert tone="warn">{t('billing.lapsed')}</Alert>}
       {o.status === 'PAST_DUE' && <Alert tone="warn">{t('billing.pastDue', { date: o.graceUntil ? fmtDate(o.graceUntil) : '' })}</Alert>}
 
-      <Card title={t('billing.plansTitle')} actions={active ? <Badge tone="green">{t('billing.active', { date: o.paidUntil ? fmtDate(o.paidUntil) : '—' })}</Badge> : pending ? <Badge tone="amber">{t('billing.launchPendingBadge')}</Badge> : undefined}>
+      {/* paid, the launch is being prepared: not active yet, nothing to buy */}
+      {pending?.state === 'PENDING' && (
+        <Card title={t('billing.sub.title')} actions={<Badge tone="amber">{t('billing.launchPendingBadge')}</Badge>}>
+          <p style={{ marginTop: 0 }}><strong>{planName(pending.plan)}</strong> · {'months' in pending && pending.months === 12 ? t('billing.termYear') : t('billing.termMonth')}</p>
+          <p className="rule">{t('billing.launchPending', { plan: planName(pending.plan) })}</p>
+        </Card>
+      )}
 
-        <div className="toolbar seg-term" role="group" aria-label={t('billing.term.label')}>
-          <button type="button" className={`btn${term === 1 ? ' btn-primary' : ''}`} aria-pressed={term === 1} onClick={() => setTerm(1)}>{t('billing.term.monthly')}</button>
-          <button type="button" className={`btn${term === 12 ? ' btn-primary' : ''}`} aria-pressed={term === 12} onClick={() => setTerm(12)}>{t('billing.term.annual')}</button>
-        </div>
-        <div className="plan-compare" style={{ ['--card-rows' as string]: CARD_ROWS }}>
-          {o.plans.map((p) => {
-            const has = (gate: string | null) => !gate || p.features.includes(gate);
-            const yearly = term === 12;
-            const total = yearly ? p.annualTotalUah : p.totalUah;
-            const viaSupport = yearly ? p.viaSupport.annual : p.viaSupport.monthly;
-            const period = yearly ? o.nextPeriodAnnual : o.nextPeriod;
-            return (
-              <section key={p.key} className={`rule-card plan-col${o.plan === p.key && (active || pending) ? ' plan-current' : ''}`} aria-label={planName(p.key)}>
-                <div>
+      {/* a subscribed clinic: the summary; renewal and the change of plan open on demand */}
+      {subscribed && view === 'summary' && (
+        <Card title={t('billing.sub.title')} actions={o.status === 'ACTIVE' && o.paidUntil ? <Badge tone="green">{t('billing.active', { date: fmtDate(o.paidUntil) })}</Badge> : undefined}>
+          <div className="sub-head">
+            <div>
+              <div className="stat-value" style={{ margin: 0 }}>{planName(o.plan)}</div>
+              <div className="muted">{pubOf(o.plan)?.lead ?? ''}</div>
+            </div>
+            <div className="sub-price">
+              <div className="muted" style={{ fontSize: 13 }}>{t('billing.sub.renewal')}</div>
+              <b>{uah(o.renewal!.priceUah)} {t('billing.perMonth')}</b>
+            </div>
+          </div>
+          <UsageMeters />
+          {renewing && current && SELLABLE_KEYS.includes(current.key) ? (
+            <div className="renew-panel">
+              {termToggle}
+              {orderSummary(current)}
+              <button type="button" className="btn btn-link" onClick={() => setRenewing(false)}>{t('common.cancel')}</button>
+            </div>
+          ) : (
+            <div className="toolbar" style={{ marginTop: 12 }}>
+              {canBuy && current && SELLABLE_KEYS.includes(current.key) && <button className="btn btn-primary" onClick={() => setRenewing(true)}>{t('billing.sub.renew')}</button>}
+              <button className="btn" onClick={() => { setScreen('plans'); setChoice(null); }}>{t('billing.sub.change')}</button>
+            </div>
+          )}
+          {!canBuy && <p className="muted" style={{ fontSize: 13 }}>{t('billing.order.ownerOnly')}</p>}
+        </Card>
+      )}
+
+      {/* choosing a plan: a new clinic, or a subscribed one that asked to change it */}
+      {!pending && view === 'plans' && (
+        <Card title={subscribed ? t('billing.sub.changeTitle') : t('billing.plansTitle')}>
+          {subscribed && <button type="button" className="btn btn-link back-link" onClick={() => { setScreen('summary'); setChoice(null); }}>← {t('billing.sub.back')}</button>}
+          {termToggle}
+          <div className="plan-pick">
+            {o.plans.map((p) => {
+              const pp = pubOf(p.key);
+              return (
+                <section key={p.key} className={`rule-card plan-option${choice === p.key ? ' plan-current' : ''}`} aria-label={planName(p.key)}>
                   <b>{planName(p.key)}</b>
-                  <div className="muted">{p.key === 'START' ? t('billing.startTitle') : t('billing.proTitle')}</div>
-                </div>
-                <div>
+                  <div className="muted">{pp?.lead}</div>
                   {yearly ? (
                     <>
-                      <div className="stat-value">{p.annualUah.toLocaleString()} {t('billing.perYear')}</div>
-                      <div className="muted" style={{ fontSize: 13 }}>{t('billing.annualEquiv', { sum: Math.round(p.annualUah / 12).toLocaleString() })}</div>
-                      <div style={{ fontSize: 13 }}><Badge tone="green">{t('billing.annualSaving', { sum: p.annualSavingUah.toLocaleString() })}</Badge></div>
+                      <div className="stat-value">{uah(p.annualUah)} {t('billing.perYear')}</div>
+                      <div className="muted" style={{ fontSize: 13 }}>{t('billing.annualEquiv', { sum: uah(Math.round(p.annualUah / 12)) })} · {t('billing.annualSaving', { sum: uah(p.annualSavingUah) })}</div>
                     </>
                   ) : (
-                    <div className="stat-value">{p.priceUah.toLocaleString()} {t('billing.perMonth')}</div>
+                    <div className="stat-value">{uah(p.priceUah)} {t('billing.perMonth')}</div>
                   )}
-                  {p.priceUah !== p.listPriceUah && <div className="muted" style={{ fontSize: 13 }}>{t('billing.yourPrice', { sum: p.listPriceUah.toLocaleString() })}</div>}
-                </div>
-                {COMPARE.flatMap((g) => [
-                  <div key={`g-${g.group}`} className="pc-group">{t(`billing.cmp.g.${g.group}` as Key)}</div>,
-                  ...g.rows.map((r) => {
-                    const yes = has(r.gate);
-                    return (
-                      <div key={`f-${r.key}`} className={`pc-row${yes ? '' : ' pc-no'}`}>
-                        <span className="pc-mark" aria-hidden="true">{yes ? '✓' : '−'}</span>
-                        <span>
-                          <span className="sr-only">{yes ? t('billing.cmp.yes') : t('billing.cmp.no')}: </span>
-                          {t(`billing.cmp.${r.key}` as Key)}
-                          {yes && r.note && <span className="pc-note">{t(`billing.cmp.${r.key}.note` as Key)}</span>}
-                          {!yes && <span className="pc-note">{t('billing.cmp.inPro')}</span>}
-                        </span>
-                      </div>
-                    );
-                  }),
-                ])}
-                <div className="pc-limits">
-                  <div className="pc-group">{t('billing.limitsTitle')}</div>
-                  <ul className="terms-list">
-                    <li>{t('billing.limUsers', { n: p.limits.users })}</li>
-                    <li>{t('billing.limMessages', { n: p.limits.messagesPerMonth.toLocaleString() })}</li>
-                    <li>{t('billing.limAi', { n: p.limits.aiRepliesPerMonth.toLocaleString() })}</li>
-                  </ul>
-                </div>
-                <div>
-                  <p style={{ margin: 0 }}>{yearly ? t('billing.annualLine', { sum: p.annualUah.toLocaleString() }) : t('billing.monthly', { sum: p.priceUah.toLocaleString() })}</p>
-                  {p.launchUah != null && <p style={{ margin: 0 }}>{t('billing.launchLine', { sum: p.launchUah.toLocaleString() })}</p>}
-                  <p style={{ margin: '4px 0' }}><strong>{t('billing.total', { sum: total.toLocaleString() })}</strong></p>
-                  {period ? (
-                    <p style={{ margin: 0 }}>{t('billing.period', { from: fmtDate(period.from), to: fmtDate(period.to) })}</p>
-                  ) : o.monthStartsAtLaunch ? (
-                    <p className="muted" style={{ fontSize: 13, margin: 0 }}>{yearly ? t('billing.launchStartsAnnual') : t('billing.launchStarts')}</p>
-                  ) : null}
-                </div>
-                <div className="pc-action">
-                  {canBuy && !pending && viaSupport && <p className="muted" style={{ fontSize: 13, margin: 0 }}>{t('billing.viaSupport')}</p>}
-                  {canBuy && !pending && !viaSupport && <button className="btn btn-primary" disabled={busy || !o.configured} onClick={() => go('/billing/checkout', { plan: p.key, months: term }, total * 100)}>{yearly ? t('billing.payYear') : t('billing.pay')}</button>}
-                </div>
-              </section>
-            );
-          })}
-        </div>
-        {o.monthStartsAtLaunch && (
-          <div className="rule">
-            <p style={{ marginTop: 0 }}><strong>{t('billing.launchTitle')}</strong></p>
-            <p>{t('billing.launchWhatStart')}</p>
-            <p>{t('billing.launchWhatPro')}</p>
-            <p className="muted" style={{ fontSize: 13 }}>{t('billing.launchOther')}</p>
+                  {p.priceUah !== p.listPriceUah && <div className="muted" style={{ fontSize: 13 }}>{t('billing.yourPrice', { sum: uah(p.listPriceUah) })}</div>}
+                  <ul className="pick-benefits">{(pp?.lines ?? []).map((l) => <li key={l}>{l}</li>)}</ul>
+                  <p className="muted" style={{ fontSize: 13, margin: '0 0 10px' }}>{t('billing.pick.limits', { users: p.limits.users, messages: uah(p.limits.messagesPerMonth), ai: uah(p.limits.aiRepliesPerMonth) })}</p>
+                  <button type="button" className={`btn${choice === p.key ? ' btn-primary' : ''}`} aria-pressed={choice === p.key} onClick={() => setChoice(p.key)}>
+                    {choice === p.key ? t('billing.pick.chosen') : t('billing.pick.choose')}
+                  </button>
+                </section>
+              );
+            })}
           </div>
-        )}
-        <p className="muted" style={{ fontSize: 13 }}>{t('billing.secure')}</p>
-      </Card>
+          {chosen && orderSummary(chosen)}
+          {o.monthStartsAtLaunch && (
+            <div className="rule">
+              <p style={{ marginTop: 0 }}><strong>{t('billing.launchTitle')}</strong></p>
+              <p>{t('billing.launchWhatStart')}</p>
+              <p>{t('billing.launchWhatPro')}</p>
+              <p className="muted" style={{ fontSize: 13 }}>{t('billing.launchOther')}</p>
+            </div>
+          )}
+          {/* the complete comparison, collapsed: one list in the same order for both plans, from the server's plan gates */}
+          <details className="more-details compare-all">
+            <summary>{t('billing.cmp.all')}</summary>
+            <div className="plan-compare" style={{ ['--card-rows' as string]: CARD_ROWS }}>
+              {o.plans.map((p) => {
+                const has = (gate: string | null) => !gate || p.features.includes(gate);
+                return (
+                  <section key={p.key} className="rule-card plan-col" aria-label={planName(p.key)}>
+                    <div><b>{planName(p.key)}</b></div>
+                    {COMPARE.flatMap((g) => [
+                      <div key={`g-${g.group}`} className="pc-group">{t(`billing.cmp.g.${g.group}` as Key)}</div>,
+                      ...g.rows.map((r) => {
+                        const yes = has(r.gate);
+                        return (
+                          <div key={`f-${r.key}`} className={`pc-row${yes ? '' : ' pc-no'}`}>
+                            <span className="pc-mark" aria-hidden="true">{yes ? '✓' : '−'}</span>
+                            <span>
+                              <span className="sr-only">{yes ? t('billing.cmp.yes') : t('billing.cmp.no')}: </span>
+                              {t(`billing.cmp.${r.key}` as Key)}
+                              {yes && r.note && <span className="pc-note">{t(`billing.cmp.${r.key}.note` as Key)}</span>}
+                              {!yes && <span className="pc-note">{t('billing.cmp.inPro')}</span>}
+                            </span>
+                          </div>
+                        );
+                      }),
+                    ])}
+                  </section>
+                );
+              })}
+            </div>
+          </details>
+          <p className="muted" style={{ fontSize: 13 }}>{t('billing.secure')}</p>
+        </Card>
+      )}
 
       {/* another clinic: a request for the service owner, handled by hand (nothing is created or charged here) */}
       <Card title={t('billing.more.title')}>
