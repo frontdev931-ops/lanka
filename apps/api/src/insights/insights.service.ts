@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException, OnApplicati
 import { Provider, Role } from '@prisma/client';
 import { MailService } from '../auth/mail.service';
 import { StaffNotifierService } from '../automations/staff-notifier.service';
+import { startOfClinicDay } from '../common/clinic-time';
 import { Lang } from '../common/i18n';
 import { PrismaService } from '../prisma/prisma.service';
 import { PushService } from '../push/push.service';
@@ -15,6 +16,17 @@ const DAY = 86_400_000;
 const MAX_SCHEDULES = 20;
 const MAX_RECIPIENTS = 5;
 const COOLDOWN_MS = 24 * HOUR;
+// The visit-based signals use our copy of Cliniccards: without a successful load in this time they are not computed (old data is not "zero")
+const SYNC_FRESH_MS = 48 * HOUR;
+// Where each signal leads in the app. The drop in completed visits has no report comparing two periods: the signal itself shows both periods,
+// both counts and the change, so it carries no link (a link to an unrelated report would not substantiate it)
+const SIGNAL_LINK: Record<string, string | null> = { CANCEL_RATE: '/reports?report=missed-visits', RETURN_DROP: null, STALE_REQUESTS: '/inbox?tab=requests' };
+
+// One signal explained: measured (the value with what it was calculated from), too little data, or a Cliniccards load needed first
+export type SignalExplained =
+  | { state: 'measured'; value: number; from: Date; to: Date; count: number; base: number; prevFrom?: Date; prevTo?: Date }
+  | { state: 'insufficient'; from: Date; to: Date; base: number; need: number }
+  | { state: 'needs_sync' };
 // A rule on a handful of visits is noise: it needs at least this many in the period
 const MIN_SAMPLE = 10;
 const LANG: Lang = 'uk';
@@ -203,26 +215,65 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'alert.changed', details: { kind, ...d } } });
   }
 
-  // The number each rule is about, calculated from our copy of the clinic's data
-  async measure(clinicId: string, rule: { kind: string; windowDays: number; hours: number }, now: Date): Promise<{ value: number; ok: boolean } | null> {
-    const win = rule.windowDays * DAY;
-    if (rule.kind === 'CANCEL_RATE') {
-      const rows = await this.prisma.visit.groupBy({ by: ['status'], where: { clinicId, startsAt: { gte: new Date(now.getTime() - win), lt: now }, status: { in: ['VISITED', 'IN_CLINIC', 'IN_CHAIR', 'DID_NOT_COME', 'CANCELLED', 'MOVED'] } }, _count: true });
-      const total = rows.reduce((s, r) => s + r._count, 0);
-      if (total < MIN_SAMPLE) return null;
-      const bad = rows.filter((r) => r.status === 'DID_NOT_COME' || r.status === 'CANCELLED').reduce((s, r) => s + r._count, 0);
-      return { value: Math.round((bad / total) * 1000) / 10, ok: true };
-    }
-    if (rule.kind === 'RETURN_DROP') {
-      const done = (from: Date, to: Date) => this.prisma.visit.count({ where: { clinicId, status: 'VISITED', startsAt: { gte: from, lt: to } } });
-      const [cur, prev] = await Promise.all([done(new Date(now.getTime() - win), now), done(new Date(now.getTime() - 2 * win), new Date(now.getTime() - win))]);
-      if (prev < MIN_SAMPLE) return null;
-      return { value: Math.round(((prev - cur) / prev) * 1000) / 10, ok: true };
-    }
+  // Whether our copy of Cliniccards is recent enough for the visit-based signals
+  private async syncState(clinicId: string, now: Date) {
+    const i = await this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.CLINICCARDS } }, select: { lastSyncAt: true } });
+    const lastSyncAt = i?.lastSyncAt ?? null;
+    return { lastSyncAt, fresh: !!lastSyncAt && now.getTime() - lastSyncAt.getTime() < SYNC_FRESH_MS };
+  }
+
+  // The number each rule is about, with what it was calculated from. Visit rules count only complete days in the clinic's time zone (today's visits
+  // are often not closed yet) and only when the data was loaded recently; a small sample is "too little data", never a value.
+  async explain(clinicId: string, rule: { kind: string; windowDays: number; hours: number }, now: Date, sync?: { fresh: boolean }): Promise<SignalExplained | null> {
     if (rule.kind === 'STALE_REQUESTS') {
-      return { value: await this.prisma.bookingRequest.count({ where: { clinicId, status: 'NEW', kind: { in: ['BOOKING', 'RESCHEDULE', 'CANCEL', 'HANDOFF'] }, createdAt: { lt: new Date(now.getTime() - rule.hours * HOUR) } } }), ok: true };
+      // requests are LANKA's own data: no load needed
+      const cutoff = new Date(now.getTime() - rule.hours * HOUR);
+      const where = { clinicId, kind: { in: ['BOOKING', 'RESCHEDULE', 'CANCEL', 'HANDOFF'] } };
+      const [count, base] = await Promise.all([
+        this.prisma.bookingRequest.count({ where: { ...where, status: 'NEW', createdAt: { lt: cutoff } } }),
+        this.prisma.bookingRequest.count({ where: { ...where, status: 'NEW' } }),
+      ]);
+      return { state: 'measured', value: count, from: cutoff, to: now, count, base };
     }
-    return null;
+    if (rule.kind !== 'CANCEL_RATE' && rule.kind !== 'RETURN_DROP') return null;
+    if (!(sync ?? (await this.syncState(clinicId, now))).fresh) return { state: 'needs_sync' };
+    const win = rule.windowDays * DAY;
+    const to = startOfClinicDay(now);
+    const from = new Date(to.getTime() - win);
+    if (rule.kind === 'CANCEL_RATE') {
+      const rows = await this.prisma.visit.groupBy({ by: ['status'], where: { clinicId, startsAt: { gte: from, lt: to }, status: { in: ['VISITED', 'IN_CLINIC', 'IN_CHAIR', 'DID_NOT_COME', 'CANCELLED', 'MOVED'] } }, _count: true });
+      const total = rows.reduce((s, r) => s + r._count, 0);
+      if (total < MIN_SAMPLE) return { state: 'insufficient', from, to, base: total, need: MIN_SAMPLE };
+      const bad = rows.filter((r) => r.status === 'DID_NOT_COME' || r.status === 'CANCELLED').reduce((s, r) => s + r._count, 0);
+      return { state: 'measured', value: Math.round((bad / total) * 1000) / 10, from, to, count: bad, base: total };
+    }
+    const prevFrom = new Date(from.getTime() - win);
+    const done = (a: Date, b: Date) => this.prisma.visit.count({ where: { clinicId, status: 'VISITED', startsAt: { gte: a, lt: b } } });
+    const [cur, prev] = await Promise.all([done(from, to), done(prevFrom, from)]);
+    if (prev < MIN_SAMPLE) return { state: 'insufficient', from: prevFrom, to: from, base: prev, need: MIN_SAMPLE };
+    return { state: 'measured', value: Math.round(((prev - cur) / prev) * 1000) / 10, from, to, count: cur, base: prev, prevFrom, prevTo: from };
+  }
+
+  // The number each rule is about (null: not measurable now), for the checks and the network view
+  async measure(clinicId: string, rule: { kind: string; windowDays: number; hours: number }, now: Date): Promise<{ value: number; ok: boolean } | null> {
+    const e = await this.explain(clinicId, rule, now);
+    return e?.state === 'measured' ? { value: e.value, ok: true } : null;
+  }
+
+  // The "Signals" section: every rule of this clinic, measured now from its own data, with its state. Read only; the checks that send
+  // notifications stay in evaluate(). A plan without the signals gets no numbers.
+  async signals(clinicId: string, now = new Date()) {
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } });
+    if (!hasFeature(c.plan, 'advanced_analytics')) return { inPlan: false, checkedAt: now, sync: null, signals: [] };
+    const [rules, sync] = await Promise.all([this.alerts(clinicId), this.syncState(clinicId, now)]);
+    const signals = [];
+    for (const r of rules) {
+      const e = await this.explain(clinicId, r, now, sync);
+      if (!e) continue;
+      const state = e.state === 'measured' ? (e.value >= r.threshold ? 'fired' : 'ok') : e.state;
+      signals.push({ ...e, kind: r.kind, state, threshold: r.threshold, windowDays: r.windowDays, hours: r.hours, notify: r.enabled, lastFiredAt: r.lastFiredAt, link: SIGNAL_LINK[r.kind] });
+    }
+    return { inPlan: true, checkedAt: now, sync, signals };
   }
 
   private alertText(kind: string, value: number, rule: { threshold: number; windowDays: number; hours: number }) {
@@ -243,9 +294,9 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
       await this.prisma.alertRule.update({ where: { id: rule.id }, data: { lastFiredAt: now, lastValue: m.value } });
       fired.push(rule.kind);
       const text = this.alertText(rule.kind, m.value, rule);
-      await this.staff.notify(clinicId, `${text}\n\nВідкрити: ${(process.env.WEB_ORIGIN ?? '').replace(/\/$/, '')}/analytics`).catch(() => undefined);
+      await this.staff.notify(clinicId, `${text}\n\nВідкрити: ${(process.env.WEB_ORIGIN ?? '').replace(/\/$/, '')}/signals`).catch(() => undefined);
       // the phone notification carries no numbers or names
-      await this.push.notify(clinicId, { title: 'Сигнал для керівника', body: 'Є відхилення в роботі клініки', url: '/analytics', tag: `alert-${rule.kind}` }).catch(() => undefined);
+      await this.push.notify(clinicId, { title: 'Сигнал для керівника', body: 'Є відхилення в роботі клініки', url: '/signals', tag: `alert-${rule.kind}` }).catch(() => undefined);
       const owner = await this.prisma.membership.findFirst({ where: { clinicId, role: 'OWNER' }, select: { user: { select: { email: true } } } });
       if (owner) await this.mail.send({ to: owner.user.email, subject: 'LANKA: сигнал для керівника', text });
       await this.prisma.auditLog.create({ data: { clinicId, action: 'alert.fired', details: { kind: rule.kind, value: m.value } } });

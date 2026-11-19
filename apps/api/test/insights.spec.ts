@@ -149,6 +149,12 @@ describe('розклад відправки', () => {
 });
 
 describe('сигнали керівнику', () => {
+  // our copy of Cliniccards was loaded `hoursAgo` hours ago (visit-based signals need a recent load)
+  const synced = (clinicId: string, hoursAgo = 1) => prisma.integration.upsert({
+    where: { clinicId_provider: { clinicId, provider: 'CLINICCARDS' } },
+    create: { clinicId, provider: 'CLINICCARDS', lastSyncAt: new Date(Date.now() - hoursAgo * 3_600_000) },
+    update: { lastSyncAt: new Date(Date.now() - hoursAgo * 3_600_000) },
+  });
   async function visits(clinicId: string, n: number, status: string, daysAgo: number) {
     const p = await prisma.patient.create({ data: { clinicId, externalId: `p${rnd()}`, fullName: `Пацієнт ${rnd()}` } });
     await prisma.visit.createMany({ data: Array.from({ length: n }, (_, i) => ({ clinicId, patientId: p.id, externalId: `v${rnd()}${i}`, startsAt: new Date(Date.now() - daysAgo * day - i * 60_000), status })) });
@@ -175,6 +181,7 @@ describe('сигнали керівнику', () => {
   it('частка скасувань і неявок: спрацьовує від порогу, не на малій вибірці, і лише раз на добу; власник отримує лист', async () => {
     const c = await clinic();
     await http().patch('/alerts/CANCEL_RATE').set(auth(c.token)).send({ enabled: true, threshold: 30 }).expect(200);
+    await synced(c.clinicId);
     await visits(c.clinicId, 6, 'VISITED', 2);
     await visits(c.clinicId, 3, 'CANCELLED', 2); // 3 of 9: a small sample
     expect(await insights.evaluate(c.clinicId)).toEqual([]);
@@ -194,6 +201,7 @@ describe('сигнали керівнику', () => {
     const c = await clinic();
     await http().patch('/alerts/RETURN_DROP').set(auth(c.token)).send({ enabled: true, threshold: 30, windowDays: 7 }).expect(200);
     await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ enabled: true, threshold: 2, hours: 4 }).expect(200);
+    await synced(c.clinicId);
     await visits(c.clinicId, 20, 'VISITED', 10); // previous week
     await visits(c.clinicId, 8, 'VISITED', 2); // this week: down 60%
     for (let i = 0; i < 2; i++) await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: `c${i}`, kind: 'BOOKING', summary: 'x', createdAt: new Date(Date.now() - 6 * 3_600_000) } });
@@ -206,8 +214,65 @@ describe('сигнали керівнику', () => {
     const a = await clinic();
     const b = await clinic();
     await http().patch('/alerts/CANCEL_RATE').set(auth(b.token)).send({ enabled: true, threshold: 10 }).expect(200);
+    await synced(a.clinicId);
+    await synced(b.clinicId);
     await visits(a.clinicId, 12, 'CANCELLED', 2);
     expect(await insights.evaluate(b.clinicId)).toEqual([]);
     expect(await prisma.alertRule.count({ where: { clinicId: a.clinicId, enabled: true } })).toBe(0);
+    // the section of B shows nothing of A
+    const sb = (await http().get('/signals').set(auth(b.token)).expect(200)).body;
+    expect(sb.signals.find((x: { kind: string }) => x.kind === 'CANCEL_RATE')).toMatchObject({ state: 'insufficient', base: 0 });
+  });
+
+  it('розділ «Сигнали»: значення, період, з чим порівняно й посилання; мало даних — не значення; без свіжої синхронізації — «потрібна синхронізація» і без сповіщень', async () => {
+    const c = await clinic();
+    // no load yet: the visit signals are not computed, requests are
+    let s = (await http().get('/signals').set(auth(c.token)).expect(200)).body;
+    expect(s).toMatchObject({ inPlan: true, sync: { lastSyncAt: null, fresh: false } });
+    const by = (k: string) => s.signals.find((x: { kind: string }) => x.kind === k);
+    expect(by('CANCEL_RATE')).toMatchObject({ state: 'needs_sync', link: '/reports?report=missed-visits' });
+    expect(by('RETURN_DROP')).toMatchObject({ state: 'needs_sync' });
+    expect(by('STALE_REQUESTS')).toMatchObject({ state: 'ok', value: 0, link: '/inbox?tab=requests' });
+    await visits(c.clinicId, 12, 'CANCELLED', 2);
+    await http().patch('/alerts/CANCEL_RATE').set(auth(c.token)).send({ enabled: true, threshold: 30 }).expect(200);
+    expect(await insights.evaluate(c.clinicId)).toEqual([]); // old or missing data never fires
+
+    // a load three days ago is not recent enough either
+    await synced(c.clinicId, 72);
+    s = (await http().get('/signals').set(auth(c.token)).expect(200)).body;
+    expect(by('CANCEL_RATE').state).toBe('needs_sync');
+
+    // a fresh load: 12 of 18 visits cancelled or missed in the last 7 complete days = 66.7%, over 30%
+    await synced(c.clinicId);
+    await visits(c.clinicId, 6, 'VISITED', 3);
+    s = (await http().get('/signals').set(auth(c.token)).expect(200)).body;
+    expect(by('CANCEL_RATE')).toMatchObject({ state: 'fired', value: 66.7, count: 12, base: 18, threshold: 30, windowDays: 7, notify: true });
+    expect(Date.parse(by('CANCEL_RATE').to) - Date.parse(by('CANCEL_RATE').from)).toBe(7 * day);
+    // the comparison period has too few completed visits: no percentage is shown
+    expect(by('RETURN_DROP')).toMatchObject({ state: 'insufficient', base: 0, need: 10, link: null });
+    expect(by('RETURN_DROP')).not.toHaveProperty('value');
+  });
+
+  it('падіння до нуля: достатня база попереднього періоду і нуль завершених візитів зараз — це падіння на 100%, не «мало даних»; обидва періоди й числа в сигналі', async () => {
+    const c = await clinic();
+    await synced(c.clinicId);
+    await visits(c.clinicId, 20, 'VISITED', 20); // the previous 14 days
+    const s = (await http().get('/signals').set(auth(c.token)).expect(200)).body;
+    const drop = s.signals.find((x: { kind: string }) => x.kind === 'RETURN_DROP');
+    expect(drop).toMatchObject({ state: 'fired', value: 100, count: 0, base: 20, threshold: 30, windowDays: 14, link: null });
+    expect(Date.parse(drop.prevTo)).toBe(Date.parse(drop.from));
+    expect(Date.parse(drop.to) - Date.parse(drop.from)).toBe(14 * day);
+    await http().patch('/alerts/RETURN_DROP').set(auth(c.token)).send({ enabled: true }).expect(200);
+    expect(await insights.evaluate(c.clinicId)).toEqual(['RETURN_DROP']);
+  });
+
+  it('розділ «Сигнали»: лише «Про» отримує числа; лише власник і керуючий', async () => {
+    const start = await clinic('START');
+    expect((await http().get('/signals').set(auth(start.token)).expect(200)).body).toMatchObject({ inPlan: false, signals: [] });
+    const c = await clinic();
+    const admin = await member(c.token, 'ADMIN');
+    const manager = await member(c.token, 'MANAGER');
+    await http().get('/signals').set(auth(admin.token)).expect(403);
+    await http().get('/signals').set(auth(manager.token)).expect(200);
   });
 });

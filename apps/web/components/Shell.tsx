@@ -26,7 +26,7 @@ const NAV: (NavItem | { sep: true })[] = [
   { href: '/automations', label: 'nav.outgoing', icon: 'zap', also: ['/my-automations'] },
   { href: '/patients', label: 'nav.patients', icon: 'users', also: ['/inquiries', '/waitlist', '/imports'] },
   { href: '/tasks', label: 'nav.tasks', icon: 'check' },
-  { href: '/reports', label: 'nav.reportsAll', icon: 'chart', also: ['/quality', '/insights', '/payback'] },
+  { href: '/reports', label: 'nav.reportsAll', icon: 'chart', also: ['/quality', '/signals', '/insights', '/payback'] },
   { href: '/knowledge', label: 'nav.aiAdmin', icon: 'sparkles', also: ['/ai-admin'] },
   { sep: true },
   { href: '/settings', label: 'nav.settings', icon: 'settings' },
@@ -38,7 +38,7 @@ type SectionTab = { href: string; label: Key; only?: string[]; needs?: 'network'
 const LEAD = ['OWNER', 'MANAGER'];
 const SECTIONS: { label: Key; tabs: SectionTab[] }[] = [
   { label: 'nav.patients', tabs: [{ href: '/patients', label: 'sec.cards' }, { href: '/inquiries', label: 'nav.inquiries' }, { href: '/waitlist', label: 'nav.waitlist' }] },
-  { label: 'nav.reportsAll', tabs: [{ href: '/reports', label: 'nav.reports' }, { href: '/quality', label: 'nav.quality' }, { href: '/payback', label: 'sec.payback', only: LEAD }, { href: '/insights', label: 'sec.scheduled', only: LEAD }, { href: '/network', label: 'sec.network', needs: 'network' }] },
+  { label: 'nav.reportsAll', tabs: [{ href: '/reports', label: 'nav.reports' }, { href: '/quality', label: 'nav.quality' }, { href: '/signals', label: 'sec.signals', only: LEAD }, { href: '/payback', label: 'sec.payback', only: LEAD }, { href: '/insights', label: 'sec.scheduled', only: LEAD }, { href: '/network', label: 'sec.network', needs: 'network' }] },
   { label: 'nav.aiAdmin', tabs: [{ href: '/knowledge', label: 'nav.knowledge' }, { href: '/ai-admin', label: 'sec.mode', only: LEAD }, { href: '/ai-admin/booking', label: 'sec.booking', only: LEAD }] },
 ];
 

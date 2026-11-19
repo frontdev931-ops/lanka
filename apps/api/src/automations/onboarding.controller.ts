@@ -35,7 +35,6 @@ export class OnboardingController {
     const steps = [
       { key: 'payment', done: c.isDemo || ['ACTIVE', 'PAST_DUE', 'LAUNCH_PENDING'].includes(c.billingStatus), required: true, link: '/settings?tab=billing' },
       { key: 'cliniccards', done: !!cc?.lastSyncAt, required: true, link: '/settings' },
-      { key: 'currency', done: !!c.sourceCurrency, required: true, link: '/settings' },
       { key: 'services', done: services > 0, required: true, link: '/knowledge' },
       { key: 'team', done: members > 1, required: false, link: '/settings?tab=team' },
       { key: 'telegram', done: has(Provider.TELEGRAM), required: false, link: '/settings?tab=channels' },

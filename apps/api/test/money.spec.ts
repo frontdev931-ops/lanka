@@ -44,18 +44,35 @@ const report = (token: string, id: string, lang = 'uk') => http().get(`/reports/
 const setCurrency = (token: string, currency: string, correct = false, scope?: 'finance' | 'plans') => http().put('/integrations/cliniccards/currency').set(auth(token)).send({ currency, correct, ...(scope ? { scope } : {}) });
 
 describe('валюта сум із Cliniccards', () => {
-  it('не вказана: нічого не вважається гривнею — підписи й правило кажуть «валюта не підтверджена», у CSV так само', async () => {
+  it('за замовчуванням гривня (2026-11-19): нова клініка нічого не вказує, суми й плани позначено «грн», звіти й CSV працюють; рядок без позначки лишається «валюта не підтверджена» і не додається', async () => {
     const c = await clinic();
-    expect(await prisma.payment.count({ where: { clinicId: c.clinicId, NOT: { currency: null } } })).toBe(0);
+    expect(await prisma.clinic.findUniqueOrThrow({ where: { id: c.clinicId } })).toMatchObject({ sourceCurrency: 'UAH', planCurrency: 'UAH', sourceCurrencyStatedAt: null });
+    expect(await prisma.payment.count({ where: { clinicId: c.clinicId, NOT: { currency: 'UAH' } } })).toBe(0);
+    expect(await prisma.treatmentPlan.count({ where: { clinicId: c.clinicId, NOT: { currency: 'UAH' } } })).toBe(0);
     const debtors = await report(c.token, 'debtors');
-    expect(debtors.currency).toEqual({ code: null, state: 'unknown' });
-    const debt = debtors.columns.find((x: { key: string }) => x.key === 'debt');
-    expect(debt.label).toBe('Борг (валюта не підтверджена)');
-    expect(debtors.rule).toContain('Валюту сум не підтверджено');
-    const csv = head((await http().get('/reports/debtors/csv').set(auth(c.token)).expect(200)).text);
-    expect(csv).toContain('"Борг (валюта не підтверджена)"');
-    expect(csv).not.toMatch(/грн|UAH/);
-    expect((await http().get('/integrations/cliniccards').set(auth(c.token)).expect(200)).body.currency).toMatchObject({ code: null, options: expect.arrayContaining(['UAH', 'USD']) });
+    expect(debtors.currency).toEqual({ code: 'UAH', state: 'one' });
+    expect(debtors.columns.find((x: { key: string }) => x.key === 'debt').label).toBe('Борг, грн');
+    expect(head((await http().get('/reports/debtors/csv').set(auth(c.token)).expect(200)).text)).toContain('"Борг, грн"');
+    expect((await report(c.token, 'unfinished-treatment')).columns.find((x: { key: string }) => x.key === 'openSum').label).toContain('грн');
+    // the onboarding no longer asks for a currency
+    expect((await http().get('/onboarding').set(auth(c.token)).expect(200)).body.steps.map((s: { key: string }) => s.key)).not.toContain('currency');
+    // a historical row without a stamp is never treated as hryvnia: kept apart, labelled as unconfirmed, the note does not send anyone to a setting
+    await prisma.payment.updateMany({ where: { id: (await prisma.payment.findFirstOrThrow({ where: { clinicId: c.clinicId } })).id }, data: { currency: null } });
+    const rev = await report(c.token, 'revenue');
+    expect(rev.currency.state).toBe('mixed');
+    expect(rev.rule).toContain('без підтвердженої валюти');
+    expect(rev.rule).not.toContain('налаштуваннях');
+  });
+
+  it('явно вказана інша валюта лишається: позначки USD не переписуються на гривню, нові суми такої клініки — USD, суми не додаються', async () => {
+    const c = await clinic();
+    await setCurrency(c.token, 'USD', true).expect(200);
+    expect(await prisma.payment.count({ where: { clinicId: c.clinicId, NOT: { currency: 'USD' } } })).toBe(0);
+    const p = (await prisma.patient.findFirstOrThrow({ where: { clinicId: c.clinicId } })).id;
+    await prisma.payment.create({ data: { clinicId: c.clinicId, patientId: p, externalId: `usd-${rnd()}`, paidAt: new Date(), amount: 50 } });
+    await http().post('/integrations/cliniccards/sync').set(auth(c.token)).expect(201);
+    expect(await prisma.payment.count({ where: { clinicId: c.clinicId, NOT: { currency: 'USD' } } })).toBe(0);
+    expect((await report(c.token, 'debtors')).currency).toEqual({ code: 'USD', state: 'one' });
   });
 
   it('власник вказує валюту: суми позначаються, у журналі дій хто й коли; керуючий і адміністратор не можуть; невідомий код — 400; інша клініка не зачеплена', async () => {
@@ -68,8 +85,8 @@ describe('валюта сум із Cliniccards', () => {
     expect(st.currency.code).toBe('UAH');
     expect(await prisma.payment.count({ where: { clinicId: a.clinicId, currency: null } })).toBe(0);
     expect(await prisma.patient.count({ where: { clinicId: a.clinicId, balanceCurrency: null } })).toBe(0);
-    expect(await prisma.payment.count({ where: { clinicId: b.clinicId, NOT: { currency: null } } })).toBe(0);
-    expect(await prisma.auditLog.findFirst({ where: { clinicId: a.clinicId, action: 'clinic.currency' } })).toMatchObject({ details: expect.objectContaining({ before: null, after: 'UAH' }) });
+    expect(await prisma.payment.count({ where: { clinicId: b.clinicId, NOT: { currency: 'UAH' } } })).toBe(0);
+    expect(await prisma.auditLog.findFirst({ where: { clinicId: a.clinicId, action: 'clinic.currency' } })).toMatchObject({ details: expect.objectContaining({ before: 'UAH', after: 'UAH' }) });
 
     const uk = await report(a.token, 'debtors');
     expect(uk.currency).toEqual({ code: 'UAH', state: 'one' });
@@ -81,19 +98,12 @@ describe('валюта сум із Cliniccards', () => {
     expect(sources.rule).toContain('не конвертовано');
   });
 
-  it('плани — окремою заявою: валюта оплат не позначає підсумки планів; плани можна лишити непідтвердженими або вказати іншу валюту; ціни позицій не позначаються ніколи', async () => {
+  it('плани — окремою заявою: валюта планів змінюється окремо від оплат; ціни позицій не позначаються ніколи', async () => {
     const c = await clinic();
     const plans = () => prisma.treatmentPlan.findMany({ where: { clinicId: c.clinicId }, select: { currency: true } });
     expect((await plans()).length).toBeGreaterThan(0);
-    await setCurrency(c.token, 'UAH').expect(200);
-    expect(await prisma.payment.count({ where: { clinicId: c.clinicId, currency: null } })).toBe(0);
-    // the payments statement leaves every plan total unconfirmed, also after the next load
-    await http().post('/integrations/cliniccards/sync').set(auth(c.token)).expect(201);
-    expect((await plans()).every((p) => p.currency === null)).toBe(true);
-    const unfinished = await report(c.token, 'unfinished-treatment');
-    expect(unfinished.columns.find((x: { key: string }) => x.key === 'openSum').label).toBe('Сума невиконаного (валюта не підтверджена)');
-    // a clinic that keeps its plans in USD says so for plans only; payments keep UAH
-    const st = (await setCurrency(c.token, 'USD', false, 'plans').expect(200)).body.currency;
+    // a clinic that keeps its plans in USD says so for plans only (correcting the default); payments keep UAH
+    const st = (await setCurrency(c.token, 'USD', true, 'plans').expect(200)).body.currency;
     expect(st).toMatchObject({ code: 'UAH', planCode: 'USD' });
     expect((await plans()).every((p) => p.currency === 'USD')).toBe(true);
     expect(await prisma.payment.count({ where: { clinicId: c.clinicId, NOT: { currency: 'UAH' } } })).toBe(0);

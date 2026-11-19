@@ -64,6 +64,12 @@ export class InsightsController {
     return this.insights.runNow(u.clinicId, id);
   }
 
+  // The "Signals" section: the clinic's rules measured now (read only; the clinic comes from the session)
+  @Get('signals')
+  signals(@CurrentUser() u: AuthUser) {
+    return this.insights.signals(u.clinicId);
+  }
+
   @Get('alerts')
   alerts(@CurrentUser() u: AuthUser) {
     return this.insights.alerts(u.clinicId);

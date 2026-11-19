@@ -138,12 +138,13 @@ model Clinic {
   // The currency in which this clinic's Cliniccards keeps payments, invoices, card balances and plan totals. Cliniccards sends amounts without a
   // currency, so it is never inferred: the clinic's owner states it (who and when are kept). null = not stated yet: amounts are shown as "currency not
   // confirmed". Loaded rows get it as their own stamp (currency below), so a later change does not relabel what was already loaded.
-  sourceCurrency            String?
+  // LANKA serves Ukrainian clinics: hryvnia unless the owner stated another currency earlier (2026-11-19; the setting is no longer shown)
+  sourceCurrency            String?                   @default("UAH")
   sourceCurrencyStatedAt    DateTime?
   sourceCurrencyStatedById  String?
   // The currency of treatment-plan TOTALS, stated separately (2026-11-16): Cliniccards documents them in the main currency at each plan's own rate,
   // but a clinic keeping some plans in another currency must be able to leave plans unconfirmed while stating payments. null = not stated.
-  planCurrency              String?
+  planCurrency              String?                   @default("UAH")
   planCurrencyStatedAt      DateTime?
   planCurrencyStatedById    String?
   sharedDoctorId            String?

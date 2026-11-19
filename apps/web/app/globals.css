@@ -1072,3 +1072,6 @@ figure.mock { margin: 0; }
 .clinic-switch select { width: 100%; }
 
 /* Installation examples (Settings → Channels → Website): scroll inside the block, never the page */
+/* Reports → Signals */
+.signal-list { display: grid; gap: 12px; margin-bottom: 12px; }
+.signal-what { font-size: 15px; }

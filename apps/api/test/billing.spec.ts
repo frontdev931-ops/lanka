@@ -384,7 +384,7 @@ describe('покупка й підключення', () => {
     const steps = (await http().get('/onboarding').set(auth(c.token)).expect(200)).body;
     expect(steps.launch).toBe('PENDING');
     const by = Object.fromEntries(steps.steps.map((s: { key: string; done: boolean }) => [s.key, s.done]));
-    expect(by).toMatchObject({ payment: true, cliniccards: false, currency: false, services: false, telegram: false, meta: false, agent: false });
+    expect(by).toMatchObject({ payment: true, cliniccards: false, services: false, telegram: false, meta: false, agent: false });
     expect(steps.complete).toBe(false);
 
     // after the start: the next month is the plan price only, the sending switch opens
