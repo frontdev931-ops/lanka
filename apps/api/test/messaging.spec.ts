@@ -710,10 +710,10 @@ describe('результат сообщений для воронки', () => {
     await prisma.payment.create({ data: { clinicId, patientId: a.id, externalId: `p${rnd()}`, paidAt: ago(25), amount: 999 } }); // before the message
     await prisma.payment.create({ data: { clinicId, patientId: b.id, externalId: `p${rnd()}`, paidAt: ago(5), amount: 700 } }); // did not book after a message
     const pay = (await http().get('/messages/payback?days=30').set(auth(token)).expect(200)).body;
-    expect(pay).toMatchObject({ days: 30, attributionDays: 14, sent: 7, booked: 2, attended: 1, remindedVisits: 1, paid: [{ currency: null, amount: 1500 }] });
+    expect(pay).toMatchObject({ days: 30, attributionDays: 14, sent: 7, booked: 2, attended: 1, remindedVisits: 1, paid: [{ currency: 'UAH', amount: 1500 }] });
     // a chosen range of days: only the messages sent in it (four campaign messages 20 days ago); the booking after them counts also after the range
     const dayIso = (n: number) => clinicDate(new Date(Date.now() - n * DAYMS));
-    expect((await http().get(`/messages/payback?from=${dayIso(21)}&to=${dayIso(19)}`).set(auth(token)).expect(200)).body).toMatchObject({ from: dayIso(21), to: dayIso(19), days: 3, sent: 4, booked: 1, paid: [{ currency: null, amount: 1500 }] });
+    expect((await http().get(`/messages/payback?from=${dayIso(21)}&to=${dayIso(19)}`).set(auth(token)).expect(200)).body).toMatchObject({ from: dayIso(21), to: dayIso(19), days: 3, sent: 4, booked: 1, paid: [{ currency: 'UAH', amount: 1500 }] });
     await http().get(`/messages/payback?from=${dayIso(1)}`).set(auth(token)).expect(400);
     // a shorter period leaves only the fresh message and its appointment, and no payment
     expect((await http().get('/messages/payback?days=7').set(auth(token)).expect(200)).body).toMatchObject({ sent: 3, booked: 1, attended: 0, paid: [] });
@@ -830,14 +830,14 @@ describe('дайджест руководителю в Telegram', () => {
     const svc = (await import('../src/automations/digest.service')).DigestService;
     const digest = (app as INestApplication).get(svc);
     const n = await digest.numbers(c.clinicId, 'WEEKLY');
-    expect(n).toMatchObject({ visited: 2, noShow: 1, cancelled: 1, newPatients: 1, paid: [{ currency: null, amount: 12500 }], upcoming: 1, requestsNew: 1, requestsOpen: 1, unclosed: 1 });
-    expect(n.prev).toMatchObject({ visited: 1, newPatients: 1, paid: [{ currency: null, amount: 4000 }] });
+    expect(n).toMatchObject({ visited: 2, noShow: 1, cancelled: 1, newPatients: 1, paid: [{ currency: 'UAH', amount: 12500 }], upcoming: 1, requestsNew: 1, requestsOpen: 1, unclosed: 1 });
+    expect(n.prev).toMatchObject({ visited: 1, newPatients: 1, paid: [{ currency: 'UAH', amount: 4000 }] });
 
     const text = digest.format(n, 'Моя клініка', 'WEEKLY', 'uk', 'https://x/analytics');
     expect(text).toContain('Дайджест клініки «Моя клініка»');
     expect(text).toContain('проведено 2 (було 1)');
     // the clinic has not stated its currency: the amount says so, and is compared only with the same currency
-    expect(text).toContain('Оплати: 12 500 (валюта не підтверджена) (було 4 000)');
+    expect(text).toContain('Оплати: 12 500 грн (було 4 000)');
     expect(text).toContain('Записів минулих днів без підсумку: 1');
     expect(text).toContain('Є заявки без відповіді: 1');
     expect(digest.format(n, 'Clinic', 'WEEKLY', 'en', 'u')).toContain('Appointments: completed 2 (was 1)');

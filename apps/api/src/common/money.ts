@@ -27,6 +27,14 @@ export interface MoneyTotal {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// The currency of a payment or invoice amount (2026-11-19): its own stamp; otherwise the currency the clinic stated (or its UAH default);
+// otherwise UAH. A known stamp is never replaced, so foreign amounts keep their code and stay apart from hryvnias.
+export const effectiveCurrency = (stamp: Cur | undefined, clinicCurrency: Cur | undefined): string => stamp ?? clinicCurrency ?? 'UAH';
+// The clinic's stated currency of payments, invoices and balances (Clinic.sourceCurrency), for effectiveCurrency
+export async function clinicMoneyCurrency(prisma: { clinic: { findUnique(a: { where: { id: string }; select: { sourceCurrency: true } }): Promise<{ sourceCurrency: string | null } | null> } }, clinicId: string): Promise<Cur> {
+  return (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { sourceCurrency: true } }))?.sourceCurrency ?? null;
+}
+
 // Totals per currency (unknown last). Amounts with different currencies stay apart.
 export function sumByCurrency(items: Iterable<{ currency: Cur; amount: number | string | { toString(): string } | null | undefined }>): MoneyTotal[] {
   const by = new Map<Cur, number>();

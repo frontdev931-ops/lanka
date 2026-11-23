@@ -1249,17 +1249,24 @@ model ScheduledReport {
 // completed visits against the previous period, percent), STALE_REQUESTS (requests waiting longer than `hours`, count).
 // Calculated by code; a rule that fired stays quiet for 24 hours.
 model AlertRule {
-  id          String    @id @default(cuid())
-  clinicId    String
-  kind        String
-  threshold   Float
-  windowDays  Int       @default(7)
-  hours       Int       @default(4)
-  enabled     Boolean   @default(false)
-  lastFiredAt DateTime?
-  lastValue   Float?
-  createdAt   DateTime  @default(now())
-  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  id              String    @id @default(cuid())
+  clinicId        String
+  kind            String
+  threshold       Float
+  windowDays      Int       @default(7)
+  hours           Int       @default(4)
+  // enabled: the email to the owner; push: Push notifications to the clinic's subscribed devices (split from enabled on 2026-11-19, the
+  // existing value copied); telegram: the staff Telegram chat
+  enabled         Boolean   @default(false)
+  push            Boolean   @default(false)
+  telegram        Boolean   @default(false)
+  // the last Telegram alert that was really delivered, and a short claim against two scheduler runs sending the same alert
+  telegramSentAt  DateTime?
+  telegramClaimAt DateTime?
+  lastFiredAt     DateTime?
+  lastValue       Float?
+  createdAt       DateTime  @default(now())
+  clinic          Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@unique([clinicId, kind])
 }

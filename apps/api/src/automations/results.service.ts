@@ -1,4 +1,4 @@
-import { MoneyTotal, sumByCurrency } from '../common/money';
+import { MoneyTotal, clinicMoneyCurrency, effectiveCurrency, sumByCurrency } from '../common/money';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLANS } from '../service/plans';
@@ -130,7 +130,8 @@ export class ResultsService {
     let paid: MoneyTotal[] = [];
     if (paidFrom.size) {
       const payments = await this.prisma.payment.findMany({ where: { clinicId, patientId: { in: [...paidFrom.keys()] }, paidAt: { gte: since } }, select: { patientId: true, paidAt: true, amount: true, currency: true } });
-      paid = sumByCurrency(payments.filter((p) => p.patientId && p.paidAt.getTime() >= paidFrom.get(p.patientId)!.getTime()));
+      const clinicCur = await clinicMoneyCurrency(this.prisma, clinicId);
+      paid = sumByCurrency(payments.filter((p) => p.patientId && p.paidAt.getTime() >= paidFrom.get(p.patientId)!.getTime()).map((p) => ({ ...p, currency: effectiveCurrency(p.currency, clinicCur) })));
     }
     return {
       days: period ? period.days : days,

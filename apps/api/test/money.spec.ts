@@ -56,12 +56,25 @@ describe('валюта сум із Cliniccards', () => {
     expect((await report(c.token, 'unfinished-treatment')).columns.find((x: { key: string }) => x.key === 'openSum').label).toContain('грн');
     // the onboarding no longer asks for a currency
     expect((await http().get('/onboarding').set(auth(c.token)).expect(200)).body.steps.map((s: { key: string }) => s.key)).not.toContain('currency');
-    // a historical row without a stamp is never treated as hryvnia: kept apart, labelled as unconfirmed, the note does not send anyone to a setting
+    // a payment without a stamp takes the clinic's currency (here the UAH default): it is counted with the hryvnias, nothing is "unconfirmed"
+    const before = (await report(c.token, 'revenue')).rows.reduce((n: number, r: { paid: number }) => n + r.paid, 0);
     await prisma.payment.updateMany({ where: { id: (await prisma.payment.findFirstOrThrow({ where: { clinicId: c.clinicId } })).id }, data: { currency: null } });
     const rev = await report(c.token, 'revenue');
+    expect(rev.currency).toEqual({ code: 'UAH', state: 'one' });
+    expect(rev.rows.reduce((n: number, r: { paid: number }) => n + r.paid, 0)).toBe(before);
+    expect(rev.rule).not.toContain('без підтвердженої валюти');
+  });
+
+  it('порожня валюта оплати бере явно вказану валюту клініки; відома іноземна позначка лишається своєю й не додається до гривні', async () => {
+    const c = await clinic();
+    await setCurrency(c.token, 'USD', true).expect(200);
+    const p = (await prisma.patient.findFirstOrThrow({ where: { clinicId: c.clinicId } })).id;
+    await prisma.payment.create({ data: { clinicId: c.clinicId, patientId: p, externalId: `n-${rnd()}`, paidAt: new Date(), amount: 10, currency: null } });
+    expect((await report(c.token, 'revenue')).currency).toEqual({ code: 'USD', state: 'one' });
+    await prisma.payment.create({ data: { clinicId: c.clinicId, patientId: p, externalId: `e-${rnd()}`, paidAt: new Date(), amount: 10, currency: 'EUR' } });
+    const rev = await report(c.token, 'revenue');
     expect(rev.currency.state).toBe('mixed');
-    expect(rev.rule).toContain('без підтвердженої валюти');
-    expect(rev.rule).not.toContain('налаштуваннях');
+    expect(rev.rows.filter((r: { currency: string }) => r.currency === 'EUR')).toHaveLength(1);
   });
 
   it('явно вказана інша валюта лишається: позначки USD не переписуються на гривню, нові суми такої клініки — USD, суми не додаються', async () => {

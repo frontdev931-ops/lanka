@@ -163,7 +163,7 @@ describe('сигнали керівнику', () => {
   it('за замовчуванням вимкнені; вмикає власник і керуючий на «Про»; значення перевіряються', async () => {
     const c = await clinic();
     const list = (await http().get('/alerts').set(auth(c.token)).expect(200)).body as { kind: string; enabled: boolean; threshold: number }[];
-    expect(list.map((a) => a.kind)).toEqual(['CANCEL_RATE', 'RETURN_DROP', 'STALE_REQUESTS']);
+    expect(list.map((a) => a.kind)).toEqual(['CANCEL_RATE', 'NO_REBOOK', 'OVERDUE_TASKS', 'PAYMENTS_DROP', 'RETURN_DROP', 'STALE_REQUESTS', 'SYNC_OVERDUE', 'UNFINISHED_NO_NEXT']);
     expect(list.every((a) => !a.enabled)).toBe(true);
     await http().patch('/alerts/CANCEL_RATE').set(auth(c.token)).send({ enabled: true, threshold: 30 }).expect(200);
     await http().patch('/alerts/CANCEL_RATE').set(auth(c.token)).send({ threshold: -1 }).expect(400);
@@ -172,7 +172,7 @@ describe('сигнали керівнику', () => {
     await http().patch('/alerts/CANCEL_RATE').set(auth(admin.token)).send({ enabled: false }).expect(403);
     const start = await clinic('START');
     await http().patch('/alerts/CANCEL_RATE').set(auth(start.token)).send({ enabled: true }).expect(400);
-    expect((await http().get('/alerts').set(auth(clinicOther())).expect(200)).body).toHaveLength(3);
+    expect((await http().get('/alerts').set(auth(clinicOther())).expect(200)).body).toHaveLength(8);
     function clinicOther() {
       return c.token;
     }
@@ -246,7 +246,7 @@ describe('сигнали керівнику', () => {
     await synced(c.clinicId);
     await visits(c.clinicId, 6, 'VISITED', 3);
     s = (await http().get('/signals').set(auth(c.token)).expect(200)).body;
-    expect(by('CANCEL_RATE')).toMatchObject({ state: 'fired', value: 66.7, count: 12, base: 18, threshold: 30, windowDays: 7, notify: true });
+    expect(by('CANCEL_RATE')).toMatchObject({ state: 'fired', value: 66.7, count: 12, base: 18, threshold: 30, windowDays: 7, emailOn: true, pushOn: false, telegramOn: false });
     expect(Date.parse(by('CANCEL_RATE').to) - Date.parse(by('CANCEL_RATE').from)).toBe(7 * day);
     // the comparison period has too few completed visits: no percentage is shown
     expect(by('RETURN_DROP')).toMatchObject({ state: 'insufficient', base: 0, need: 10, link: null });
@@ -264,6 +264,153 @@ describe('сигнали керівнику', () => {
     expect(Date.parse(drop.to) - Date.parse(drop.from)).toBe(14 * day);
     await http().patch('/alerts/RETURN_DROP').set(auth(c.token)).send({ enabled: true }).expect(200);
     expect(await insights.evaluate(c.clinicId)).toEqual(['RETURN_DROP']);
+  });
+
+  const sig = async (token: string, kind: string) => ((await http().get('/signals').set(auth(token)).expect(200)).body.signals as Record<string, unknown>[]).find((x) => x.kind === kind)!;
+  const patient = (clinicId: string) => prisma.patient.create({ data: { clinicId, externalId: `p${rnd()}`, fullName: `Пацієнт ${rnd()}` } });
+  const visit = (clinicId: string, patientId: string, status: string, daysAgo: number) => prisma.visit.create({ data: { clinicId, patientId, externalId: `v${rnd()}`, startsAt: new Date(Date.now() - daysAgo * day), status } });
+
+  it('спад оплат: дві рівні половини повних днів; нуль зараз — справжній спад; мало оплат або змішані валюти — «мало даних»; без синхронізації — не рахується', async () => {
+    const c = await clinic();
+    const pay = (daysAgo: number, amount: number, currency: string | null = 'UAH') => prisma.payment.create({ data: { clinicId: c.clinicId, externalId: `pay${rnd()}`, paidAt: new Date(Date.now() - daysAgo * day), amount, currency } });
+    for (let i = 0; i < 10; i++) await pay(20, 1000); // the previous 14 days: 10 000
+    expect(await sig(c.token, 'PAYMENTS_DROP')).toMatchObject({ state: 'needs_sync' });
+    await synced(c.clinicId);
+    expect(await sig(c.token, 'PAYMENTS_DROP')).toMatchObject({ state: 'fired', value: 100, amount: 0, prevAmount: 10000, currency: 'UAH', threshold: 30, windowDays: 14 });
+    await pay(3, 8000);
+    expect(await sig(c.token, 'PAYMENTS_DROP')).toMatchObject({ state: 'ok', value: 20, amount: 8000 });
+    // a payment without a currency is the clinic's currency (UAH here), not "too little data"
+    await pay(2, 1000, null);
+    expect(await sig(c.token, 'PAYMENTS_DROP')).toMatchObject({ state: 'ok', value: 10, amount: 9000, currency: 'UAH' });
+    // a known foreign amount is never added to hryvnias
+    await pay(4, 50, 'USD');
+    expect(await sig(c.token, 'PAYMENTS_DROP')).toMatchObject({ state: 'insufficient', reason: 'currency' });
+    const small = await clinic();
+    await synced(small.clinicId);
+    await prisma.payment.create({ data: { clinicId: small.clinicId, externalId: `pay${rnd()}`, paidAt: new Date(Date.now() - 20 * day), amount: 5000, currency: 'UAH' } });
+    expect(await sig(small.token, 'PAYMENTS_DROP')).toMatchObject({ state: 'insufficient', base: 1, need: 10 });
+  });
+
+  it('незавершене лікування без наступного запису: лише розпочате лікування з відкритими позиціями, завершеним візитом і без майбутнього запису; план сам по собі — ні', async () => {
+    const c = await clinic();
+    await synced(c.clinicId);
+    const item = (patientId: string, plan: string, status: string, doneDaysAgo?: number) => prisma.planItem.create({ data: { clinicId: c.clinicId, patientId, externalId: `i${rnd()}`, planId: plan, name: `Послуга ${rnd()}`, status, createdAtExt: new Date(Date.now() - 90 * day), markedDoneAt: doneDaysAgo === undefined ? null : new Date(Date.now() - doneDaysAgo * day) } });
+    const waiting = await patient(c.clinicId); // counted
+    await item(waiting.id, 'pl1', 'DONE', 40); await item(waiting.id, 'pl1', 'NEW'); await visit(c.clinicId, waiting.id, 'VISITED', 40);
+    const booked = await patient(c.clinicId); // a future visit: excluded
+    await item(booked.id, 'pl2', 'DONE', 40); await item(booked.id, 'pl2', 'NEW'); await visit(c.clinicId, booked.id, 'VISITED', 40); await visit(c.clinicId, booked.id, 'PLANNED', -5);
+    const planOnly = await patient(c.clinicId); // a plan nobody started: not unfinished treatment
+    await item(planOnly.id, 'pl3', 'NEW'); await visit(c.clinicId, planOnly.id, 'VISITED', 40);
+    const finished = await patient(c.clinicId); // everything done
+    await item(finished.id, 'pl4', 'DONE', 40); await visit(c.clinicId, finished.id, 'VISITED', 40);
+    const recent = await patient(c.clinicId); // last work 10 days ago: not waiting long enough
+    await item(recent.id, 'pl5', 'DONE', 10); await item(recent.id, 'pl5', 'PLANNED_TO_DO'); await visit(c.clinicId, recent.id, 'VISITED', 10);
+    const s = await sig(c.token, 'UNFINISHED_NO_NEXT');
+    expect(s).toMatchObject({ state: 'ok', value: 1, count: 1, base: 2, threshold: 5, windowDays: 30, link: '/reports?report=unfinished-treatment&days=180' });
+    await http().patch('/alerts/UNFINISHED_NO_NEXT').set(auth(c.token)).send({ threshold: 1 }).expect(200);
+    expect(await sig(c.token, 'UNFINISHED_NO_NEXT')).toMatchObject({ state: 'fired', value: 1 });
+  });
+
+  it('скасування чи неявка без повторного запису: унікальні пацієнти в межах 30 днів; пізніший завершений або майбутній візит знімає пацієнта', async () => {
+    const c = await clinic();
+    await synced(c.clinicId);
+    const a = await patient(c.clinicId); await visit(c.clinicId, a.id, 'CANCELLED', 10); await visit(c.clinicId, a.id, 'DID_NOT_COME', 12); // twice: counted once
+    const b = await patient(c.clinicId); await visit(c.clinicId, b.id, 'CANCELLED', 10); await visit(c.clinicId, b.id, 'VISITED', 5); // came later
+    const f = await patient(c.clinicId); await visit(c.clinicId, f.id, 'DID_NOT_COME', 10); await visit(c.clinicId, f.id, 'CONFIRMED', -3); // booked again
+    const d = await patient(c.clinicId); await visit(c.clinicId, d.id, 'CANCELLED', 3); // too recent (7 days)
+    const e = await patient(c.clinicId); await visit(c.clinicId, e.id, 'CANCELLED', 40); // outside the 30 days
+    const s = await sig(c.token, 'NO_REBOOK');
+    expect(s).toMatchObject({ state: 'ok', value: 1, base: 3, lookbackDays: 30, windowDays: 7, threshold: 5 });
+    await http().patch('/alerts/NO_REBOOK').set(auth(c.token)).send({ windowDays: 40 }).expect(400);
+  });
+
+  it('прострочені завдання й синхронізація: дані LANKA не залежать від Cliniccards; «не підключено», «ще не синхронізовано» і «давно» розрізняються', async () => {
+    const c = await clinic();
+    const task = (daysDue: number, status: 'OPEN' | 'DONE' | 'CANCELLED') => prisma.task.create({ data: { clinicId: c.clinicId, title: 'T', dueDate: new Date(Date.now() + daysDue * day), status } });
+    await task(-3, 'OPEN'); await task(-2, 'OPEN'); await task(-5, 'DONE'); await task(-5, 'CANCELLED'); await task(2, 'OPEN');
+    const t = await sig(c.token, 'OVERDUE_TASKS'); // no Cliniccards load at all
+    expect(t).toMatchObject({ state: 'ok', value: 2, base: 3 });
+    expect(t.oldestDays as number).toBeGreaterThanOrEqual(3);
+    expect(await sig(c.token, 'SYNC_OVERDUE')).toMatchObject({ state: 'not_connected' });
+    await prisma.integration.upsert({ where: { clinicId_provider: { clinicId: c.clinicId, provider: 'CLINICCARDS' } }, create: { clinicId: c.clinicId, provider: 'CLINICCARDS', apiKeyEnc: 'x' }, update: { apiKeyEnc: 'x', lastSyncAt: null } });
+    expect(await sig(c.token, 'SYNC_OVERDUE')).toMatchObject({ state: 'never' });
+    await http().patch('/alerts/SYNC_OVERDUE').set(auth(c.token)).send({ enabled: true }).expect(200);
+    expect(await insights.evaluate(c.clinicId)).toEqual([]); // "never loaded" is not alerted
+    await synced(c.clinicId, 60);
+    expect(await sig(c.token, 'SYNC_OVERDUE')).toMatchObject({ state: 'fired', value: 60, threshold: 48 });
+    await http().patch('/alerts/SYNC_OVERDUE').set(auth(c.token)).send({ threshold: 12 }).expect(400);
+  });
+
+  it('Telegram для кожного сигналу: окремо від пошти й push; відкриття і збереження нічого не шлють; невдала доставка не записується; раз на добу; два прогони не шлють двічі', async () => {
+    const { StaffNotifierService } = await import('../src/automations/staff-notifier.service');
+    const staff = app.get(StaffNotifierService);
+    const deliver = jest.spyOn(staff, 'deliver');
+    try {
+      const c = await clinic();
+      for (let i = 0; i < 3; i++) await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: `t${i}`, kind: 'BOOKING', summary: 'x', createdAt: new Date(Date.now() - 6 * 3_600_000) } });
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ telegram: true }).expect(200);
+      await http().get('/signals').set(auth(c.token)).expect(200);
+      expect(deliver).not.toHaveBeenCalled();
+      const rule = () => prisma.alertRule.findUniqueOrThrow({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } } });
+      expect(await rule()).toMatchObject({ telegram: true, enabled: false });
+      // a failed delivery is not recorded as sent
+      deliver.mockResolvedValueOnce('rejected');
+      expect(await insights.evaluate(c.clinicId)).toEqual([]);
+      expect(await rule()).toMatchObject({ telegramSentAt: null, telegramClaimAt: null });
+      expect(await prisma.auditLog.count({ where: { clinicId: c.clinicId, action: 'alert.telegram_failed' } })).toBe(1);
+      // two runs at once: one message; the text is aggregate only, with the link
+      deliver.mockResolvedValue('sent');
+      const [x, y] = await Promise.all([insights.evaluate(c.clinicId), insights.evaluate(c.clinicId)]);
+      expect([...x, ...y]).toEqual(['STALE_REQUESTS']);
+      expect(deliver).toHaveBeenCalledTimes(2);
+      expect(deliver.mock.calls.at(-1)![1]).toMatch(/заявок.*: 3[\s\S]*\/signals/);
+      expect((await rule()).telegramSentAt).not.toBeNull();
+      expect(await insights.evaluate(c.clinicId)).toEqual([]); // quiet for a day
+      // switched off: no delivery even when due again; email/push stay as they were
+      await prisma.alertRule.update({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } }, data: { telegramSentAt: new Date(Date.now() - 25 * 3_600_000) } });
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ telegram: false }).expect(200);
+      expect(await insights.evaluate(c.clinicId)).toEqual([]);
+      expect(deliver).toHaveBeenCalledTimes(2);
+      expect(await rule()).toMatchObject({ enabled: false, telegram: false });
+      // only the owner and the manager change it; Start cannot switch it on
+      const admin = await member(c.token, 'ADMIN');
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(admin.token)).send({ telegram: true }).expect(403);
+      const start = await clinic('START');
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(start.token)).send({ telegram: true }).expect(400);
+    } finally {
+      deliver.mockRestore();
+    }
+  });
+
+  it('пошта й Push окремо: кожен канал лише за своїм перемикачем; Telegram не зачеплено', async () => {
+    const { PushService } = await import('../src/push/push.service');
+    const push = jest.spyOn(app.get(PushService), 'notify').mockResolvedValue(undefined as never);
+    try {
+      const c = await clinic();
+      for (let i = 0; i < 3; i++) await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: `e${i}`, kind: 'BOOKING', summary: 'x', createdAt: new Date(Date.now() - 6 * 3_600_000) } });
+      const rule = () => prisma.alertRule.findUniqueOrThrow({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } } });
+      // email only
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ enabled: true }).expect(200);
+      let mails = mail.outbox.length;
+      expect(await insights.evaluate(c.clinicId)).toEqual(['STALE_REQUESTS']);
+      expect(mail.outbox.length).toBe(mails + 1);
+      expect(push).not.toHaveBeenCalled();
+      expect(await rule()).toMatchObject({ enabled: true, push: false, telegram: false });
+      // Push only
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ enabled: false, push: true }).expect(200);
+      await prisma.alertRule.update({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } }, data: { lastFiredAt: new Date(Date.now() - 25 * 3_600_000) } });
+      mails = mail.outbox.length;
+      expect(await insights.evaluate(c.clinicId)).toEqual(['STALE_REQUESTS']);
+      expect(push).toHaveBeenCalledTimes(1);
+      expect(mail.outbox.length).toBe(mails);
+      expect(await rule()).toMatchObject({ enabled: false, push: true, telegram: false });
+      expect((await sig(c.token, 'STALE_REQUESTS'))).toMatchObject({ emailOn: false, pushOn: true, telegramOn: false });
+      // Start cannot switch Push on
+      const start = await clinic('START');
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(start.token)).send({ push: true }).expect(400);
+    } finally {
+      push.mockRestore();
+    }
   });
 
   it('розділ «Сигнали»: лише «Про» отримує числа; лише власник і керуючий', async () => {

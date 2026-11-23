@@ -5,7 +5,7 @@ import { AiService } from '../ai/ai.service';
 import { AssistantService } from '../ai/assistant.service';
 import { clinicDate } from '../common/clinic-time';
 import { Lang } from '../common/i18n';
-import { Cur, MoneyTotal, formatTotals, sumByCurrency } from '../common/money';
+import { Cur, MoneyTotal, clinicMoneyCurrency, effectiveCurrency, formatTotals, sumByCurrency } from '../common/money';
 import { InsightsService } from '../insights/insights.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportBuilderService, ReportSpec } from '../report-builder/report-builder.service';
@@ -126,7 +126,7 @@ export class NetworkService implements OnApplicationBootstrap, OnModuleDestroy {
     const since = new Date(now.getTime() - days * DAY);
     const per = await Promise.all(
       branches.map(async (b) => {
-        const [records, newCards, byStatus, booked, inquiries, payments, sync] = await Promise.all([
+        const [records, newCards, byStatus, booked, inquiries, payments, sync, branchCur] = await Promise.all([
           this.prisma.patient.count({ where: { clinicId: b.id, removedAt: null } }),
           this.prisma.patient.count({ where: { clinicId: b.id, removedAt: null, createdAtExt: { gte: since, lt: now } } }),
           this.prisma.visit.groupBy({ by: ['status'], where: { clinicId: b.id, startsAt: { gte: since, lt: now } }, _count: true }),
@@ -134,10 +134,11 @@ export class NetworkService implements OnApplicationBootstrap, OnModuleDestroy {
           this.prisma.inquiry.count({ where: { clinicId: b.id, occurredAt: { gte: since, lt: now } } }),
           this.prisma.payment.groupBy({ by: ['currency'], where: { clinicId: b.id, paidAt: { gte: since, lt: now } }, _sum: { amount: true } }),
           this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId: b.id, provider: Provider.CLINICCARDS } }, select: { lastSyncAt: true } }),
+          clinicMoneyCurrency(this.prisma, b.id),
         ]);
         const c = (...st: string[]) => byStatus.filter((x) => st.includes(x.status)).reduce((s, x) => s + x._count, 0);
         const counts = { records, newCards, visited: c('VISITED'), noShow: c('DID_NOT_COME'), cancelled: c('CANCELLED'), booked, inquiries };
-        return { id: b.id, name: b.name, ...counts, noShowRate: rate(counts.noShow, counts.visited + counts.noShow + counts.cancelled), cancelRate: rate(counts.cancelled, counts.visited + counts.noShow + counts.cancelled), paid: sumByCurrency(payments.map((p) => ({ currency: p.currency, amount: p._sum.amount }))), dataUpdatedAt: sync?.lastSyncAt ?? null };
+        return { id: b.id, name: b.name, ...counts, noShowRate: rate(counts.noShow, counts.visited + counts.noShow + counts.cancelled), cancelRate: rate(counts.cancelled, counts.visited + counts.noShow + counts.cancelled), paid: sumByCurrency(payments.map((p) => ({ currency: effectiveCurrency(p.currency, branchCur), amount: p._sum.amount }))), dataUpdatedAt: sync?.lastSyncAt ?? null };
       }),
     );
     const add = (k: 'records' | 'newCards' | 'visited' | 'noShow' | 'cancelled' | 'booked' | 'inquiries') => per.reduce((s, b) => s + b[k], 0);
@@ -251,7 +252,10 @@ export class NetworkService implements OnApplicationBootstrap, OnModuleDestroy {
       // marked first: a failing mail does not turn into a mail every hour
       await this.prisma.network.update({ where: { id: n.id }, data: { lastDigestAt: now } });
       for (const m of n.members) {
-        const text = await this.digestText(n.id, m.user.id, 'uk', n.digest === 'DAILY' ? 1 : 7).catch(() => null);
+        const text = await this.digestText(n.id, m.user.id, 'uk', n.digest === 'DAILY' ? 1 : 7).catch((e) => {
+          this.log.warn(`Network digest ${n.id}: ${(e as Error).message}`);
+          return null;
+        });
         if (!text) continue;
         await this.mail.send({ to: m.user.email, subject: `LANKA: дайджест мережі «${n.name}»`, text });
         sent++;

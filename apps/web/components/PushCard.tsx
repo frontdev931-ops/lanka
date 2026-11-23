@@ -84,3 +84,54 @@ export function PushCard() {
     </Card>
   );
 }
+
+// Push on THIS device, for screens that offer Push per item (Signals). Shown only in the installed app (standalone, also iOS "Add to Home
+// Screen") with Push support and the server's keys; a regular browser tab hides it (saved preferences and other devices are untouched).
+//   ask:    installed, but no permission asked yet or no subscription here -> an explicit "enable" button (permission is asked only on click)
+//   denied: the person blocked notifications -> how to allow them in the device or browser settings
+//   active: permission granted AND a subscription on this device -> the per-item Push switch
+export type PushDeviceState = 'hidden' | 'ask' | 'denied' | 'active';
+export const isStandaloneApp = () =>
+  typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true);
+
+export function usePushDevice() {
+  const [state, setState] = useState<PushDeviceState>('hidden');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [key, setKey] = useState<string | null>(null);
+
+  const check = useCallback(async () => {
+    const supported = typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    if (!isStandaloneApp() || !supported) return setState('hidden');
+    const srv = await api<Status>('/push').catch(() => null);
+    if (!srv?.available || !srv.publicKey) return setState('hidden');
+    setKey(srv.publicKey);
+    if (Notification.permission === 'denied') return setState('denied');
+    const sub = await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription();
+    setState(Notification.permission === 'granted' && sub ? 'active' : 'ask');
+  }, []);
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  // only on the person's click: ask for permission, subscribe this device and register it
+  const enable = async () => {
+    if (!key) return;
+    setBusy(true);
+    setError('');
+    try {
+      const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      if (permission !== 'granted') return await check();
+      const reg = await navigator.serviceWorker.ready;
+      const s = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: toKey(key) }));
+      const j = s.toJSON() as { endpoint: string; keys: { p256dh: string; auth: string } };
+      await api('/push/subscribe', { method: 'POST', body: JSON.stringify({ endpoint: j.endpoint, keys: j.keys }) });
+      await check();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { state, busy, error, enable };
+}

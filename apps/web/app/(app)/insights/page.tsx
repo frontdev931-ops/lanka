@@ -1,12 +1,12 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../../lib/api';
 import { fmtDateTime } from '../../../lib/ui';
 import { useI18n } from '../../../lib/i18n';
 import { Alert, Badge, Card, Empty, Loading, PageHeader } from '../../../components/ui';
 import { DigestCard } from '../../../components/DigestCard';
-import { ProHint } from '../../../components/ProHint';
 import { useConfirm } from '../../../components/ConfirmDialog';
 
 interface Schedule {
@@ -30,15 +30,6 @@ interface Member {
   email: string;
   role: string;
 }
-interface AlertRow {
-  kind: 'CANCEL_RATE' | 'RETURN_DROP' | 'STALE_REQUESTS';
-  threshold: number;
-  windowDays: number;
-  hours: number;
-  enabled: boolean;
-  lastFiredAt: string | null;
-  lastValue: number | null;
-}
 interface Saved {
   id: string;
   name: string;
@@ -49,18 +40,15 @@ export default function InsightsPage() {
   const { t } = useI18n();
   const { ask, dialog } = useConfirm();
   const [data, setData] = useState<{ schedules: Schedule[]; members: Member[] } | null>(null);
-  const [alerts, setAlerts] = useState<AlertRow[] | null>(null);
   const [saved, setSaved] = useState<Saved[]>([]);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ savedReportId: '', frequency: 'WEEKLY', hour: 8, weekday: 1, monthDay: 1, format: 'XLSX', recipientIds: [] as string[] });
-  const [edits, setEdits] = useState<Record<string, { threshold?: string; windowDays?: string; hours?: string }>>({});
 
   const load = useCallback(async () => {
     try {
       setData(await api('/scheduled-reports'));
-      setAlerts(await api('/alerts'));
       setSaved(await api('/report-builder/saved'));
     } catch (e) {
       setError((e as Error).message);
@@ -85,10 +73,9 @@ export default function InsightsPage() {
     }
   }
 
-  if (!data || !alerts) return error ? <Alert tone="error">{error}</Alert> : <Loading />;
+  if (!data) return error ? <Alert tone="error">{error}</Alert> : <Loading />;
   const when = (s: Schedule) => (s.frequency === 'DAILY' ? t('ins.daily', { h: s.hour }) : s.frequency === 'WEEKLY' ? t('ins.weekly', { d: t(`ins.wd${s.weekday}` as 'ins.wd1'), h: s.hour }) : t('ins.monthly', { n: s.monthDay, h: s.hour }));
   const names = (ids: string[]) => ids.map((id) => data.members.find((m) => m.id === id)?.name ?? '?').join(', ');
-  const alertTitle = (a: AlertRow) => t(`ins.alert.${a.kind}` as 'ins.alert.CANCEL_RATE');
 
   return (
     <>
@@ -185,43 +172,9 @@ export default function InsightsPage() {
         )}
       </Card>
 
+      {/* the signals, their thresholds and notifications moved to their own tab (one place to set them) */}
       <Card title={t('ins.alerts')}>
-        <ProHint feature="advanced_analytics" />
-        <p className="rule" style={{ marginTop: 0 }}>{t('ins.alertsHint')}</p>
-        {alerts.map((a) => {
-          const e = edits[a.kind] ?? {};
-          const dirty = Object.keys(e).length > 0;
-          return (
-            <div key={a.kind} className="req-item">
-              <span className="chat-name">
-                <b>{alertTitle(a)}</b>
-                <Badge tone={a.enabled ? 'green' : undefined}>{a.enabled ? t('wc.on') : t('wc.off')}</Badge>
-              </span>
-              <div className="toolbar">
-                <label className="field" style={{ margin: 0 }}>
-                  <span>{a.kind === 'STALE_REQUESTS' ? t('ins.thresholdCount') : t('ins.thresholdPct')}</span>
-                  <input className="input" type="number" min={1} style={{ width: 100 }} value={e.threshold ?? a.threshold} onChange={(ev) => setEdits({ ...edits, [a.kind]: { ...e, threshold: ev.target.value } })} />
-                </label>
-                {a.kind === 'STALE_REQUESTS' ? (
-                  <label className="field" style={{ margin: 0 }}>
-                    <span>{t('ins.hours')}</span>
-                    <input className="input" type="number" min={1} max={72} style={{ width: 100 }} value={e.hours ?? a.hours} onChange={(ev) => setEdits({ ...edits, [a.kind]: { ...e, hours: ev.target.value } })} />
-                  </label>
-                ) : (
-                  <label className="field" style={{ margin: 0 }}>
-                    <span>{t('ins.windowDays')}</span>
-                    <input className="input" type="number" min={3} max={60} style={{ width: 100 }} value={e.windowDays ?? a.windowDays} onChange={(ev) => setEdits({ ...edits, [a.kind]: { ...e, windowDays: ev.target.value } })} />
-                  </label>
-                )}
-              </div>
-              {a.lastFiredAt && <span className="muted chat-time">{t('ins.lastFired')}: {fmtDateTime(a.lastFiredAt)} ({a.lastValue})</span>}
-              <div className="toolbar">
-                <button className="btn btn-sm" disabled={busy || !dirty} onClick={() => act(async () => { await api(`/alerts/${a.kind}`, { method: 'PATCH', body: JSON.stringify({ ...(e.threshold ? { threshold: Number(e.threshold) } : {}), ...(e.windowDays ? { windowDays: Number(e.windowDays) } : {}), ...(e.hours ? { hours: Number(e.hours) } : {}) }) }); setEdits({ ...edits, [a.kind]: {} }); }, t('wc.saved'))}>{t('common.save')}</button>
-                <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act(() => api(`/alerts/${a.kind}`, { method: 'PATCH', body: JSON.stringify({ enabled: !a.enabled }) }))}>{a.enabled ? t('kb.disable') : t('kb.enable')}</button>
-              </div>
-            </div>
-          );
-        })}
+        <p className="rule" style={{ marginTop: 0 }}>{t('ins.alertsMoved')} <Link href="/signals">{t('sec.signals')}</Link></p>
       </Card>
     </>
   );

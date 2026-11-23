@@ -3,10 +3,12 @@ import { Provider, Role } from '@prisma/client';
 import { MailService } from '../auth/mail.service';
 import { StaffNotifierService } from '../automations/staff-notifier.service';
 import { startOfClinicDay } from '../common/clinic-time';
+import { clinicMoneyCurrency, effectiveCurrency } from '../common/money';
 import { Lang } from '../common/i18n';
 import { PrismaService } from '../prisma/prisma.service';
 import { PushService } from '../push/push.service';
 import { ROW_LIMIT_MAX, ReportBuilderService, ReportSpec } from '../report-builder/report-builder.service';
+import { ReportsService } from '../reports/reports.service';
 import { toPdf, toXlsx } from '../reports/report-export';
 import { accessBlocked, billingEnforced, hasFeature } from '../service/plans';
 import { Frequency, nextRun } from './schedule';
@@ -16,28 +18,71 @@ const DAY = 86_400_000;
 const MAX_SCHEDULES = 20;
 const MAX_RECIPIENTS = 5;
 const COOLDOWN_MS = 24 * HOUR;
-// The visit-based signals use our copy of Cliniccards: without a successful load in this time they are not computed (old data is not "zero")
+// Cliniccards-based signals use our copy of Cliniccards: without a successful load in this time they are not computed (old data is not "zero")
 const SYNC_FRESH_MS = 48 * HOUR;
-// Where each signal leads in the app. The drop in completed visits has no report comparing two periods: the signal itself shows both periods,
-// both counts and the change, so it carries no link (a link to an unrelated report would not substantiate it)
-const SIGNAL_LINK: Record<string, string | null> = { CANCEL_RATE: '/reports?report=missed-visits', RETURN_DROP: null, STALE_REQUESTS: '/inbox?tab=requests' };
-
-// One signal explained: measured (the value with what it was calculated from), too little data, or a Cliniccards load needed first
-export type SignalExplained =
-  | { state: 'measured'; value: number; from: Date; to: Date; count: number; base: number; prevFrom?: Date; prevTo?: Date }
-  | { state: 'insufficient'; from: Date; to: Date; base: number; need: number }
-  | { state: 'needs_sync' };
-// A rule on a handful of visits is noise: it needs at least this many in the period
+// A Telegram alert being sent is claimed for this long, so two scheduler runs never send the same alert; a failed send releases the claim
+const TELEGRAM_CLAIM_MS = 10 * 60_000;
+// A rule on a handful of visits or payments is noise: it needs at least this many in the period it compares with
 const MIN_SAMPLE = 10;
+// The cancellations and no-shows "without rebooking" are looked for in this many past days (shown on the signal)
+const NO_REBOOK_LOOKBACK_DAYS = 30;
+// The unfinished treatment of the "Unfinished treatment" report: plan items done within this many days
+const UNFINISHED_LOOKBACK_DAYS = 180;
 const LANG: Lang = 'uk';
+const INACTIVE_VISIT = ['CANCELLED', 'DID_NOT_COME', 'MOVED'];
 
-export const ALERT_KINDS = ['CANCEL_RATE', 'RETURN_DROP', 'STALE_REQUESTS'] as const;
+export const ALERT_KINDS = ['CANCEL_RATE', 'NO_REBOOK', 'OVERDUE_TASKS', 'PAYMENTS_DROP', 'RETURN_DROP', 'STALE_REQUESTS', 'SYNC_OVERDUE', 'UNFINISHED_NO_NEXT'] as const;
 export type AlertKind = (typeof ALERT_KINDS)[number];
+// Defaults of each rule (product defaults, editable; the first three are the rules of 2026-11-11). threshold: % (CANCEL_RATE, RETURN_DROP,
+// PAYMENTS_DROP), a count (STALE_REQUESTS, UNFINISHED_NO_NEXT, NO_REBOOK, OVERDUE_TASKS) or hours (SYNC_OVERDUE); windowDays: the period, the
+// days of waiting (UNFINISHED_NO_NEXT) or the days after the missed visit (NO_REBOOK); hours: the waiting of a request.
 const ALERT_DEFAULTS: Record<AlertKind, { threshold: number; windowDays: number; hours: number }> = {
   CANCEL_RATE: { threshold: 25, windowDays: 7, hours: 4 },
   RETURN_DROP: { threshold: 30, windowDays: 14, hours: 4 },
   STALE_REQUESTS: { threshold: 3, windowDays: 7, hours: 4 },
+  PAYMENTS_DROP: { threshold: 30, windowDays: 14, hours: 4 },
+  UNFINISHED_NO_NEXT: { threshold: 5, windowDays: 30, hours: 4 },
+  NO_REBOOK: { threshold: 5, windowDays: 7, hours: 4 },
+  OVERDUE_TASKS: { threshold: 5, windowDays: 7, hours: 4 },
+  SYNC_OVERDUE: { threshold: 48, windowDays: 7, hours: 4 },
 };
+// What may be set per rule: [min, max] of the threshold, of windowDays (null: not used), of hours (null: not used)
+const ALERT_LIMITS: Record<AlertKind, { threshold: [number, number]; windowDays: [number, number] | null; hours: [number, number] | null }> = {
+  CANCEL_RATE: { threshold: [1, 100], windowDays: [3, 60], hours: null },
+  RETURN_DROP: { threshold: [1, 100], windowDays: [3, 60], hours: null },
+  PAYMENTS_DROP: { threshold: [1, 100], windowDays: [7, 60], hours: null },
+  STALE_REQUESTS: { threshold: [1, 1000], windowDays: null, hours: [1, 72] },
+  UNFINISHED_NO_NEXT: { threshold: [1, 1000], windowDays: [7, UNFINISHED_LOOKBACK_DAYS], hours: null },
+  NO_REBOOK: { threshold: [1, 1000], windowDays: [1, NO_REBOOK_LOOKBACK_DAYS - 7], hours: null },
+  OVERDUE_TASKS: { threshold: [1, 1000], windowDays: null, hours: null },
+  SYNC_OVERDUE: { threshold: [24, 336], windowDays: null, hours: null },
+};
+// Rules calculated from our copy of Cliniccards (need a recent load); the others use LANKA's own data
+const CLINICCARDS_KINDS: string[] = ['CANCEL_RATE', 'RETURN_DROP', 'PAYMENTS_DROP', 'UNFINISHED_NO_NEXT', 'NO_REBOOK'];
+// Where each signal leads in the app (with the matching filter where the page takes one). The drop in completed visits has no report comparing
+// two periods: the signal itself shows both periods, both counts and the change, so it carries no link.
+const SIGNAL_LINK: Record<AlertKind, string | null> = {
+  CANCEL_RATE: '/reports?report=missed-visits',
+  RETURN_DROP: null,
+  STALE_REQUESTS: '/inbox?tab=requests',
+  PAYMENTS_DROP: '/reports?report=revenue&days=60',
+  UNFINISHED_NO_NEXT: `/reports?report=unfinished-treatment&days=${UNFINISHED_LOOKBACK_DAYS}`,
+  NO_REBOOK: `/reports?report=missed-visits&days=${NO_REBOOK_LOOKBACK_DAYS}`,
+  OVERDUE_TASKS: '/tasks',
+  SYNC_OVERDUE: '/settings',
+};
+
+// One signal explained: measured (the value with what it was calculated from), too little data, a Cliniccards load needed first, or (the sync
+// rule) Cliniccards not connected / never loaded
+export type SignalExplained =
+  | {
+      state: 'measured'; value: number; from?: Date; to?: Date; count?: number; base?: number; prevFrom?: Date; prevTo?: Date;
+      currency?: string; amount?: number; prevAmount?: number; oldestDays?: number; lookbackDays?: number; lastSyncAt?: Date;
+    }
+  | { state: 'insufficient'; from?: Date; to?: Date; base: number; need: number; reason?: 'currency' }
+  | { state: 'needs_sync' }
+  | { state: 'never' }
+  | { state: 'not_connected' };
 
 export interface ScheduleInput {
   savedReportId: string;
@@ -60,6 +105,7 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
     private builder: ReportBuilderService,
     private mail: MailService,
     private staff: StaffNotifierService,
+    private reports: ReportsService,
     private push: PushService,
   ) {}
 
@@ -200,31 +246,38 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
 
   async alerts(clinicId: string) {
     for (const kind of ALERT_KINDS) await this.prisma.alertRule.upsert({ where: { clinicId_kind: { clinicId, kind } }, create: { clinicId, kind, ...ALERT_DEFAULTS[kind] }, update: {} });
-    return this.prisma.alertRule.findMany({ where: { clinicId }, orderBy: { kind: 'asc' }, select: { kind: true, threshold: true, windowDays: true, hours: true, enabled: true, lastFiredAt: true, lastValue: true } });
+    return this.prisma.alertRule.findMany({ where: { clinicId }, orderBy: { kind: 'asc' }, select: { kind: true, threshold: true, windowDays: true, hours: true, enabled: true, push: true, telegram: true, lastFiredAt: true, telegramSentAt: true, lastValue: true } });
   }
 
-  async updateAlert(clinicId: string, userId: string, kind: string, d: { enabled?: boolean; threshold?: number; windowDays?: number; hours?: number }) {
+  // Settings of one rule (owner and manager; the controller checks the role). Saving never sends anything.
+  async updateAlert(clinicId: string, userId: string, kind: string, d: { enabled?: boolean; push?: boolean; telegram?: boolean; threshold?: number; windowDays?: number; hours?: number }) {
     if (!ALERT_KINDS.includes(kind as AlertKind)) throw new NotFoundException('alert_not_found');
+    const lim = ALERT_LIMITS[kind as AlertKind];
     const { plan } = await this.clinicOk(clinicId);
-    if (d.enabled && !hasFeature(plan, 'advanced_analytics')) throw new BadRequestException('plan_feature');
-    if (d.threshold !== undefined && !(d.threshold > 0 && d.threshold <= 1000)) throw new BadRequestException('bad_alert');
-    if (d.windowDays !== undefined && !(Number.isInteger(d.windowDays) && d.windowDays >= 3 && d.windowDays <= 60)) throw new BadRequestException('bad_alert');
-    if (d.hours !== undefined && !(Number.isInteger(d.hours) && d.hours >= 1 && d.hours <= 72)) throw new BadRequestException('bad_alert');
+    if ((d.enabled || d.push || d.telegram) && !hasFeature(plan, 'advanced_analytics')) throw new BadRequestException('plan_feature');
+    const inRange = (v: number, [lo, hi]: [number, number], int: boolean) => Number.isFinite(v) && v >= lo && v <= hi && (!int || Number.isInteger(v));
+    if (d.threshold !== undefined && !inRange(d.threshold, lim.threshold, kind !== 'CANCEL_RATE' && kind !== 'RETURN_DROP' && kind !== 'PAYMENTS_DROP')) throw new BadRequestException('bad_alert');
+    if (d.windowDays !== undefined && (!lim.windowDays || !inRange(d.windowDays, lim.windowDays, true))) throw new BadRequestException('bad_alert');
+    if (d.hours !== undefined && (!lim.hours || !inRange(d.hours, lim.hours, true))) throw new BadRequestException('bad_alert');
     await this.alerts(clinicId);
     await this.prisma.alertRule.update({ where: { clinicId_kind: { clinicId, kind } }, data: d });
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'alert.changed', details: { kind, ...d } } });
   }
 
-  // Whether our copy of Cliniccards is recent enough for the visit-based signals
+  // Whether our copy of Cliniccards is recent enough for the Cliniccards-based signals
   private async syncState(clinicId: string, now: Date) {
-    const i = await this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.CLINICCARDS } }, select: { lastSyncAt: true } });
+    const i = await this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: Provider.CLINICCARDS } }, select: { lastSyncAt: true, apiKeyEnc: true } });
     const lastSyncAt = i?.lastSyncAt ?? null;
-    return { lastSyncAt, fresh: !!lastSyncAt && now.getTime() - lastSyncAt.getTime() < SYNC_FRESH_MS };
+    return { lastSyncAt, connected: !!i?.apiKeyEnc, fresh: !!lastSyncAt && now.getTime() - lastSyncAt.getTime() < SYNC_FRESH_MS };
   }
 
-  // The number each rule is about, with what it was calculated from. Visit rules count only complete days in the clinic's time zone (today's visits
-  // are often not closed yet) and only when the data was loaded recently; a small sample is "too little data", never a value.
-  async explain(clinicId: string, rule: { kind: string; windowDays: number; hours: number }, now: Date, sync?: { fresh: boolean }): Promise<SignalExplained | null> {
+  // The number each rule is about, with what it was calculated from: ONE calculation for the section, the checks and the network view.
+  // Cliniccards rules count complete days in the clinic's time zone (today's visits are often not closed yet) and only after a recent load;
+  // a small sample is "too little data", never a value.
+  async explain(clinicId: string, rule: { kind: string; windowDays: number; hours: number }, now: Date, sync?: { fresh: boolean; connected: boolean; lastSyncAt: Date | null }): Promise<SignalExplained | null> {
+    if (!ALERT_KINDS.includes(rule.kind as AlertKind)) return null;
+    const st = sync ?? (await this.syncState(clinicId, now));
+    const today = startOfClinicDay(now);
     if (rule.kind === 'STALE_REQUESTS') {
       // requests are LANKA's own data: no load needed
       const cutoff = new Date(now.getTime() - rule.hours * HOUR);
@@ -235,79 +288,177 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
       ]);
       return { state: 'measured', value: count, from: cutoff, to: now, count, base };
     }
-    if (rule.kind !== 'CANCEL_RATE' && rule.kind !== 'RETURN_DROP') return null;
-    if (!(sync ?? (await this.syncState(clinicId, now))).fresh) return { state: 'needs_sync' };
-    const win = rule.windowDays * DAY;
-    const to = startOfClinicDay(now);
-    const from = new Date(to.getTime() - win);
-    if (rule.kind === 'CANCEL_RATE') {
-      const rows = await this.prisma.visit.groupBy({ by: ['status'], where: { clinicId, startsAt: { gte: from, lt: to }, status: { in: ['VISITED', 'IN_CLINIC', 'IN_CHAIR', 'DID_NOT_COME', 'CANCELLED', 'MOVED'] } }, _count: true });
-      const total = rows.reduce((s, r) => s + r._count, 0);
-      if (total < MIN_SAMPLE) return { state: 'insufficient', from, to, base: total, need: MIN_SAMPLE };
-      const bad = rows.filter((r) => r.status === 'DID_NOT_COME' || r.status === 'CANCELLED').reduce((s, r) => s + r._count, 0);
-      return { state: 'measured', value: Math.round((bad / total) * 1000) / 10, from, to, count: bad, base: total };
+    if (rule.kind === 'OVERDUE_TASKS') {
+      // LANKA's tasks: open ones whose due day has passed (completed and cancelled tasks are not open)
+      const overdue = await this.prisma.task.findMany({ where: { clinicId, status: 'OPEN', dueDate: { lt: today } }, select: { dueDate: true }, orderBy: { dueDate: 'asc' } });
+      const base = await this.prisma.task.count({ where: { clinicId, status: 'OPEN' } });
+      return { state: 'measured', value: overdue.length, count: overdue.length, base, oldestDays: overdue.length ? Math.floor((today.getTime() - overdue[0].dueDate.getTime()) / DAY) + 1 : 0 };
     }
-    const prevFrom = new Date(from.getTime() - win);
-    const done = (a: Date, b: Date) => this.prisma.visit.count({ where: { clinicId, status: 'VISITED', startsAt: { gte: a, lt: b } } });
-    const [cur, prev] = await Promise.all([done(from, to), done(prevFrom, from)]);
-    if (prev < MIN_SAMPLE) return { state: 'insufficient', from: prevFrom, to: from, base: prev, need: MIN_SAMPLE };
-    return { state: 'measured', value: Math.round(((prev - cur) / prev) * 1000) / 10, from, to, count: cur, base: prev, prevFrom, prevTo: from };
+    if (rule.kind === 'SYNC_OVERDUE') {
+      // only for a clinic that connected Cliniccards; "never loaded" is told apart and not alerted (the first load may be running)
+      if (!st.connected) return { state: 'not_connected' };
+      if (!st.lastSyncAt) return { state: 'never' };
+      const hours = Math.floor((now.getTime() - st.lastSyncAt.getTime()) / HOUR);
+      return { state: 'measured', value: hours, lastSyncAt: st.lastSyncAt };
+    }
+    if (CLINICCARDS_KINDS.includes(rule.kind) && !st.fresh) return { state: 'needs_sync' };
+    const win = rule.windowDays * DAY;
+    if (rule.kind === 'CANCEL_RATE') {
+      const from = new Date(today.getTime() - win);
+      const rows = await this.prisma.visit.groupBy({ by: ['status'], where: { clinicId, startsAt: { gte: from, lt: today }, status: { in: ['VISITED', 'IN_CLINIC', 'IN_CHAIR', 'DID_NOT_COME', 'CANCELLED', 'MOVED'] } }, _count: true });
+      const total = rows.reduce((n, r) => n + r._count, 0);
+      if (total < MIN_SAMPLE) return { state: 'insufficient', from, to: today, base: total, need: MIN_SAMPLE };
+      const bad = rows.filter((r) => r.status === 'DID_NOT_COME' || r.status === 'CANCELLED').reduce((n, r) => n + r._count, 0);
+      return { state: 'measured', value: Math.round((bad / total) * 1000) / 10, from, to: today, count: bad, base: total };
+    }
+    if (rule.kind === 'RETURN_DROP') {
+      const from = new Date(today.getTime() - win);
+      const prevFrom = new Date(from.getTime() - win);
+      const done = (a: Date, b: Date) => this.prisma.visit.count({ where: { clinicId, status: 'VISITED', startsAt: { gte: a, lt: b } } });
+      const [cur, prev] = await Promise.all([done(from, today), done(prevFrom, from)]);
+      if (prev < MIN_SAMPLE) return { state: 'insufficient', from: prevFrom, to: from, base: prev, need: MIN_SAMPLE };
+      return { state: 'measured', value: Math.round(((prev - cur) / prev) * 1000) / 10, from, to: today, count: cur, base: prev, prevFrom, prevTo: from };
+    }
+    if (rule.kind === 'PAYMENTS_DROP') {
+      // received payments as the "Revenue" report sums them (amounts as loaded by their payment date); one currency only, never added across
+      const from = new Date(today.getTime() - win);
+      const prevFrom = new Date(from.getTime() - win);
+      const clinicCur = await clinicMoneyCurrency(this.prisma, clinicId);
+      const rows = (await this.prisma.payment.findMany({ where: { clinicId, paidAt: { gte: prevFrom, lt: today } }, select: { paidAt: true, amount: true, currency: true } }))
+        .map((r) => ({ ...r, currency: effectiveCurrency(r.currency, clinicCur) }));
+      const currencies = new Set(rows.map((r) => r.currency));
+      const prev = rows.filter((r) => r.paidAt < from);
+      if (currencies.size > 1) return { state: 'insufficient', from: prevFrom, to: today, base: prev.length, need: MIN_SAMPLE, reason: 'currency' };
+      const sum = (xs: typeof rows) => Math.round(xs.reduce((n, r) => n + Number(r.amount), 0));
+      const prevAmount = sum(prev);
+      const amount = sum(rows.filter((r) => r.paidAt >= from));
+      if (prev.length < MIN_SAMPLE || prevAmount <= 0) return { state: 'insufficient', from: prevFrom, to: from, base: prev.length, need: MIN_SAMPLE };
+      return { state: 'measured', value: Math.round(((prevAmount - amount) / prevAmount) * 1000) / 10, from, to: today, prevFrom, prevTo: from, amount, prevAmount, currency: [...currencies][0] as string };
+    }
+    if (rule.kind === 'UNFINISHED_NO_NEXT') {
+      // the "Unfinished treatment" report's own definition: open plan items while some work is already done, no future visit and no active
+      // reminder; then only patients with a completed visit, whose last completed work is at least windowDays old
+      const rows = await this.reports.unfinishedForSignals(clinicId, UNFINISHED_LOOKBACK_DAYS);
+      const ids = rows.map((r) => r.patientId);
+      const visited = new Set((await this.prisma.visit.findMany({ where: { clinicId, patientId: { in: ids }, status: 'VISITED', startsAt: { lt: now } }, select: { patientId: true }, distinct: ['patientId'] })).map((v) => v.patientId));
+      const waiting = rows.filter((r) => visited.has(r.patientId) && r.daysSince >= rule.windowDays);
+      return { state: 'measured', value: waiting.length, count: waiting.length, base: rows.filter((r) => visited.has(r.patientId)).length, oldestDays: waiting.reduce((m, r) => Math.max(m, r.daysSince), 0), lookbackDays: UNFINISHED_LOOKBACK_DAYS };
+    }
+    // NO_REBOOK: patients whose cancelled or missed visit (within the lookback, at least windowDays ago) has no later completed visit and no
+    // future active one; each patient once
+    const from = new Date(today.getTime() - NO_REBOOK_LOOKBACK_DAYS * DAY);
+    const to = new Date(today.getTime() - win);
+    const missed = await this.prisma.visit.findMany({ where: { clinicId, status: { in: ['CANCELLED', 'DID_NOT_COME'] }, startsAt: { gte: from, lt: to }, patient: { removedAt: null } }, select: { patientId: true, startsAt: true } });
+    const firstMissed = new Map<string, Date>();
+    for (const m of missed) if (m.patientId && (!firstMissed.has(m.patientId) || m.startsAt < firstMissed.get(m.patientId)!)) firstMissed.set(m.patientId, m.startsAt);
+    const ids = [...firstMissed.keys()];
+    const later = ids.length ? await this.prisma.visit.findMany({ where: { clinicId, patientId: { in: ids }, OR: [{ status: 'VISITED' }, { startsAt: { gt: now }, status: { notIn: INACTIVE_VISIT } }] }, select: { patientId: true, startsAt: true, status: true } }) : [];
+    const resolved = new Set(later.filter((v) => v.patientId && (v.startsAt > now || v.startsAt > firstMissed.get(v.patientId)!)).map((v) => v.patientId as string));
+    const open = ids.filter((id) => !resolved.has(id));
+    return { state: 'measured', value: open.length, count: open.length, base: ids.length, from, to, lookbackDays: NO_REBOOK_LOOKBACK_DAYS };
   }
 
-  // The number each rule is about (null: not measurable now), for the checks and the network view
+  // The number each rule is about (null: not measurable now), for the network view
   async measure(clinicId: string, rule: { kind: string; windowDays: number; hours: number }, now: Date): Promise<{ value: number; ok: boolean } | null> {
     const e = await this.explain(clinicId, rule, now);
     return e?.state === 'measured' ? { value: e.value, ok: true } : null;
   }
 
-  // The "Signals" section: every rule of this clinic, measured now from its own data, with its state. Read only; the checks that send
-  // notifications stay in evaluate(). A plan without the signals gets no numbers.
+  // The "Signals" section: every rule of this clinic, measured now from its own data, with its settings and the Telegram destination. Read
+  // only: opening it never sends anything. A plan without the signals gets no numbers.
   async signals(clinicId: string, now = new Date()) {
     const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } });
-    if (!hasFeature(c.plan, 'advanced_analytics')) return { inPlan: false, checkedAt: now, sync: null, signals: [] };
-    const [rules, sync] = await Promise.all([this.alerts(clinicId), this.syncState(clinicId, now)]);
+    if (!hasFeature(c.plan, 'advanced_analytics')) return { inPlan: false, checkedAt: now, sync: null, telegram: null, signals: [] };
+    const [rules, sync, chat] = await Promise.all([this.alerts(clinicId), this.syncState(clinicId, now), this.staff.chat(clinicId)]);
     const signals = [];
     for (const r of rules) {
       const e = await this.explain(clinicId, r, now, sync);
       if (!e) continue;
       const state = e.state === 'measured' ? (e.value >= r.threshold ? 'fired' : 'ok') : e.state;
-      signals.push({ ...e, kind: r.kind, state, threshold: r.threshold, windowDays: r.windowDays, hours: r.hours, notify: r.enabled, lastFiredAt: r.lastFiredAt, link: SIGNAL_LINK[r.kind] });
+      const lim = ALERT_LIMITS[r.kind as AlertKind];
+      signals.push({
+        ...e, kind: r.kind, state, threshold: r.threshold, windowDays: r.windowDays, hours: r.hours,
+        // which settings this rule has, with their limits (the screen edits only these)
+        limits: lim, telegramOn: r.telegram, emailOn: r.enabled, pushOn: r.push, lastFiredAt: r.lastFiredAt, telegramSentAt: r.telegramSentAt, link: SIGNAL_LINK[r.kind as AlertKind],
+      });
     }
-    return { inPlan: true, checkedAt: now, sync, signals };
+    return { inPlan: true, checkedAt: now, sync: { lastSyncAt: sync.lastSyncAt, fresh: sync.fresh, connected: sync.connected }, telegram: chat ? { title: chat.title } : null, signals };
   }
 
-  private alertText(kind: string, value: number, rule: { threshold: number; windowDays: number; hours: number }) {
-    if (kind === 'CANCEL_RATE') return `Сигнал: за останні ${rule.windowDays} дн. скасувань і неявок ${value}% від візитів (поріг ${rule.threshold}%).`;
-    if (kind === 'RETURN_DROP') return `Сигнал: кількість завершених візитів за ${rule.windowDays} дн. впала на ${value}% порівняно з попереднім періодом (поріг ${rule.threshold}%).`;
-    return `Сигнал: необроблених заявок, що чекають понад ${rule.hours} год.: ${value} (поріг ${rule.threshold}).`;
+  // The alert text: aggregate numbers only (no names, phones or treatment), with the link to the section
+  private alertText(kind: string, e: Extract<SignalExplained, { state: 'measured' }>, rule: { threshold: number; windowDays: number; hours: number }) {
+    const link = `${(process.env.WEB_ORIGIN ?? '').replace(/\/$/, '')}/signals`;
+    const t = {
+      CANCEL_RATE: `за останні ${rule.windowDays} дн. скасувань і неявок ${e.value}% від візитів (поріг ${rule.threshold}%).`,
+      RETURN_DROP: `кількість завершених візитів за ${rule.windowDays} дн. впала на ${e.value}% порівняно з попереднім періодом (поріг ${rule.threshold}%).`,
+      STALE_REQUESTS: `необроблених заявок, що чекають понад ${rule.hours} год.: ${e.value} (поріг ${rule.threshold}).`,
+      PAYMENTS_DROP: `отримані оплати за ${rule.windowDays} дн. менші на ${e.value}%, ніж за попередній такий самий період (поріг ${rule.threshold}%).`,
+      UNFINISHED_NO_NEXT: `пацієнтів із незавершеним лікуванням без наступного запису понад ${rule.windowDays} дн.: ${e.value} (поріг ${rule.threshold}).`,
+      NO_REBOOK: `пацієнтів, які скасували або не прийшли й досі не записані знову: ${e.value} (поріг ${rule.threshold}).`,
+      OVERDUE_TASKS: `прострочених завдань команди: ${e.value}, найдавніше — ${e.oldestDays ?? 0} дн. (поріг ${rule.threshold}).`,
+      SYNC_OVERDUE: `дані з Cliniccards не оновлювалися ${e.value} год. (поріг ${rule.threshold} год.).`,
+    }[kind] ?? '';
+    return `Сигнал: ${t}\n\nВідкрити: ${link}`;
   }
 
-  // Checks the enabled rules of one clinic. A rule that fired is quiet for 24 hours. Returns the kinds that fired.
+  // Checks the rules of one clinic that deliver anything. Email and push (the "enabled" switch) and Telegram (its own switch) are throttled
+  // separately, at most once per 24 hours per rule while it stays triggered. Telegram: the preference is read again right before sending, the
+  // alert is claimed first (two runs never send it twice), and only a delivered message counts as sent. Returns the kinds that delivered.
   async evaluate(clinicId: string, now = new Date()): Promise<string[]> {
-    const rules = await this.prisma.alertRule.findMany({ where: { clinicId, enabled: true } });
+    const rules = await this.prisma.alertRule.findMany({ where: { clinicId, OR: [{ enabled: true }, { push: true }, { telegram: true }] } });
+    if (!rules.length) return [];
+    const sync = await this.syncState(clinicId, now);
+    const quiet = new Date(now.getTime() - COOLDOWN_MS);
     const fired: string[] = [];
     for (const rule of rules) {
-      if (rule.lastFiredAt && now.getTime() - rule.lastFiredAt.getTime() < COOLDOWN_MS) continue;
-      const m = await this.measure(clinicId, rule, now);
-      if (!m || m.value < rule.threshold) continue;
-      // marked first, so a failing delivery cannot turn into a message every half hour
-      await this.prisma.alertRule.update({ where: { id: rule.id }, data: { lastFiredAt: now, lastValue: m.value } });
-      fired.push(rule.kind);
-      const text = this.alertText(rule.kind, m.value, rule);
-      await this.staff.notify(clinicId, `${text}\n\nВідкрити: ${(process.env.WEB_ORIGIN ?? '').replace(/\/$/, '')}/signals`).catch(() => undefined);
-      // the phone notification carries no numbers or names
-      await this.push.notify(clinicId, { title: 'Сигнал для керівника', body: 'Є відхилення в роботі клініки', url: '/signals', tag: `alert-${rule.kind}` }).catch(() => undefined);
-      const owner = await this.prisma.membership.findFirst({ where: { clinicId, role: 'OWNER' }, select: { user: { select: { email: true } } } });
-      if (owner) await this.mail.send({ to: owner.user.email, subject: 'LANKA: сигнал для керівника', text });
-      await this.prisma.auditLog.create({ data: { clinicId, action: 'alert.fired', details: { kind: rule.kind, value: m.value } } });
+      const e = await this.explain(clinicId, rule, now, sync);
+      if (e?.state !== 'measured' || e.value < rule.threshold) continue;
+      const text = this.alertText(rule.kind, e, rule);
+      let delivered = false;
+      if (rule.enabled || rule.push) {
+        // marked first, so a failing delivery cannot turn into a message every half hour (the existing rule for email and push); the two
+        // switches are read again in the claim and each channel is used only when its own switch is on
+        const claimed = await this.prisma.alertRule.updateMany({ where: { id: rule.id, OR: [{ enabled: true }, { push: true }], AND: [{ OR: [{ lastFiredAt: null }, { lastFiredAt: { lt: quiet } }] }] }, data: { lastFiredAt: now, lastValue: e.value } });
+        if (claimed.count) {
+          const now2 = await this.prisma.alertRule.findUniqueOrThrow({ where: { id: rule.id }, select: { enabled: true, push: true } });
+          delivered = true;
+          // the Push notification carries no numbers or names
+          if (now2.push) await this.push.notify(clinicId, { title: 'Сигнал для керівника', body: 'Є відхилення в роботі клініки', url: '/signals', tag: `alert-${rule.kind}` }).catch(() => undefined);
+          if (now2.enabled) {
+            const owner = await this.prisma.membership.findFirst({ where: { clinicId, role: 'OWNER' }, select: { user: { select: { email: true } } } });
+            if (owner) await this.mail.send({ to: owner.user.email, subject: 'LANKA: сигнал для керівника', text }).catch(() => undefined);
+          }
+          await this.prisma.auditLog.create({ data: { clinicId, action: 'alert.fired', details: { kind: rule.kind, value: e.value, email: now2.enabled, push: now2.push } } });
+        }
+      }
+      if (rule.telegram) {
+        const claim = await this.prisma.alertRule.updateMany({
+          where: { id: rule.id, telegram: true, OR: [{ telegramSentAt: null }, { telegramSentAt: { lt: quiet } }], AND: [{ OR: [{ telegramClaimAt: null }, { telegramClaimAt: { lt: new Date(now.getTime() - TELEGRAM_CLAIM_MS) } }] }] },
+          data: { telegramClaimAt: now },
+        });
+        if (claim.count) {
+          const outcome = await this.staff.deliver(clinicId, text).catch(() => 'failed' as const);
+          if (outcome === 'sent') {
+            await this.prisma.alertRule.update({ where: { id: rule.id }, data: { telegramSentAt: now, telegramClaimAt: null, lastValue: e.value } });
+            await this.prisma.auditLog.create({ data: { clinicId, action: 'alert.telegram', details: { kind: rule.kind, value: e.value } } });
+            delivered = true;
+          } else {
+            // not delivered: not recorded as sent; the next run tries again
+            await this.prisma.alertRule.update({ where: { id: rule.id }, data: { telegramClaimAt: null } });
+            await this.prisma.auditLog.create({ data: { clinicId, action: 'alert.telegram_failed', details: { kind: rule.kind, outcome } } });
+          }
+        }
+      }
+      if (delivered) fired.push(rule.kind);
     }
     return fired;
   }
 
   async evaluateAll(now = new Date()) {
-    const clinics = await this.prisma.alertRule.findMany({ where: { enabled: true }, distinct: ['clinicId'], select: { clinicId: true } });
+    const clinics = await this.prisma.alertRule.findMany({ where: { OR: [{ enabled: true }, { push: true }, { telegram: true }] }, distinct: ['clinicId'], select: { clinicId: true } });
     for (const c of clinics) {
-      if (!(await this.clinicOk(c.clinicId)).ok) continue;
+      const ok = await this.clinicOk(c.clinicId);
+      if (!ok.ok || !hasFeature(ok.plan, 'advanced_analytics')) continue;
       await this.evaluate(c.clinicId, now).catch((e) => this.log.warn(`Alerts ${c.clinicId}: ${(e as Error).message}`));
     }
   }

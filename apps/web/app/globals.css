@@ -1072,6 +1072,19 @@ figure.mock { margin: 0; }
 .clinic-switch select { width: 100%; }
 
 /* Installation examples (Settings → Channels → Website): scroll inside the block, never the page */
-/* Reports → Signals */
-.signal-list { display: grid; gap: 12px; margin-bottom: 12px; }
-.signal-what { font-size: 15px; }
+/* Reports → Signals: compact cards, triggered first */
+.signal-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; margin-bottom: 12px; }
+@media (max-width: 480px) { .signal-list { grid-template-columns: 1fr; } }
+.sig-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--card, #fff); min-width: 0; }
+.sig-card.sig-fired { border-color: #f1b8b8; }
+.sig-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.sig-what { margin: 6px 0 8px; font-size: 14px; line-height: 1.4; }
+.sig-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.sig-switch { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-size: 14px; }
+.sig-switch input { width: 20px; height: 20px; }
+.sig-num { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.sig-num .input { width: 76px; min-height: 40px; font-size: 16px; }
+.sig-msg { margin: 4px 0 0; font-size: 13px; }
+.sig-msg.ok { color: var(--teal, #0f766e); }
+.sig-msg.err { color: #b42318; }
+.sig-dest { font-size: 13px; margin: 0 0 10px; }

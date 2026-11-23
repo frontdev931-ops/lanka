@@ -294,26 +294,46 @@ describe('мережа: оплата, права, дайджест', () => {
     const s = await setup();
     const co = (await http().post(`/billing/network/${s.net}/checkout`).set(auth(s.owner.token)).expect(200)).body;
     await pay(order(co).order_id, Math.round(order(co).amount * 100)).expect(200);
-    // the digest: a Monday at 09:00 Kyiv
-    const monday = new Date('2026-11-16T07:00:00Z');
-    const before = mail.outbox.filter((m) => m.to === s.owner.email && m.subject.includes('дайджест мережі')).length;
-    await app.get(NetworkService).digestTick(monday);
-    await app.get(NetworkService).digestTick(new Date(monday.getTime() + 3600_000));
-    const digests = mail.outbox.filter((m) => m.to === s.owner.email && m.subject.includes('дайджест мережі'));
-    expect(digests.length - before).toBe(1);
-    expect(digests[digests.length - 1].text).toContain('Мережа разом');
-    expect(digests[digests.length - 1].text).toContain('записи філіалів');
+    // Isolation: the test database is shared and never emptied, and the digest and billing ticks read EVERY network in it. Their scans
+    // (network.findMany without an id) are narrowed to this test's network, so networks left by earlier runs are neither read, mailed nor
+    // changed; and the mails are collected here (not from the in-process outbox, which keeps only the last 50). Production code is untouched.
+    const original = prisma.network.findMany.bind(prisma.network);
+    const scan = jest.spyOn(prisma.network, 'findMany').mockImplementation(((args?: { where?: Record<string, unknown> }) => {
+      const where = args?.where ?? {};
+      return original({ ...args, where: 'id' in where ? where : { ...where, id: s.net } } as never);
+    }) as never);
+    const sent: { to: string; subject: string; text: string }[] = [];
+    const send = jest.spyOn(mail, 'send').mockImplementation(async (m) => {
+      sent.push({ to: m.to, subject: m.subject, text: m.text });
+    });
+    const digestsTo = (to: string) => sent.filter((m) => m.to === to && m.subject.includes('дайджест мережі'));
+    try {
+      // the digest: a Monday at 09:00 Kyiv; a second tick the same day sends nothing again
+      const monday = new Date('2026-11-16T07:00:00Z');
+      await app.get(NetworkService).digestTick(monday);
+      await app.get(NetworkService).digestTick(new Date(monday.getTime() + 3600_000));
+      const digests = digestsTo(s.owner.email);
+      expect(digests).toHaveLength(1);
+      expect(digests[0].text).toContain('Мережа разом');
+      expect(digests[0].text).toContain('записи філіалів');
+      // only this network was mailed
+      expect(sent.filter((m) => m.subject.includes('дайджест мережі')).every((m) => m.to === s.owner.email)).toBe(true);
 
-    // the paid month ended long ago: past the grace days
-    await prisma.network.update({ where: { id: s.net }, data: { paidUntil: new Date(Date.now() - 10 * 86_400_000) } });
-    await app.get(BillingService).networkTick();
-    await app.get(BillingService).networkTick();
-    expect((await prisma.network.findUniqueOrThrow({ where: { id: s.net } })).billingStatus).toBe('LAPSED');
-    expect(await prisma.clinic.count({ where: { networkId: s.net, billingStatus: 'LAPSED' } })).toBe(2);
-    expect(mail.outbox.filter((m) => m.to === s.owner.email && m.subject.includes('оплата мережі'))).toHaveLength(1);
-    await prisma.network.update({ where: { id: s.net }, data: { lastDigestAt: null } });
-    await app.get(NetworkService).digestTick(new Date('2026-11-23T07:00:00Z'));
-    expect(mail.outbox.filter((m) => m.to === s.owner.email && m.subject.includes('дайджест мережі')).length - before).toBe(1);
+      // the paid month ended long ago: past the grace days
+      await prisma.network.update({ where: { id: s.net }, data: { paidUntil: new Date(Date.now() - 10 * 86_400_000) } });
+      await app.get(BillingService).networkTick();
+      await app.get(BillingService).networkTick();
+      expect((await prisma.network.findUniqueOrThrow({ where: { id: s.net } })).billingStatus).toBe('LAPSED');
+      expect(await prisma.clinic.count({ where: { networkId: s.net, billingStatus: 'LAPSED' } })).toBe(2);
+      expect(sent.filter((m) => m.to === s.owner.email && m.subject.includes('оплата мережі'))).toHaveLength(1);
+      // a lapsed network gets no digest, even on the next Monday with the daily mark cleared
+      await prisma.network.update({ where: { id: s.net }, data: { lastDigestAt: null } });
+      await app.get(NetworkService).digestTick(new Date('2026-11-23T07:00:00Z'));
+      expect(digestsTo(s.owner.email)).toHaveLength(1);
+    } finally {
+      scan.mockRestore();
+      send.mockRestore();
+    }
 
     await http().delete(`/network/${s.net}/branches/${s.b}`).set(auth(s.owner.token)).expect(200);
     expect(await prisma.clinic.findUniqueOrThrow({ where: { id: s.b } })).toMatchObject({ networkId: null, plan: 'START', billingStatus: 'AWAITING_PAYMENT' });

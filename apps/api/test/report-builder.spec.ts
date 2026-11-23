@@ -147,7 +147,7 @@ describe('конструктор отчётов', () => {
     const visitsSum = await http().post('/report-builder/export').set(auth(o.token)).send({ spec: { dataset: 'visits', groupBy: { field: 'status' }, aggregates: [{ fn: 'sum', field: 'amount' }] }, title: 'Візити', format: 'csv' }).expect(200);
     expect(visitsSum.text.split('\r\n')[0]).not.toMatch(/грн|UAH/);
     const paySum = await http().post('/report-builder/export').set(auth(o.token)).set('Accept-Language', 'en').send({ spec: { dataset: 'payments', aggregates: [{ fn: 'sum', field: 'amount' }, { fn: 'count' }] }, title: 'Payments', format: 'csv' }).expect(200);
-    expect(paySum.text.split('\r\n')[0]).toBe('\ufeff"Sum: Amount (currency not confirmed)";"Count"');
+    expect(paySum.text.split('\r\n')[0]).toBe('\ufeff"Sum: Amount, UAH";"Count"');
     expect(await prisma.auditLog.count({ where: { clinicId: o.clinicId, action: 'report.exported' } })).toBe(6);
     await http().post('/report-builder/export').set(auth(o.token)).send({ ...body, format: 'docx' }).expect(400);
   });

@@ -7,7 +7,7 @@ import { COLUMN_LABEL, LANKA_MOVES_TEXT, Lang, PERIOD_PHRASE, REPORT_RULE, REPOR
 import { Period, periodDate } from './period';
 import { cellLabel, headLabel } from './report-export';
 import { MIXED, MoneyKind, RowCur, finishCurrency, CurrencyInfo } from './report-currency';
-import { Cur, MoneyTotal, formatTotals, sumByCurrency } from '../common/money';
+import { Cur, MoneyTotal, clinicMoneyCurrency, effectiveCurrency, formatTotals, sumByCurrency } from '../common/money';
 import { lankaMoves } from './lanka-moves';
 
 // Cliniccards statuses: the visit took place / the appointment is no longer valid.
@@ -241,6 +241,11 @@ export class ReportsService {
 
   // Treatment started (a plan item was completed in the period), but incomplete items remain in the same plan;
   // patients with a future valid appointment are not included.
+  // The same definition for the management signal "unfinished treatment without a next visit" (no names leave the server through it)
+  async unfinishedForSignals(clinicId: string, days: number): Promise<{ patientId: string; daysSince: number }[]> {
+    return (await this.unfinishedTreatment(clinicId, days, 'uk')).map((r) => ({ patientId: r.patientId as string, daysSince: r.daysSince as number }));
+  }
+
   private async unfinishedTreatment(clinicId: string, days: number, lang: Lang): Promise<Row[]> {
     const now = new Date();
     const since = new Date(now.getTime() - days * DAY);
@@ -334,9 +339,10 @@ export class ReportsService {
 
   private async revenue(clinicId: string, days: number): Promise<Row[]> {
     const since = new Date(Date.now() - days * DAY);
-    const [invoices, payments] = await Promise.all([
+    const [invoices, payments, clinicCur] = await Promise.all([
       this.prisma.invoice.findMany({ where: { clinicId, issuedAt: { gte: since } }, select: { issuedAt: true, amount: true, currency: true } }),
       this.prisma.payment.findMany({ where: { clinicId, paidAt: { gte: since } }, select: { paidAt: true, amount: true, currency: true } }),
+      clinicMoneyCurrency(this.prisma, clinicId),
     ]);
     // one row per month AND currency: amounts with different stamps are never added up
     const months = new Map<string, { month: string; currency: Cur; invoiced: number; paid: number; paymentsCount: number }>();
@@ -346,9 +352,9 @@ export class ReportsService {
       months.set(key, m);
       return m;
     };
-    for (const i of invoices) slot(i.issuedAt, i.currency).invoiced += Number(i.amount);
+    for (const i of invoices) slot(i.issuedAt, effectiveCurrency(i.currency, clinicCur)).invoiced += Number(i.amount);
     for (const p of payments) {
-      const m = slot(p.paidAt, p.currency);
+      const m = slot(p.paidAt, effectiveCurrency(p.currency, clinicCur));
       m.paid += Number(p.amount);
       m.paymentsCount++;
     }

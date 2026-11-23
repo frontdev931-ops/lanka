@@ -23,7 +23,12 @@ class SchedulePatchDto {
   @IsOptional() @IsBoolean() enabled?: boolean;
 }
 class AlertDto {
+  // the email to the owner
   @IsOptional() @IsBoolean() enabled?: boolean;
+  // Push notifications to the clinic's subscribed devices
+  @IsOptional() @IsBoolean() push?: boolean;
+  // the staff Telegram chat
+  @IsOptional() @IsBoolean() telegram?: boolean;
   @IsOptional() @IsNumber() threshold?: number;
   @IsOptional() @IsInt() windowDays?: number;
   @IsOptional() @IsInt() hours?: number;

@@ -1,5 +1,5 @@
 import { MoneyKind, finishCurrency } from '../reports/report-currency';
-import type { Cur } from '../common/money';
+import { type Cur, clinicMoneyCurrency, effectiveCurrency } from '../common/money';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { clinicDate } from '../common/clinic-time';
@@ -127,7 +127,12 @@ export class ReportBuilderService {
     if (d.model === 'inquiry') return this.prisma.inquiry.findMany({ where: where as never, take });
     if (d.model === 'bookingRequest') return this.prisma.bookingRequest.findMany({ where: where as never, take, include: { patient: { select: { fullName: true } } } });
     if (d.model === 'review') return this.prisma.review.findMany({ where: where as never, take, include: { patient: { select: { fullName: true } } } });
-    return this.prisma.payment.findMany({ where: where as never, take, include: { patient: { select: { fullName: true, phone: true, source: true } } } });
+    // payments: the effective currency (its stamp, else the clinic's, else UAH), as in every report
+    const [rows, clinicCur] = await Promise.all([
+      this.prisma.payment.findMany({ where: where as never, take, include: { patient: { select: { fullName: true, phone: true, source: true } } } }),
+      clinicMoneyCurrency(this.prisma, clinicId),
+    ]);
+    return rows.map((r) => ({ ...r, currency: effectiveCurrency(r.currency, clinicCur) }));
   }
 
   private matches(x: FieldDef, raw: unknown, fl: { op: Op; value?: unknown }): boolean {

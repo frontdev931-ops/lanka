@@ -1,4 +1,4 @@
-import { MoneyTotal, formatMoney, formatTotals, sumByCurrency } from '../common/money';
+import { MoneyTotal, clinicMoneyCurrency, effectiveCurrency, formatMoney, formatTotals, sumByCurrency } from '../common/money';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Provider } from '@prisma/client';
 import { lankaMoves } from '../reports/lanka-moves';
@@ -116,6 +116,7 @@ export class DigestService {
     const len = (kind === 'WEEKLY' ? 7 : 1) * DAY;
     const from = new Date(to.getTime() - len);
     const prevFrom = new Date(from.getTime() - len);
+    const clinicCur = await clinicMoneyCurrency(this.prisma, clinicId);
     const count = async (a: Date, b: Date) => {
       const [byStatus, booked, pats, pay, moves] = await Promise.all([
         this.prisma.visit.groupBy({ by: ['status'], where: { clinicId, startsAt: { gte: a, lt: b } }, _count: true }),
@@ -125,7 +126,7 @@ export class DigestService {
         lankaMoves(this.prisma, clinicId, a, b),
       ]);
       const c = (...st: string[]) => byStatus.filter((x) => st.includes(x.status)).reduce((s, x) => s + x._count, 0);
-      return { visited: c('VISITED'), noShow: c('DID_NOT_COME'), cancelled: c('CANCELLED', 'MOVED'), lankaMoves: moves.operations.length, booked, newPatients: pats, paid: sumByCurrency(pay.map((x) => ({ currency: x.currency, amount: x._sum.amount }))) };
+      return { visited: c('VISITED'), noShow: c('DID_NOT_COME'), cancelled: c('CANCELLED', 'MOVED'), lankaMoves: moves.operations.length, booked, newPatients: pats, paid: sumByCurrency(pay.map((x) => ({ currency: effectiveCurrency(x.currency, clinicCur), amount: x._sum.amount }))) };
     };
     const [cur, prev, upcoming, upcomingConfirmed, reqNew, reqOpen, sent, failed, replies, unclosed, integ, revs] = await Promise.all([
       count(from, to),
