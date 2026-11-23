@@ -77,6 +77,12 @@ export class InsightsController {
     return this.insights.signals(u.clinicId);
   }
 
+  // The menu badge: the number of switched-on signals with a deviation now (cached for a few minutes, see InsightsService.signalsSummary)
+  @Get('signals/summary')
+  signalsSummary(@CurrentUser() u: AuthUser) {
+    return this.insights.signalsSummary(u.clinicId);
+  }
+
   @Get('alerts')
   alerts(@CurrentUser() u: AuthUser) {
     return this.insights.alerts(u.clinicId);

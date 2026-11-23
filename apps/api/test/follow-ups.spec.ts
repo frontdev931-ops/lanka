@@ -163,6 +163,83 @@ describe('догнати пацієнтів, які не дійшли до за�
     }
   });
 
+  it('життєвий цикл: відповідь після першого скасовує решту одразу; та сама розмова не відроджується; новий сценарій лише з нової тиші', async () => {
+    const c = await clinic();
+    const gate = jest.spyOn(app.get(AgentAutoGate), 'denied').mockResolvedValue(null);
+    try {
+      const d = await dialogue(c.clinicId, { channel: 'TELEGRAM', inAgo: 6, outAgo: 5 });
+      await svc.plan(c.clinicId, NOW);
+      const [a, b] = await rows(c.clinicId, d.chatId);
+      const afterFirst = new Date(a.dueAt.getTime() + 60_000);
+      await svc.process(c.clinicId, afterFirst);
+      expect((await rows(c.clinicId, d.chatId)).map((r) => r.status)).toEqual(['SENT', 'PLANNED']);
+      // planning again after our own reminder makes nothing new: the basis is the same patient message
+      await svc.plan(c.clinicId, new Date(afterFirst.getTime() + 4 * HOUR));
+      expect(await rows(c.clinicId, d.chatId)).toHaveLength(2);
+      // the patient answers the reminder: the second step is cancelled right away, long before its time
+      await prisma.chatMessage.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: d.chatId, direction: 'IN', text: 'Дякую, подумаю', createdAt: new Date(afterFirst.getTime() + HOUR) } });
+      await svc.process(c.clinicId, new Date(afterFirst.getTime() + 2 * HOUR));
+      expect((await rows(c.clinicId, d.chatId)).find((r) => r.id === b.id)).toMatchObject({ status: 'CANCELLED', error: 'patient_wrote' });
+      // the last message is the patient's: no new scenario until the agent answers and the dialogue goes quiet again
+      await svc.plan(c.clinicId, new Date(afterFirst.getTime() + 6 * HOUR));
+      expect(await rows(c.clinicId, d.chatId)).toHaveLength(2);
+      await prisma.chatMessage.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: d.chatId, direction: 'OUT', text: 'Будемо на звʼязку', byAi: true, createdAt: new Date(afterFirst.getTime() + 2 * HOUR) } });
+      await svc.plan(c.clinicId, new Date(afterFirst.getTime() + 6 * HOUR));
+      expect((await rows(c.clinicId, d.chatId)).filter((r) => r.status === 'PLANNED')).toHaveLength(2);
+    } finally {
+      gate.mockRestore();
+    }
+  });
+
+  it('перед відправкою: запис після планування, відмова, передача людині, вимкнена відправка; ніч поза вікном; два паралельні запуски — одне повідомлення', async () => {
+    const c = await clinic();
+    const gate = jest.spyOn(app.get(AgentAutoGate), 'denied').mockResolvedValue(null);
+    try {
+      const patient = await prisma.patient.create({ data: { clinicId: c.clinicId, externalId: `p${rnd()}`, fullName: 'Пацієнт' } });
+      const visit = await dialogue(c.clinicId, { inAgo: 5, outAgo: 4 });
+      await prisma.patientChannel.create({ data: { clinicId: c.clinicId, patientId: patient.id, channel: 'INSTAGRAM', externalId: visit.chatId } });
+      const optOut = await dialogue(c.clinicId, { inAgo: 5, outAgo: 4 });
+      const handed = await dialogue(c.clinicId, { inAgo: 5, outAgo: 4 });
+      const night = await dialogue(c.clinicId, { inAgo: 5, outAgo: 4 });
+      const twice = await dialogue(c.clinicId, { inAgo: 5, outAgo: 4 });
+      await svc.plan(c.clinicId, NOW);
+      // after planning: a visit is booked at the desk, a patient opts out, a dialogue is handed to a person
+      await prisma.visit.create({ data: { clinicId: c.clinicId, patientId: patient.id, externalId: `v${rnd()}`, startsAt: new Date(NOW.getTime() + 72 * HOUR), status: 'PLANNED' } });
+      const p2 = await prisma.patient.create({ data: { clinicId: c.clinicId, externalId: `p${rnd()}`, fullName: 'Пацієнт 2' } });
+      await prisma.patientChannel.create({ data: { clinicId: c.clinicId, patientId: p2.id, channel: 'INSTAGRAM', externalId: optOut.chatId, optedOutAt: NOW } });
+      await prisma.conversationState.update({ where: { clinicId_channel_chatId: { clinicId: c.clinicId, channel: 'INSTAGRAM', chatId: handed.chatId } }, data: { owner: 'HUMAN' } });
+      const [n] = await rows(c.clinicId, night.chatId);
+      // Instagram: valid only until the end of that daytime, never at night even with the 24-hour window still open
+      const h = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Kyiv', hour: '2-digit', hourCycle: 'h23' }).format(n.expiresAt!));
+      expect(h).toBeLessThanOrEqual(19);
+      // the sending switch off at the due time: nothing goes out, the rows wait
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { sendingEnabled: false } });
+      const before = sent.length;
+      const [t] = await rows(c.clinicId, twice.chatId);
+      const due = new Date(t.dueAt.getTime() + 60_000);
+      await svc.process(c.clinicId, due);
+      expect(sent.length).toBe(before);
+      expect((await rows(c.clinicId, twice.chatId))[0].status).toBe('PLANNED');
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { sendingEnabled: true } });
+      // two runs at once: one message
+      await Promise.all([svc.process(c.clinicId, due), svc.process(c.clinicId, due)]);
+      expect(sent.filter((s) => s.chatId === twice.chatId)).toHaveLength(1);
+      expect((await rows(c.clinicId, visit.chatId))[0]).toMatchObject({ status: 'CANCELLED', error: 'booked' });
+      expect((await rows(c.clinicId, optOut.chatId))[0]).toMatchObject({ status: 'CANCELLED', error: 'opted_out' });
+      expect((await rows(c.clinicId, handed.chatId))[0]).toMatchObject({ status: 'CANCELLED', error: 'dialogue_changed' });
+      for (const x of [visit, optOut, handed]) expect(sent.some((s) => s.chatId === x.chatId)).toBe(false);
+      // the night chat was sent with the rest at its daytime; a later night run finds nothing to send
+      const late = await dialogue(c.clinicId, { inAgo: 5, outAgo: 4 });
+      await svc.plan(c.clinicId, NOW);
+      const [l] = await rows(c.clinicId, late.chatId);
+      await svc.process(c.clinicId, new Date(l.expiresAt!.getTime() + 2 * HOUR));
+      expect((await rows(c.clinicId, late.chatId))[0]).toMatchObject({ status: 'EXPIRED', error: 'expired' });
+      expect(sent.some((s) => s.chatId === late.chatId)).toBe(false);
+    } finally {
+      gate.mockRestore();
+    }
+  });
+
   it('вікно Instagram закрилося — не надсилається, позначається як прострочене; скасування співробітником', async () => {
     const c = await clinic();
     const d = await dialogue(c.clinicId, { inAgo: 5, outAgo: 4 });

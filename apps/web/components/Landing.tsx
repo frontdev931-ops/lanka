@@ -1,6 +1,5 @@
 'use client';
 
-import { Inter_Tight, Onest } from 'next/font/google';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useEffect, useRef, useState } from 'react';
@@ -9,12 +8,10 @@ import { LOCALES, Locale, useI18n } from '../lib/i18n';
 import { LANDING, LandingText } from '../lib/landing-text';
 import { LANDING_PATH } from '../lib/site';
 import { ChannelIcon } from './ChannelIcon';
+import { display, text } from '../lib/fonts';
 import { OwnerDetails } from './OwnerDetails';
 import { Icon } from './ui';
 
-// The landing's own type: a tight display face for headings and a Cyrillic-first text face (self-hosted by Next, no request to Google at runtime)
-const display = Inter_Tight({ subsets: ['latin', 'cyrillic'], weight: ['600', '700', '800'], variable: '--lp-display', display: 'swap' });
-const text = Onest({ subsets: ['latin', 'cyrillic'], weight: ['400', '500', '600', '700'], variable: '--lp-text', display: 'swap' });
 
 // The public contact address (footer and the fallback when the call-back form cannot send)
 const EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL ?? 'hello@lankaclinic.app';

@@ -5,7 +5,7 @@ import { Fragment, ReactNode, useCallback, useEffect, useState } from 'react';
 import { api } from '../../../lib/api';
 import { Key, useI18n } from '../../../lib/i18n';
 import { fmtDate, fmtDateTime } from '../../../lib/ui';
-import { Alert, Badge, Loading, PageHeader } from '../../../components/ui';
+import { Alert, Loading, PageHeader } from '../../../components/ui';
 import { ProHint } from '../../../components/ProHint';
 import { usePushDevice } from '../../../components/PushCard';
 
@@ -52,16 +52,22 @@ interface View {
   signals: Signal[];
 }
 
-const TONE: Record<State, 'red' | 'green' | 'gray' | 'amber'> = { fired: 'red', ok: 'green', insufficient: 'gray', needs_sync: 'amber', never: 'amber', not_connected: 'gray', off: 'gray' };
 // switched-on triggered signals first, then the other switched-on ones, the switched-off ones last
 const ORDER: State[] = ['fired', 'ok', 'insufficient', 'needs_sync', 'never', 'not_connected', 'off'];
+// The summary: switched-on signals by what they show now; "not measured" = too little data, a load is needed, or Cliniccards is not connected
+const COUNTS: { key: 'fired' | 'ok' | 'pending' | 'off'; tone: State; states: State[] }[] = [
+  { key: 'fired', tone: 'fired', states: ['fired'] },
+  { key: 'ok', tone: 'ok', states: ['ok'] },
+  { key: 'pending', tone: 'insufficient', states: ['insufficient', 'needs_sync', 'never', 'not_connected'] },
+  { key: 'off', tone: 'off', states: [] },
+];
 const PCT: Kind[] = ['CANCEL_RATE', 'RETURN_DROP', 'PAYMENTS_DROP'];
 // "**x**" in a translated sentence marks the number that matters
 const rich = (text: string): ReactNode => text.split(/\*\*(.+?)\*\*/g).map((part, i) => (i % 2 ? <b key={i}>{part}</b> : <Fragment key={i}>{part}</Fragment>));
 // a period's end is exclusive (the start of the next day): show the last day it covers
 const lastDay = (iso: string) => fmtDate(new Date(Date.parse(iso) - 1).toISOString());
 
-// Reports → "Signals": deviations in the clinic's work measured now from its own data (GET /signals), with each signal's settings: the master
+// "Signals" (its own menu item since 2026-11-23): deviations in the clinic's work measured now from its own data (GET /signals), with each signal's settings: the master
 // switch, the condition written as a sentence with its numbers, delivery to the staff Telegram chat and (under the details) email and Push.
 // Saving sends nothing. The order is fixed when the page loads, so a card does not jump while it is being edited.
 export default function SignalsPage() {
@@ -77,6 +83,8 @@ export default function SignalsPage() {
       .then((r) => {
         setV(r);
         setOrder((o) => o ?? [...r.signals].sort((a, b) => ORDER.indexOf(a.state) - ORDER.indexOf(b.state)).map((x) => x.kind));
+        // the menu badge asks its summary again: the server has just measured, so it answers from this measurement
+        window.dispatchEvent(new Event('stomat:signals-changed'));
       })
       .catch((e) => setError((e as Error).message));
   }, []);
@@ -108,8 +116,6 @@ export default function SignalsPage() {
   const list = [...v.signals].sort((a, b) => rank(a.kind) - rank(b.kind));
   // the summary counts only the signals that are switched on
   const on = list.filter((s) => s.active);
-  const fired = on.filter((s) => s.state === 'fired').length;
-  const measured = on.filter((s) => s.state === 'fired' || s.state === 'ok').length;
 
   return (
     <>
@@ -119,20 +125,24 @@ export default function SignalsPage() {
           {v.sync.lastSyncAt ? t('sig.syncOld', { date: fmtDateTime(v.sync.lastSyncAt) }) : t('sig.syncNever')} <Link href="/settings">{t('sig.toSync')}</Link>
         </Alert>
       )}
-      {on.length === 0 ? (
-        <Alert tone="info">{t('sig.summaryAllOff')}</Alert>
-      ) : fired > 0 ? (
-        <Alert tone="warn">{t('sig.summaryFired', { n: fired })}</Alert>
-      ) : measured === on.length ? (
-        <Alert tone="success">{t('sig.summaryOk')}</Alert>
-      ) : measured > 0 ? (
-        <Alert tone="info">{t('sig.summaryPartial')}</Alert>
-      ) : (
-        <Alert tone="info">{t('sig.summaryNone')}</Alert>
-      )}
-      <p className="muted sig-dest">
-        {v.telegram ? t('sig.dest', { title: v.telegram.title }) : <>{t('sig.destNone')} <Link href="/settings?tab=channels">{t('sig.destConnect')}</Link></>}
-      </p>
+      <section className="sig-summary" aria-label={t('sig.summary')}>
+        <div className="sig-counts">
+          {COUNTS.map((c) => {
+            const n = on.filter((x) => c.states.includes(x.state)).length + (c.key === 'off' ? list.length - on.length : 0);
+            return (
+              <div key={c.key} className={`sig-count${c.key === 'fired' && n > 0 ? ' hot' : ''}`}>
+                <span className={`sig-count-icon st-${c.tone}`} aria-hidden="true"><StateIcon state={c.tone} size={18} /></span>
+                <span><b>{n}</b><span className="l">{t(`sig.cnt.${c.key}` as Key)}</span></span>
+              </div>
+            );
+          })}
+        </div>
+        <p className="sig-dest">
+          <span className="sig-dest-icon" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z" /></svg></span>
+          <span className="t">{v.telegram ? t('sig.dest', { title: v.telegram.title }) : t('sig.destNone')}</span>
+          <Link href="/settings?tab=channels">{v.telegram ? t('sig.destChange') : t('sig.destConnect')}</Link>
+        </p>
+      </section>
       {device.state === 'ask' && (
         <Alert tone="info">
           {t('sig.pushAsk')} <button className="btn btn-sm" disabled={device.busy} onClick={() => void device.enable()}>{t('sig.pushEnable')}</button>
@@ -143,7 +153,7 @@ export default function SignalsPage() {
       <div className="signal-list">
         {list.map((s) => <SignalCard key={s.kind} s={s} chat={v.telegram?.title ?? null} pushHere={device.state === 'active'} onSaved={load} />)}
       </div>
-      <p className="muted" style={{ fontSize: 13 }}>{t('sig.checkedAt', { date: fmtDateTime(v.checkedAt) })}</p>
+      <p className="sig-foot">{t('sig.checkedAt', { date: fmtDateTime(v.checkedAt) })}</p>
     </>
   );
 }
@@ -250,19 +260,26 @@ function SignalCard({ s, chat, pushHere, onSaved }: { s: Signal; chat: string | 
       return <Fragment key={i}>{part}</Fragment>;
     });
 
+  const toggle = (checked: boolean, disabled: boolean, onClick: () => void, label: ReactNode, note?: ReactNode, aria?: string) => (
+    <button type="button" className="tgl" role="switch" aria-checked={checked} aria-label={aria} disabled={disabled} onClick={onClick}>
+      <span className="tgl-track" aria-hidden="true" />
+      <span className="tgl-text"><b>{label}</b>{note && <span>{note}</span>}</span>
+    </button>
+  );
+
   return (
     <section className={`sig-card sig-${s.state}`} aria-label={title}>
-      <div className="sig-head">
-        <b className="sig-title">{title}</b>
-        <label className="sig-switch sig-master">
-          <input type="checkbox" checked={on} disabled={busy} onChange={(e) => { setOn(e.target.checked); void save({ active: e.target.checked }); }} />
-          <span>{t('sig.active')}</span>
-        </label>
+      <div className="sig-top">
+        <div>
+          <span className={`sig-status st-${s.state}`}><StateIcon state={s.state} size={14} />{t(`sig.state.${s.state}` as Key)}</span>
+          <h2 className="sig-title">{title}</h2>
+        </div>
+        <button type="button" className="tgl tgl-master" role="switch" aria-checked={on} aria-label={`${t('sig.active')}: ${title}`} disabled={busy} onClick={() => { setOn(!on); void save({ active: !on }); }}>
+          <span>{on ? t('sig.onShort') : t('sig.state.off')}</span>
+          <span className="tgl-track" aria-hidden="true" />
+        </button>
       </div>
-      <div className="sig-now">
-        <Badge tone={TONE[s.state]}>{t(`sig.state.${s.state}` as Key)}</Badge>
-        <p className="sig-what">{s.active ? rich(what()) : t('sig.offNote')}</p>
-      </div>
+      <p className="sig-what">{s.active ? rich(what()) : t('sig.offNote')}</p>
       <div className="sig-cond">
         <p>{condition}</p>
         {dirty && (
@@ -271,37 +288,54 @@ function SignalCard({ s, chat, pushHere, onSaved }: { s: Signal; chat: string | 
           </button>
         )}
       </div>
-      <div className="sig-tg">
-        <label className="sig-switch">
-          <input type="checkbox" checked={tg} disabled={busy || !on || (!chat && !s.telegramOn)} onChange={(e) => { setTg(e.target.checked); void save({ telegram: e.target.checked }); }} />
-          <span>{t('sig.telegram')}</span>
-        </label>
-        {chat ? <span className="muted">{t('sig.telegramTo', { title: chat })}</span> : <span className="muted">{t('sig.telegramNone')} <Link href="/settings?tab=channels">{t('sig.destConnect')}</Link></span>}
+      <div className="sig-actions">
+        {toggle(tg, busy || !on || (!chat && !s.telegramOn), () => { setTg(!tg); void save({ telegram: !tg }); }, t('sig.telegram'), !on ? t('sig.enableFirst') : chat ? t('sig.telegramTo', { title: chat }) : t('sig.noChatShort'))}
+        <span className="grow" />
+        {s.link && s.active && (
+          <Link className="sig-link" href={s.link}>
+            {t(`sig.${s.kind}.open` as Key)}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+          </Link>
+        )}
       </div>
       {msg && <p className={msg.ok ? 'sig-msg ok' : 'sig-msg err'} role="status">{msg.text}</p>}
-      {s.link && s.active && <Link className={`btn btn-sm${s.state === 'fired' ? ' btn-primary' : ''}`} href={s.link}>{t(`sig.${s.kind}.open` as Key)}</Link>}
-      <details className="more-details">
-        <summary>{t('sig.how')}</summary>
-        {details().map((d) => <p key={d} className="rule">{d}</p>)}
-        <p className="rule">{t(`sig.${s.kind}.how` as Key)}</p>
-        {s.state === 'fired' && <p className="rule">{t(`sig.${s.kind}.why` as Key)}</p>}
-        <p className="sig-sub">{t('sig.channels')}</p>
-        <label className="sig-switch">
-          <input type="checkbox" checked={em} disabled={busy || !on} onChange={(e) => { setEm(e.target.checked); void save({ enabled: e.target.checked }); }} />
-          <span>{t('sig.email')}</span>
-        </label>
-        {/* Push: only where this device can receive it (the installed app with permission and a subscription) */}
-        {pushHere && (
-          <label className="sig-switch">
-            <input type="checkbox" checked={pu} disabled={busy || !on} onChange={(e) => { setPu(e.target.checked); void save({ push: e.target.checked }); }} />
-            <span>{t('sig.push')}</span>
-          </label>
-        )}
-        <p className="muted" style={{ fontSize: 13 }}>
-          {s.telegramSentAt ? t('sig.lastTelegram', { date: fmtDateTime(s.telegramSentAt) }) + ' ' : ''}
-          {s.lastFiredAt ? t('sig.lastFired', { date: fmtDateTime(s.lastFiredAt) }) : ''}
-        </p>
+      <details className="sig-how">
+        <summary>
+          {t('sig.how')}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+        </summary>
+        <div className="sig-how-body">
+          {details().map((d) => <p key={d}>{d}</p>)}
+          <p>{t(`sig.${s.kind}.how` as Key)}</p>
+          {s.state === 'fired' && <p>{t(`sig.${s.kind}.why` as Key)}</p>}
+          <p className="sig-sub">{t('sig.channels')}</p>
+          {toggle(em, busy || !on, () => { setEm(!em); void save({ enabled: !em }); }, t('sig.email'))}
+          {/* Push: only where this device can receive it (the installed app with permission and a subscription) */}
+          {pushHere && toggle(pu, busy || !on, () => { setPu(!pu); void save({ push: !pu }); }, t('sig.push'))}
+          {(s.telegramSentAt || s.lastFiredAt) && (
+            <p style={{ fontSize: 13 }}>
+              {s.telegramSentAt ? t('sig.lastTelegram', { date: fmtDateTime(s.telegramSentAt) }) + ' ' : ''}
+              {s.lastFiredAt ? t('sig.lastFired', { date: fmtDateTime(s.lastFiredAt) }) : ''}
+            </p>
+          )}
+        </div>
       </details>
     </section>
+  );
+}
+
+// The state mark: an icon next to the word, so a state never depends on its colour alone
+const STATE_ICON: Record<State, string> = {
+  fired: 'M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',
+  ok: 'M22 11.1V12a10 10 0 1 1-5.9-9.1M22 4 12 14l-3-3',
+  insufficient: 'M6 2h12M6 22h12M7 2c0 6 5 6 5 10s-5 4-5 10M17 2c0 6-5 6-5 10s5 4 5 10',
+  needs_sync: 'M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2M18 2v4h-4M6 22v-4h4',
+  never: 'M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2M18 2v4h-4M6 22v-4h4',
+  not_connected: 'M9 7H6a5 5 0 0 0 0 10h3M15 7h3a5 5 0 0 1 0 10h-3M3 3l18 18',
+  off: 'M18.4 6.6a9 9 0 1 1-12.8 0M12 2v10',
+};
+function StateIcon({ state, size }: { state: State; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={STATE_ICON[state]} /></svg>
   );
 }

@@ -18,6 +18,10 @@ const DAY = 86_400_000;
 const MAX_SCHEDULES = 20;
 const MAX_RECIPIENTS = 5;
 const COOLDOWN_MS = 24 * HOUR;
+// The menu badge reuses a measurement this long (see signalsSummary)
+const SUMMARY_TTL_MS = 5 * 60_000;
+// Fired = a switched-on rule whose measured value reached its threshold; off, too little data, needs a load and errors are not counted
+const firedCount = (list: { active: boolean; state: string }[]) => list.filter((x) => x.active && x.state === 'fired').length;
 // Cliniccards-based signals use our copy of Cliniccards: without a successful load in this time they are not computed (old data is not "zero")
 const SYNC_FRESH_MS = 48 * HOUR;
 // A Telegram alert being sent is claimed for this long, so two scheduler runs never send the same alert; a failed send releases the claim
@@ -99,6 +103,9 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
   private readonly log = new Logger(InsightsService.name);
   private timer?: NodeJS.Timeout;
   private n = 0;
+
+  // clinicId → the last measured number of fired signals (see signalsSummary)
+  private summaryCache = new Map<string, { at: number; sync: number; fired: number }>();
 
   constructor(
     private prisma: PrismaService,
@@ -267,6 +274,7 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
       if (!cur.active || d.active === false) throw new BadRequestException('alert_inactive');
     }
     await this.prisma.alertRule.update({ where: { clinicId_kind: { clinicId, kind } }, data: d });
+    this.summaryCache.delete(clinicId);
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'alert.changed', details: { kind, ...d } } });
   }
 
@@ -389,7 +397,22 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
         limits: lim, telegramOn: r.telegram, emailOn: r.enabled, pushOn: r.push, lastFiredAt: r.lastFiredAt, telegramSentAt: r.telegramSentAt, link: SIGNAL_LINK[r.kind as AlertKind],
       });
     }
+    // the section has just measured everything: the menu badge takes this number instead of measuring again
+    this.summaryCache.set(clinicId, { at: now.getTime(), sync: sync.lastSyncAt?.getTime() ?? 0, fired: firedCount(signals.map((x) => ({ active: x.active, state: x.state }))) });
     return { inPlan: true, checkedAt: now, sync: { lastSyncAt: sync.lastSyncAt, fresh: sync.fresh, connected: sync.connected }, telegram: chat ? { title: chat.title } : null, signals };
+  }
+
+  // The menu badge: how many switched-on rules show a deviation now (rules, not patients or alerts). The states come from signals() above, so
+  // there is no second formula. Kept per clinic for a few minutes so moving around the menu does not measure everything again; a changed rule,
+  // a new Cliniccards load (another lastSyncAt) or the section itself refreshes it. A plan without the signals gets no number.
+  async signalsSummary(clinicId: string, now = new Date()): Promise<{ inPlan: false } | { inPlan: true; fired: number; checkedAt: Date }> {
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } });
+    if (!hasFeature(c.plan, 'advanced_analytics')) return { inPlan: false };
+    const sync = (await this.syncState(clinicId, now)).lastSyncAt?.getTime() ?? 0;
+    const hit = this.summaryCache.get(clinicId);
+    if (hit && hit.sync === sync && now.getTime() - hit.at >= 0 && now.getTime() - hit.at < SUMMARY_TTL_MS) return { inPlan: true, fired: hit.fired, checkedAt: new Date(hit.at) };
+    const v = await this.signals(clinicId, now);
+    return { inPlan: true, fired: firedCount(v.signals), checkedAt: now };
   }
 
   // The alert text: aggregate numbers only (no names, phones or treatment), with the link to the section

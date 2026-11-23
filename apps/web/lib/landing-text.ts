@@ -8,7 +8,7 @@ import type { Locale } from './i18n';
 //   - the plan split agreed on 2026-11-23: the AI administrator replies on its own in Instagram, Telegram and Messenger on Start and Pro and prepares
 //     a booking request; on Start the administrator enters it in Cliniccards, on Pro the AI books and reschedules visits in Cliniccards itself.
 //     The product's plan gates (apps/api/src/service/plans.ts) and the controlled write-back must match this before the page is released;
-//   - the AI answers only with what the clinic approved; medical questions, complaints and anything unusual go to a person;
+//   - the AI composes replies from the knowledge base the clinic approved (not verbatim approved answers); medical questions, complaints and anything unusual go to a person;
 //   - individual work (custom website work, other systems) is quoted separately; the website chat is not offered, website forms are.
 // Channel marks: components/ChannelIcon.tsx
 export type ChannelIconKey = 'cliniccards' | 'telegram' | 'instagram' | 'messenger' | 'email';
@@ -187,7 +187,7 @@ const uk: LandingText = {
     stages: [
       { t: 'Звернення', d: 'Розуміє, про що питають' },
       { t: 'Потреба', d: 'Уточнює послугу' },
-      { t: 'Сумніви', d: 'Ціна, страх, вагання — затвердженими відповідями' },
+      { t: 'Сумніви', d: 'Ціна, страх, вагання — на основі бази знань клініки' },
       { t: 'Вибір часу', d: 'Вільні вікна з розкладу наживо' },
       { t: 'Запис', d: 'Заявка або запис у Cliniccards' },
     ],
@@ -206,7 +206,7 @@ const uk: LandingText = {
       { t: 'Власник', q: 'Де заробити більше?', d: 'Хто не записався знову, оплати й борги, дайджест у Telegram.' },
       { t: 'Керуючий', q: 'Що чекає на команду?', d: 'Заявки й завдання на головній, сигнали в службовий чат.' },
       { t: 'Адміністратор', q: 'Як встигнути всім?', d: 'Усі месенджери разом, відповіді ШІ, заявки з кнопками.' },
-      { t: 'Маркетолог', q: 'Звідки пацієнти?', d: 'Джерело кожного звернення, воронка до візиту, Excel.' },
+      { t: 'Аналітик', q: 'Звідки пацієнти?', d: 'Джерело кожного звернення, воронка до візиту, Excel.' },
     ],
     owner: {
       eyebrow: 'Для власника · тариф «Про»',
@@ -230,7 +230,7 @@ const uk: LandingText = {
     lead: 'Разовий запуск — 4 990 грн. Оплачений період починається в день запуску, а не в день оплати.',
     steps: [
       { t: 'Підключаємо Cliniccards', d: 'Завантажуємо пацієнтів, візити, плани лікування й оплати, перевіряємо перші дані.' },
-      { t: 'Підключаємо канали', d: 'Instagram, Telegram, Messenger і форми сайту — в одну стрічку.' },
+      { t: 'Підключаємо канали', d: 'Instagram, Telegram, Messenger і форми сайту — в одну стрічку. Instagram і Messenger — після підключення сторінок клініки та надання необхідних дозволів Meta.' },
       { t: 'Навчаємо ШІ', d: 'Послуги, ціни, відповіді на типові питання — ви затверджуєте кожну.' },
       { t: 'Вмикаємо й показуємо команді', d: 'Пояснюємо, де заявки, розмови й звіти. Далі — підтримка, коли потрібно.' },
     ],
@@ -238,7 +238,7 @@ const uk: LandingText = {
   pricing: {
     eyebrow: '06 — Тарифи',
     title: 'ШІ працює на кожному тарифі.',
-    sub: 'ШІ-адміністратор сам відповідає в Instagram, Telegram і Messenger уже на «Старті». «Про» записує й переносить візити прямо в Cliniccards — адміністратору не треба нічого вносити.',
+    sub: 'ШІ-адміністратор сам відповідає в Instagram, Telegram і Messenger уже на «Старті». «Про» записує та переносить візити в Cliniccards після налаштування й увімкнення клінікою.',
     monthly: 'Щомісяця',
     yearly: 'За рік',
     yearBadge: '−2 міс.',
@@ -257,17 +257,17 @@ const uk: LandingText = {
         aiD: 'Відповідає пацієнтам 24/7, веде по воронці, пропонує вільний час і готує заявку — адміністратор вносить її в Cliniccards одним кліком.',
         aiMeta: 'Instagram, Telegram, Messenger · 500 відповідей ШІ/міс',
         alsoT: 'Також у тарифі',
-        lines: ['ШІ-адміністратор сам відповідає в Instagram, Telegram і Messenger та готує заявку на запис', 'Нагадування й розсилки в Telegram', 'Заявки з форм сайту в одному журналі', '9 звітів, конструктор, воронка пацієнтів', 'Щотижневий дайджест керівнику'],
+        lines: ['ШІ-адміністратор сам відповідає в Instagram, Telegram і Messenger та готує заявку на запис', 'Нагадує про звернення пацієнтам, які не завершили запис', 'Нагадування й розсилки в Telegram', 'Заявки з форм сайту в одному журналі', '9 звітів, конструктор, воронка пацієнтів', 'Щотижневий дайджест керівнику'],
         cta: 'Обрати «Старт»',
       },
       {
         name: 'Про', price: '4 990', year: '49 900', full: '59 880', save: '9 980', perMonthYear: '4 158',
         lead: 'Запис без участі адміністратора',
         aiT: 'ШІ-адміністратор Pro', aiTag: 'записує сам',
-        aiD: 'Усе зі «Старту», плюс сам створює й переносить візити в Cliniccards — пацієнт записаний ще до того, як адміністратор прийшов на роботу.',
+        aiD: 'Усе зі «Старту», плюс записує та переносить візити в Cliniccards після налаштування й увімкнення клінікою — без участі адміністратора.',
         aiMeta: 'Автозапис і перенесення в Cliniccards',
         alsoT: 'Усе зі «Старту», а також',
-        lines: ['ШІ сам записує й переносить візити в Cliniccards', '3 000 відповідей ШІ на місяць', 'ШІ-помічник керівника: питання — відповідь звітом', 'Щоденний дайджест і сигнали про відхилення'],
+        lines: ['Записує та переносить візити в Cliniccards після налаштування й увімкнення клінікою', '3 000 відповідей ШІ на місяць', 'ШІ-помічник керівника: питання — відповідь звітом', 'Щоденний дайджест і сигнали про відхилення'],
         cta: 'Обрати «Про»',
       },
     ],
@@ -276,6 +276,7 @@ const uk: LandingText = {
     compare: [
       { label: 'ШІ сам відповідає 24/7 в Instagram, Telegram і Messenger', start: '✓', pro: '✓' },
       { label: 'Веде по воронці, пропонує вільний час із розкладу', start: '✓', pro: '✓' },
+      { label: 'Нагадує про звернення пацієнтам, які не завершили запис', start: '✓', pro: '✓' },
       { label: 'Передає людині медичні питання, скарги й нестандартне', start: '✓', pro: '✓' },
       { label: 'Запис у Cliniccards', start: 'заявка → адміністратор вносить', pro: 'ШІ записує сам', strong: true },
       { label: 'Перенесення візиту', start: 'заявка адміністратору', pro: 'ШІ переносить сам', strong: true },
@@ -293,9 +294,9 @@ const uk: LandingText = {
     eyebrow: '07 — Безпека',
     title: 'Контроль завжди за клінікою.',
     items: [
-      { t: 'Затверджені відповіді', d: 'ШІ відповідає лише тим, що затвердила клініка.' },
+      { t: 'База знань клініки', d: 'ШІ складає відповіді на основі бази знань, яку затвердила клініка: послуги, ціни, правила.' },
       { t: 'Людина поруч', d: 'Медичні питання, скарги й нестандартне ШІ одразу передає адміністратору.' },
-      { t: 'Дані пацієнтів', d: 'Імена й телефони з бази клініки до ШІ не передаються.' },
+      { t: 'Дані пацієнтів', d: 'Імена й телефони пацієнтів із бази клініки не додаються до запитів ШІ; номери телефонів і відомі контакти в листуванні приховуються перед відправкою.' },
       { t: 'Захист', d: 'Двофакторний вхід, журнал дій, ролі й доступи.' },
     ],
   },
@@ -306,8 +307,8 @@ const uk: LandingText = {
     moreLink: 'Залиште номер — передзвонимо.',
     items: [
       { q: 'Ми працюємо в Cliniccards. Що треба змінювати?', a: 'Нічого. Cliniccards лишається основною системою для пацієнтів, лікування й розкладу. LANKA працює поруч і щодня оновлює дані.' },
-      { q: 'ШІ відповідає сам. А якщо він помилиться?', a: 'ШІ відповідає лише тим, що затвердила клініка: послуги, ціни, типові відповіді. Медичні питання, скарги, знижки й усе нестандартне він одразу передає адміністратору. Самостійні відповіді можна будь-коли перемкнути на чернетки.' },
-      { q: 'Чим «Старт» відрізняється від «Про»?', a: 'На обох тарифах ШІ сам відповідає в Instagram, Telegram і Messenger та готує заявку. На «Старті» запис у Cliniccards вносить адміністратор, на «Про» ШІ записує й переносить візити сам. «Про» також додає помічника керівника, сигнали й щоденний дайджест.' },
+      { q: 'ШІ відповідає сам. А якщо він помилиться?', a: 'ШІ складає відповіді на основі бази знань, яку затвердила клініка: послуги, ціни, типові відповіді. Медичні питання, скарги, знижки й усе нестандартне він одразу передає адміністратору. Самостійні відповіді можна будь-коли перемкнути на чернетки.' },
+      { q: 'Чим «Старт» відрізняється від «Про»?', a: 'На обох тарифах ШІ сам відповідає в Instagram, Telegram і Messenger та готує заявку. На «Старті» запис у Cliniccards вносить адміністратор, на «Про» ШІ записує та переносить візити сам після налаштування й увімкнення клінікою. «Про» також додає помічника керівника, сигнали й щоденний дайджест.' },
       { q: 'Що буде, коли закінчаться відповіді ШІ?', a: 'ШІ стане на паузу до нового періоду, а листування продовжить команда. Можна докупити 500 відповідей за 390 грн — вони не згоряють. Боргу не виникає.' },
       { q: 'Наскільки свіжі дані?', a: 'Дані з Cliniccards оновлюються щодня о 03:00 і будь-коли кнопкою. Вільний час для запису перевіряється в розкладі в момент розмови.' },
       { q: 'Чи є безкоштовний період?', a: 'Замість нього — демо на вигаданій клініці. Відкривається за хвилину, без реєстрації.' },
@@ -413,7 +414,7 @@ const ru: LandingText = {
     stages: [
       { t: 'Обращение', d: 'Понимает, о чём спрашивают' },
       { t: 'Потребность', d: 'Уточняет услугу' },
-      { t: 'Сомнения', d: 'Цена, страх, колебания — утверждёнными ответами' },
+      { t: 'Сомнения', d: 'Цена, страх, колебания — на основе базы знаний клиники' },
       { t: 'Выбор времени', d: 'Свободные окна из расписания вживую' },
       { t: 'Запись', d: 'Заявка или запись в Cliniccards' },
     ],
@@ -432,7 +433,7 @@ const ru: LandingText = {
       { t: 'Владелец', q: 'Где заработать больше?', d: 'Кто не записался снова, оплаты и долги, дайджест в Telegram.' },
       { t: 'Управляющий', q: 'Что ждёт команду?', d: 'Заявки и задачи на главной, сигналы в служебный чат.' },
       { t: 'Администратор', q: 'Как успеть всем?', d: 'Все мессенджеры вместе, ответы ИИ, заявки с кнопками.' },
-      { t: 'Маркетолог', q: 'Откуда пациенты?', d: 'Источник каждого обращения, воронка до визита, Excel.' },
+      { t: 'Аналитик', q: 'Откуда пациенты?', d: 'Источник каждого обращения, воронка до визита, Excel.' },
     ],
     owner: {
       eyebrow: 'Для владельца · тариф «Про»',
@@ -456,7 +457,7 @@ const ru: LandingText = {
     lead: 'Разовый запуск — 4 990 грн. Оплаченный период начинается в день запуска, а не в день оплаты.',
     steps: [
       { t: 'Подключаем Cliniccards', d: 'Загружаем пациентов, визиты, планы лечения и оплаты, проверяем первые данные.' },
-      { t: 'Подключаем каналы', d: 'Instagram, Telegram, Messenger и формы сайта — в одну ленту.' },
+      { t: 'Подключаем каналы', d: 'Instagram, Telegram, Messenger и формы сайта — в одну ленту. Instagram и Messenger — после подключения страниц клиники и предоставления необходимых разрешений Meta.' },
       { t: 'Обучаем ИИ', d: 'Услуги, цены, ответы на типовые вопросы — вы утверждаете каждый.' },
       { t: 'Включаем и показываем команде', d: 'Объясняем, где заявки, разговоры и отчёты. Дальше — поддержка, когда нужно.' },
     ],
@@ -464,7 +465,7 @@ const ru: LandingText = {
   pricing: {
     eyebrow: '06 — Тарифы',
     title: 'ИИ работает на каждом тарифе.',
-    sub: 'ИИ-администратор сам отвечает в Instagram, Telegram и Messenger уже на «Старте». «Про» записывает и переносит визиты прямо в Cliniccards — администратору ничего не нужно вносить.',
+    sub: 'ИИ-администратор сам отвечает в Instagram, Telegram и Messenger уже на «Старте». «Про» записывает и переносит визиты в Cliniccards после настройки и включения клиникой.',
     monthly: 'Ежемесячно',
     yearly: 'За год',
     yearBadge: '−2 мес.',
@@ -483,17 +484,17 @@ const ru: LandingText = {
         aiD: 'Отвечает пациентам 24/7, ведёт по воронке, предлагает свободное время и готовит заявку — администратор вносит её в Cliniccards одним кликом.',
         aiMeta: 'Instagram, Telegram, Messenger · 500 ответов ИИ/мес',
         alsoT: 'Также в тарифе',
-        lines: ['ИИ-администратор сам отвечает в Instagram, Telegram и Messenger и готовит заявку на запись', 'Напоминания и рассылки в Telegram', 'Заявки из форм сайта в одном журнале', '9 отчётов, конструктор, воронка пациентов', 'Еженедельный дайджест руководителю'],
+        lines: ['ИИ-администратор сам отвечает в Instagram, Telegram и Messenger и готовит заявку на запись', 'Напоминает об обращении пациентам, которые не завершили запись', 'Напоминания и рассылки в Telegram', 'Заявки из форм сайта в одном журнале', '9 отчётов, конструктор, воронка пациентов', 'Еженедельный дайджест руководителю'],
         cta: 'Выбрать «Старт»',
       },
       {
         name: 'Про', price: '4 990', year: '49 900', full: '59 880', save: '9 980', perMonthYear: '4 158',
         lead: 'Запись без участия администратора',
         aiT: 'ИИ-администратор Pro', aiTag: 'записывает сам',
-        aiD: 'Всё из «Старта», плюс сам создаёт и переносит визиты в Cliniccards — пациент записан ещё до того, как администратор пришёл на работу.',
+        aiD: 'Всё из «Старта», плюс записывает и переносит визиты в Cliniccards после настройки и включения клиникой — без участия администратора.',
         aiMeta: 'Автозапись и перенос в Cliniccards',
         alsoT: 'Всё из «Старта», а также',
-        lines: ['ИИ сам записывает и переносит визиты в Cliniccards', '3 000 ответов ИИ в месяц', 'ИИ-помощник руководителя: вопрос — ответ отчётом', 'Ежедневный дайджест и сигналы об отклонениях'],
+        lines: ['Записывает и переносит визиты в Cliniccards после настройки и включения клиникой', '3 000 ответов ИИ в месяц', 'ИИ-помощник руководителя: вопрос — ответ отчётом', 'Ежедневный дайджест и сигналы об отклонениях'],
         cta: 'Выбрать «Про»',
       },
     ],
@@ -502,6 +503,7 @@ const ru: LandingText = {
     compare: [
       { label: 'ИИ сам отвечает 24/7 в Instagram, Telegram и Messenger', start: '✓', pro: '✓' },
       { label: 'Ведёт по воронке, предлагает свободное время из расписания', start: '✓', pro: '✓' },
+      { label: 'Напоминает об обращении пациентам, которые не завершили запись', start: '✓', pro: '✓' },
       { label: 'Передаёт человеку медицинские вопросы, жалобы и нестандартное', start: '✓', pro: '✓' },
       { label: 'Запись в Cliniccards', start: 'заявка → администратор вносит', pro: 'ИИ записывает сам', strong: true },
       { label: 'Перенос визита', start: 'заявка администратору', pro: 'ИИ переносит сам', strong: true },
@@ -519,9 +521,9 @@ const ru: LandingText = {
     eyebrow: '07 — Безопасность',
     title: 'Контроль всегда за клиникой.',
     items: [
-      { t: 'Утверждённые ответы', d: 'ИИ отвечает только тем, что утвердила клиника.' },
+      { t: 'База знаний клиники', d: 'ИИ составляет ответы на основе базы знаний, которую утвердила клиника: услуги, цены, правила.' },
       { t: 'Человек рядом', d: 'Медицинские вопросы, жалобы и нестандартное ИИ сразу передаёт администратору.' },
-      { t: 'Данные пациентов', d: 'Имена и телефоны из базы клиники в ИИ не передаются.' },
+      { t: 'Данные пациентов', d: 'Имена и телефоны пациентов из базы клиники не добавляются в запросы к ИИ; номера телефонов и известные контакты в переписке скрываются перед отправкой.' },
       { t: 'Защита', d: 'Двухфакторный вход, журнал действий, роли и доступы.' },
     ],
   },
@@ -532,8 +534,8 @@ const ru: LandingText = {
     moreLink: 'Оставьте номер — перезвоним.',
     items: [
       { q: 'Мы работаем в Cliniccards. Что нужно менять?', a: 'Ничего. Cliniccards остаётся основной системой для пациентов, лечения и расписания. LANKA работает рядом и ежедневно обновляет данные.' },
-      { q: 'ИИ отвечает сам. А если он ошибётся?', a: 'ИИ отвечает только тем, что утвердила клиника: услуги, цены, типовые ответы. Медицинские вопросы, жалобы, скидки и всё нестандартное он сразу передаёт администратору. Самостоятельные ответы можно в любой момент переключить на черновики.' },
-      { q: 'Чем «Старт» отличается от «Про»?', a: 'На обоих тарифах ИИ сам отвечает в Instagram, Telegram и Messenger и готовит заявку. На «Старте» запись в Cliniccards вносит администратор, на «Про» ИИ записывает и переносит визиты сам. «Про» также добавляет помощника руководителя, сигналы и ежедневный дайджест.' },
+      { q: 'ИИ отвечает сам. А если он ошибётся?', a: 'ИИ составляет ответы на основе базы знаний, которую утвердила клиника: услуги, цены, типовые ответы. Медицинские вопросы, жалобы, скидки и всё нестандартное он сразу передаёт администратору. Самостоятельные ответы можно в любой момент переключить на черновики.' },
+      { q: 'Чем «Старт» отличается от «Про»?', a: 'На обоих тарифах ИИ сам отвечает в Instagram, Telegram и Messenger и готовит заявку. На «Старте» запись в Cliniccards вносит администратор, на «Про» ИИ записывает и переносит визиты сам после настройки и включения клиникой. «Про» также добавляет помощника руководителя, сигналы и ежедневный дайджест.' },
       { q: 'Что будет, когда закончатся ответы ИИ?', a: 'ИИ встанет на паузу до нового периода, а переписку продолжит команда. Можно докупить 500 ответов за 390 грн — они не сгорают. Долга не возникает.' },
       { q: 'Насколько свежие данные?', a: 'Данные из Cliniccards обновляются ежедневно в 03:00 и в любой момент кнопкой. Свободное время для записи проверяется в расписании в момент разговора.' },
       { q: 'Есть ли бесплатный период?', a: 'Вместо него — демо на вымышленной клинике. Открывается за минуту, без регистрации.' },
@@ -639,7 +641,7 @@ const en: LandingText = {
     stages: [
       { t: 'Enquiry', d: 'Understands the question' },
       { t: 'Need', d: 'Clarifies the service' },
-      { t: 'Doubts', d: 'Price, fear, hesitation — with approved answers' },
+      { t: 'Doubts', d: 'Price, fear, hesitation — based on the clinic’s knowledge base' },
       { t: 'Time', d: 'Free slots from the live schedule' },
       { t: 'Booking', d: 'A request or a booking in Cliniccards' },
     ],
@@ -658,7 +660,7 @@ const en: LandingText = {
       { t: 'Owner', q: 'Where to earn more?', d: 'Who did not rebook, payments and debts, a digest in Telegram.' },
       { t: 'Manager', q: 'What is waiting for the team?', d: 'Requests and tasks on the home page, signals to the staff chat.' },
       { t: 'Administrator', q: 'How to answer everyone?', d: 'All messengers together, AI replies, requests with buttons.' },
-      { t: 'Marketer', q: 'Where do patients come from?', d: 'The source of every enquiry, the funnel to a visit, Excel.' },
+      { t: 'Analyst', q: 'Where do patients come from?', d: 'The source of every enquiry, the funnel to a visit, Excel.' },
     ],
     owner: {
       eyebrow: 'For the owner · Pro plan',
@@ -682,7 +684,7 @@ const en: LandingText = {
     lead: 'One-time launch — 4,990 UAH. The paid period starts on the launch day, not the payment day.',
     steps: [
       { t: 'We connect Cliniccards', d: 'We load patients, visits, treatment plans and payments and check the first data.' },
-      { t: 'We connect the channels', d: 'Instagram, Telegram, Messenger and website forms — into one feed.' },
+      { t: 'We connect the channels', d: 'Instagram, Telegram, Messenger and website forms — into one feed. Instagram and Messenger — once the clinic’s pages are connected and Meta grants the required permissions.' },
       { t: 'We teach the AI', d: 'Services, prices, answers to common questions — you approve each one.' },
       { t: 'We switch it on and show the team', d: 'Where requests, conversations and reports are. Then support whenever you need it.' },
     ],
@@ -690,7 +692,7 @@ const en: LandingText = {
   pricing: {
     eyebrow: '06 — Pricing',
     title: 'AI works on every plan.',
-    sub: 'The AI administrator replies on its own in Instagram, Telegram and Messenger already on Start. Pro books and reschedules visits right in Cliniccards — the administrator has nothing to enter.',
+    sub: 'The AI administrator replies on its own in Instagram, Telegram and Messenger already on Start. Pro books and reschedules visits in Cliniccards once the clinic sets it up and switches it on.',
     monthly: 'Monthly',
     yearly: 'Yearly',
     yearBadge: '−2 mo',
@@ -709,17 +711,17 @@ const en: LandingText = {
         aiD: 'Replies to patients 24/7, leads through the funnel, offers free time and prepares a request — the administrator enters it in Cliniccards in one click.',
         aiMeta: 'Instagram, Telegram, Messenger · 500 AI replies/mo',
         alsoT: 'Also included',
-        lines: ['The AI administrator replies on its own in Instagram, Telegram and Messenger and prepares a booking request', 'Reminders and campaigns in Telegram', 'Website form requests in one log', '9 reports, a report builder, the patient funnel', 'A weekly digest for the manager'],
+        lines: ['The AI administrator replies on its own in Instagram, Telegram and Messenger and prepares a booking request', 'Follows up with patients who did not finish booking', 'Reminders and campaigns in Telegram', 'Website form requests in one log', '9 reports, a report builder, the patient funnel', 'A weekly digest for the manager'],
         cta: 'Choose Start',
       },
       {
         name: 'Pro', price: '4,990', year: '49,900', full: '59,880', save: '9,980', perMonthYear: '4,158',
         lead: 'Booking without the administrator',
         aiT: 'AI administrator Pro', aiTag: 'books on its own',
-        aiD: 'Everything in Start, plus it creates and reschedules visits in Cliniccards itself — the patient is booked before the administrator gets to work.',
+        aiD: 'Everything in Start, plus it books and reschedules visits in Cliniccards once the clinic sets it up and switches it on — without the administrator.',
         aiMeta: 'Auto-booking and rescheduling in Cliniccards',
         alsoT: 'Everything in Start, plus',
-        lines: ['AI books and reschedules visits in Cliniccards itself', '3,000 AI replies a month', 'The manager’s AI assistant: a question — a report', 'A daily digest and deviation signals'],
+        lines: ['Books and reschedules visits in Cliniccards once the clinic sets it up and switches it on', '3,000 AI replies a month', 'The manager’s AI assistant: a question — a report', 'A daily digest and deviation signals'],
         cta: 'Choose Pro',
       },
     ],
@@ -728,6 +730,7 @@ const en: LandingText = {
     compare: [
       { label: 'AI replies on its own 24/7 in Instagram, Telegram and Messenger', start: '✓', pro: '✓' },
       { label: 'Leads through the funnel, offers free time from the schedule', start: '✓', pro: '✓' },
+      { label: 'Follows up with patients who did not finish booking', start: '✓', pro: '✓' },
       { label: 'Hands medical questions, complaints and anything unusual to a person', start: '✓', pro: '✓' },
       { label: 'Booking in Cliniccards', start: 'request → the administrator enters it', pro: 'AI books itself', strong: true },
       { label: 'Rescheduling a visit', start: 'a request to the administrator', pro: 'AI reschedules itself', strong: true },
@@ -745,9 +748,9 @@ const en: LandingText = {
     eyebrow: '07 — Security',
     title: 'The clinic is always in control.',
     items: [
-      { t: 'Approved answers', d: 'AI answers only with what the clinic approved.' },
+      { t: 'The clinic’s knowledge base', d: 'AI composes replies from the knowledge base the clinic approved: services, prices, rules.' },
       { t: 'A person nearby', d: 'Medical questions, complaints and anything unusual go straight to the administrator.' },
-      { t: 'Patient data', d: 'Names and phones from the clinic’s database are never sent to the AI.' },
+      { t: 'Patient data', d: 'Patient names and phones from the clinic’s database are not added to AI requests; phone numbers and known contacts in the chat are hidden before sending.' },
       { t: 'Protection', d: 'Two-factor sign-in, an action log, roles and access rights.' },
     ],
   },
@@ -758,8 +761,8 @@ const en: LandingText = {
     moreLink: 'Leave your number — we’ll call back.',
     items: [
       { q: 'We work in Cliniccards. What do we need to change?', a: 'Nothing. Cliniccards stays the main system for patients, treatment and the schedule. LANKA works next to it and updates the data daily.' },
-      { q: 'AI replies on its own. What if it makes a mistake?', a: 'AI answers only with what the clinic approved: services, prices, common answers. Medical questions, complaints, discounts and anything unusual go straight to the administrator. Replies on its own can be switched back to drafts at any time.' },
-      { q: 'How does Start differ from Pro?', a: 'On both plans AI replies on its own in Instagram, Telegram and Messenger and prepares a request. On Start the administrator enters the booking in Cliniccards; on Pro AI books and reschedules visits itself. Pro also adds the manager’s assistant, signals and a daily digest.' },
+      { q: 'AI replies on its own. What if it makes a mistake?', a: 'AI composes replies from the knowledge base the clinic approved: services, prices, common answers. Medical questions, complaints, discounts and anything unusual go straight to the administrator. Replies on its own can be switched back to drafts at any time.' },
+      { q: 'How does Start differ from Pro?', a: 'On both plans AI replies on its own in Instagram, Telegram and Messenger and prepares a request. On Start the administrator enters the booking in Cliniccards; on Pro AI books and reschedules visits itself once the clinic sets it up and switches it on. Pro also adds the manager’s assistant, signals and a daily digest.' },
       { q: 'What happens when the AI replies run out?', a: 'AI pauses until the next period and the team carries on with the conversations. You can buy 500 more replies for 390 UAH; they do not expire. No debt arises.' },
       { q: 'How fresh is the data?', a: 'Data from Cliniccards updates daily at 03:00 and any time with a button. Free time for a booking is checked in the schedule during the conversation.' },
       { q: 'Is there a free trial?', a: 'Instead, a demo on a made-up clinic. It opens in a minute, no sign-up.' },

@@ -103,7 +103,8 @@ export default function AnalyticsPage() {
   const leakMax = data ? Math.max(1, ...LEAKS.map((r) => data.leaks[r] ?? 0)) : 1;
   const freshBefore = Date.now() - FRESH_DAYS * 86_400_000;
   const isFresh = (month: string) => new Date(`${month}-01T00:00:00Z`).getTime() > freshBefore - 30 * 86_400_000;
-  const heat = (v: number | null) => (v === null ? undefined : { background: `rgba(14, 154, 160, ${0.06 + 0.55 * (v / 100)})` });
+  // the brand colour of the current theme, mixed into the card; strong cells take the text colour that stays readable on them in both themes
+  const heat = (v: number | null) => (v === null ? undefined : { background: `color-mix(in srgb, var(--primary) ${Math.round(6 + 55 * (v / 100))}%, var(--surface))`, color: v >= 50 ? 'var(--heat-strong)' : undefined });
 
   const compareTable = (rows: Overview['bySource'], first: string) => (
     <div className="table-wrap">

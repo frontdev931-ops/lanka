@@ -13,11 +13,12 @@ import { VerifyBanner } from './VerifyBanner';
 import { InstallApp } from './InstallApp';
 import { AcceptTermsGate } from './Terms';
 import { ProfileDialog } from './ProfileDialog';
+import { ThemeSwitch, useTheme } from './ThemeSwitch';
 
 // also: the other pages of the same section (the item stays highlighted on them)
 type NavItem = { href: string; label: Key; icon: string; also?: string[] };
 
-// Eight sections by what the person came to do. Pages that used to be separate items are tabs of a section now (SECTIONS below); their addresses did not change.
+// Sections by what the person came to do (Signals became an item of its own on 2026-11-23). Pages that used to be separate items are tabs of a section now (SECTIONS below); their addresses did not change.
 const NAV: (NavItem | { sep: true })[] = [
   { href: '/dashboard', label: 'nav.home', icon: 'home' },
   // the patient funnel is a product of its own: a first-level item, not a tab of the reports
@@ -26,7 +27,9 @@ const NAV: (NavItem | { sep: true })[] = [
   { href: '/automations', label: 'nav.outgoing', icon: 'zap', also: ['/my-automations'] },
   { href: '/patients', label: 'nav.patients', icon: 'users', also: ['/inquiries', '/waitlist', '/imports'] },
   { href: '/tasks', label: 'nav.tasks', icon: 'check' },
-  { href: '/reports', label: 'nav.reportsAll', icon: 'chart', also: ['/quality', '/signals', '/insights', '/payback'] },
+  { href: '/reports', label: 'nav.reportsAll', icon: 'chart', also: ['/quality', '/insights', '/payback'] },
+  // deviations in the clinic's work: an item of its own next to the reports (owner and manager), with the number of fired signals
+  { href: '/signals', label: 'sec.signals', icon: 'alert' },
   { href: '/knowledge', label: 'nav.aiAdmin', icon: 'sparkles', also: ['/ai-admin'] },
   { sep: true },
   { href: '/settings', label: 'nav.settings', icon: 'settings' },
@@ -38,7 +41,7 @@ type SectionTab = { href: string; label: Key; only?: string[]; needs?: 'network'
 const LEAD = ['OWNER', 'MANAGER'];
 const SECTIONS: { label: Key; tabs: SectionTab[] }[] = [
   { label: 'nav.patients', tabs: [{ href: '/patients', label: 'sec.cards' }, { href: '/inquiries', label: 'nav.inquiries' }, { href: '/waitlist', label: 'nav.waitlist' }] },
-  { label: 'nav.reportsAll', tabs: [{ href: '/reports', label: 'nav.reports' }, { href: '/quality', label: 'nav.quality' }, { href: '/signals', label: 'sec.signals', only: LEAD }, { href: '/payback', label: 'sec.payback', only: LEAD }, { href: '/insights', label: 'sec.scheduled', only: LEAD }, { href: '/network', label: 'sec.network', needs: 'network' }] },
+  { label: 'nav.reportsAll', tabs: [{ href: '/reports', label: 'nav.reports' }, { href: '/quality', label: 'nav.quality' }, { href: '/payback', label: 'sec.payback', only: LEAD }, { href: '/insights', label: 'sec.scheduled', only: LEAD }, { href: '/network', label: 'sec.network', needs: 'network' }] },
   { label: 'nav.aiAdmin', tabs: [{ href: '/knowledge', label: 'nav.knowledge' }, { href: '/ai-admin', label: 'sec.mode', only: LEAD }, { href: '/ai-admin/booking', label: 'sec.booking', only: LEAD }, { href: '/ai-admin/follow-ups', label: 'sec.followups', only: ['OWNER', 'MANAGER', 'ADMIN'] }] },
 ];
 
@@ -106,6 +109,8 @@ export default function Shell({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [open, setOpen] = useState(false);
   const [newRequests, setNewRequests] = useState(0);
+  // switched-on signals with a deviation now (GET /signals/summary); null = not known (no access, not in the plan, not loaded): no badge
+  const [signalsFired, setSignalsFired] = useState<number | null>(null);
   const [aiLimit, setAiLimit] = useState(false);
   const [assistantInPlan, setAssistantInPlan] = useState(false);
   // the person's clinics (a network's branches, or several clinics): the switcher in the user box; a member of a network gets the "Network" tab
@@ -113,6 +118,7 @@ export default function Shell({ children }: { children: ReactNode }) {
   const [inNetwork, setInNetwork] = useState(false);
   // most of the monthly AI allowance is used and nothing is bought: a notice in advance (closed for this browser session with the cross)
   const [aiLow, setAiLow] = useState<{ used: number; limit: number } | null>(null);
+  const [theme, setTheme] = useTheme();
   useStackedTables();
 
   // The session is stored in an httpOnly cookie: the only way to know whether the user is signed in is to ask the server
@@ -156,6 +162,27 @@ export default function Shell({ children }: { children: ReactNode }) {
       window.removeEventListener('stomat:requests-changed', load);
     };
   }, [me]);
+
+  // The badge of "Signals": the number of switched-on rules with a deviation, for the owner and the manager (the server refuses other roles, a clinic
+  // locked by billing reads nothing). Asked when the person or the clinic changes, after the Signals page measured or saved, and after a Cliniccards
+  // load; no polling: the server keeps the measurement a few minutes. A failed request keeps the last known number, never a made-up zero.
+  useEffect(() => {
+    setSignalsFired(null);
+    if (!me || (me.role !== 'OWNER' && me.role !== 'MANAGER') || me.billing?.blocked || me.suspended) return;
+    let alive = true;
+    const load = () =>
+      api<{ inPlan: boolean; fired?: number }>('/signals/summary')
+        .then((r) => alive && setSignalsFired(r.inPlan && typeof r.fired === 'number' ? r.fired : null))
+        .catch(() => undefined);
+    void load();
+    window.addEventListener('stomat:signals-changed', load);
+    window.addEventListener('stomat:me-changed', load);
+    return () => {
+      alive = false;
+      window.removeEventListener('stomat:signals-changed', load);
+      window.removeEventListener('stomat:me-changed', load);
+    };
+  }, [me?.clinicId, me?.role, me?.billing?.blocked, me?.suspended]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The shared monthly AI allowance is used up: a notice for the owner and the manager on every page (the live state of the server, so it works without
   // Telegram and disappears by itself after a top-up or in a new period). Asked again on every page change; shown only where an AI feature is on.
@@ -215,11 +242,15 @@ export default function Shell({ children }: { children: ReactNode }) {
           <Link href="/dashboard" className="brand">
             <Brand />
           </Link>
+          {/* the phone's header: the theme as one icon (on a computer it is in the top bar) */}
+          <span className="phone-only"><ThemeSwitch theme={theme} onChange={setTheme} compact /></span>
         </div>
 
         <nav className="nav">
           {(me?.platformAdmin ? [...NAV, PLATFORM_ITEM] : NAV)
             .filter((n) => 'sep' in n || n.href !== '/knowledge' || me?.role === 'OWNER' || me?.role === 'MANAGER' || me?.role === 'ADMIN')
+            // Signals: the owner and the manager only (the same roles as the server's)
+            .filter((n) => 'sep' in n || n.href !== '/signals' || me?.role === 'OWNER' || me?.role === 'MANAGER')
             .map((n, i) =>
             'sep' in n ? (
               <div key={i} className="nav-sep" />
@@ -228,13 +259,14 @@ export default function Shell({ children }: { children: ReactNode }) {
                 <Icon name={n.icon} />
                 {t(n.label)}
                 {n.href === '/inbox' && newRequests > 0 && <span className="nav-badge" aria-label={`${newRequests}`}>{newRequests}</span>}
+                {n.href === '/signals' && !!signalsFired && <span className="nav-badge" role="status" aria-label={t('nav.signalsBadge', { n: signalsFired })} title={t('nav.signalsBadge', { n: signalsFired })}>{signalsFired}</span>}
               </Link>
             ),
           )}
         </nav>
 
         <div className="user-box">
-          <LanguageSwitcher />
+          <div className="phone-only"><LanguageSwitcher /></div>
           <InstallApp />
           <button type="button" className="user-line user-line-btn" onClick={() => setProfile(true)} aria-haspopup="dialog" title={t('prof.open')}>
             {me?.avatar ? (
@@ -251,7 +283,7 @@ export default function Shell({ children }: { children: ReactNode }) {
             </div>
           </button>
           {clinics.length > 1 && me && (
-            <label className="field clinic-switch">
+            <label className="field clinic-switch phone-only">
               <span>{t('net.switch')}</span>
               <select className="input" value={me.clinicId ?? ''} onChange={(e) => void switchClinic(e.target.value)}>
                 {clinics.map((c) => (
@@ -267,6 +299,31 @@ export default function Shell({ children }: { children: ReactNode }) {
       </aside>
       {profile && <ProfileDialog onClose={closeProfile} />}
 
+      <div className="main-col">
+      {/* The top bar on a computer (design of 2026-11-23): the clinic, the language, the theme and "Ask AI"; on a phone they live in the menu and the header */}
+      <header className="topbar">
+        {clinics.length > 1 && me ? (
+          <label className="topbar-clinic">
+            <span>{t('net.switch')}</span>
+            <select className="input" value={me.clinicId ?? ''} onChange={(e) => void switchClinic(e.target.value)}>
+              {clinics.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <span className="topbar-name">{me?.clinicName ?? ''}</span>
+        )}
+        <span className="topbar-gap" />
+        <LanguageSwitcher compact />
+        <ThemeSwitch theme={theme} onChange={setTheme} />
+        {askAi && (
+          <Link href="/assistant" className="topbar-ai">
+            <Icon name="sparkles" size={16} />
+            {t('sec.askAi')}
+          </Link>
+        )}
+      </header>
       <main className={`content${askAi ? ' with-ask' : ''}`}>
         {me && me.role === 'OWNER' && me.termsAccepted === false && <AcceptTermsGate onAccepted={() => setMe({ ...me, termsAccepted: true })} />}
         {me && me.emailVerified === false && <VerifyBanner />}
@@ -315,6 +372,7 @@ export default function Shell({ children }: { children: ReactNode }) {
           </>
         )}
       </main>
+      </div>
 
       {askAi && (
         <Link href="/assistant" className="ask-ai" aria-label={t('sec.askAi')} title={t('sec.askAi')}>

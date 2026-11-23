@@ -341,6 +341,43 @@ describe('сигнали керівнику', () => {
     await http().patch('/alerts/SYNC_OVERDUE').set(auth(c.token)).send({ threshold: 12 }).expect(400);
   });
 
+  it('бейдж меню «Сигнали»: лише увімкнені з відхиленням; кеш скидається зміною правила й новим завантаженням; «Старт», інші ролі й клініки — без числа', async () => {
+    const c = await clinic();
+    const summary = async (token = c.token) => (await http().get('/signals/summary').set(auth(token)).expect(200)).body;
+    // nothing loaded from Cliniccards: "not connected", "needs a load" and too little data are not deviations
+    expect(await summary()).toMatchObject({ inPlan: true, fired: 0 });
+    for (let i = 0; i < 3; i++) await prisma.task.create({ data: { clinicId: c.clinicId, title: 'T', dueDate: new Date(Date.now() - 3 * day), status: 'OPEN' } });
+    // the measurement is kept a few minutes: moving around the menu does not measure again
+    expect((await summary()).fired).toBe(0);
+    // a changed rule drops it: 3 overdue tasks against the threshold 2 is one fired rule (a rule, not three tasks)
+    await http().patch('/alerts/OVERDUE_TASKS').set(auth(c.token)).send({ threshold: 2 }).expect(200);
+    expect((await summary()).fired).toBe(1);
+    // switched off: not counted; on again: counted
+    await http().patch('/alerts/OVERDUE_TASKS').set(auth(c.token)).send({ active: false }).expect(200);
+    expect((await summary()).fired).toBe(0);
+    await http().patch('/alerts/OVERDUE_TASKS').set(auth(c.token)).send({ active: true }).expect(200);
+    expect((await summary()).fired).toBe(1);
+    // a new Cliniccards load (another lastSyncAt) measures again: the load 60 hours ago is itself a deviation
+    await prisma.integration.upsert({ where: { clinicId_provider: { clinicId: c.clinicId, provider: 'CLINICCARDS' } }, create: { clinicId: c.clinicId, provider: 'CLINICCARDS', apiKeyEnc: 'x', lastSyncAt: new Date(Date.now() - 60 * 3_600_000) }, update: { apiKeyEnc: 'x', lastSyncAt: new Date(Date.now() - 60 * 3_600_000) } });
+    expect((await summary()).fired).toBe(2);
+    // the section measures and the badge takes the same number
+    const s = (await http().get('/signals').set(auth(c.token)).expect(200)).body as { signals: { active: boolean; state: string }[] };
+    expect(s.signals.filter((x) => x.active && x.state === 'fired')).toHaveLength(2);
+    // the manager sees it; the administrator and a doctor are refused (the same roles as the section)
+    const manager = await member(c.token, 'MANAGER');
+    const admin = await member(c.token, 'ADMIN');
+    const doctor = await member(c.token, 'DOCTOR');
+    expect((await summary(manager.token)).fired).toBe(2);
+    await http().get('/signals/summary').set(auth(admin.token)).expect(403);
+    await http().get('/signals/summary').set(auth(doctor.token)).expect(403);
+    // another clinic: its own number only
+    const other = await clinic();
+    expect(await summary(other.token)).toMatchObject({ inPlan: true, fired: 0 });
+    // Start: no signals in the plan, no number at all
+    const start = await clinic('START');
+    expect(await summary(start.token)).toEqual({ inPlan: false });
+  });
+
   it('Telegram для кожного сигналу: окремо від пошти й push; відкриття і збереження нічого не шлють; невдала доставка не записується; раз на добу; два прогони не шлють двічі', async () => {
     const { StaffNotifierService } = await import('../src/automations/staff-notifier.service');
     const staff = app.get(StaffNotifierService);

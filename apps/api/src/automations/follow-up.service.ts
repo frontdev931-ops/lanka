@@ -188,7 +188,9 @@ export class FollowUpService {
         // one message inside Meta's window: the latest daytime moment between 16 and 23 hours after the patient's last message
         const closes = new Date(r.lastIn.createdAt.getTime() + META_WINDOW_MS);
         const at = latestDaytime(new Date(Math.max(r.lastIn.createdAt.getTime() + 16 * HOUR, r.lastOut.getTime() + QUIET_MS)), new Date(closes.getTime() - HOUR));
-        steps.push({ step: 1, dueAt: at, expiresAt: new Date(closes.getTime() - 15 * 60_000), key: r.reason });
+        // valid until the window closes and never past that day's daytime: a late run or a late approval does not write at night
+        const until = at ? Math.min(closes.getTime() - 15 * 60_000, atHour(at, DAY_TO).getTime()) : null;
+        steps.push({ step: 1, dueAt: at, expiresAt: until === null ? null : new Date(until), key: r.reason });
       } else {
         const first = nextDayMorning(r.lastOut);
         steps.push({ step: 1, dueAt: first, expiresAt: new Date(first.getTime() + STALE_MS), key: r.reason });
@@ -218,8 +220,10 @@ export class FollowUpService {
     if (!st || !OPEN_STAGES.includes(st.salesStage) || st.owner !== 'BOT') return 'dialogue_changed';
     if (await this.prisma.bookingRequest.count({ where: { clinicId: f.clinicId, channel: f.channel, chatId: f.chatId, status: 'NEW' } })) return 'request_open';
     if (await this.prisma.funnelEvent.count({ where: { clinicId: f.clinicId, kind: 'BOOKED', conversation: { channel: f.channel, chatId: f.chatId } } })) return 'booked';
-    const link = await this.prisma.patientChannel.findFirst({ where: { clinicId: f.clinicId, channel: f.channel, externalId: f.chatId }, select: { optedOutAt: true } });
+    const link = await this.prisma.patientChannel.findFirst({ where: { clinicId: f.clinicId, channel: f.channel, externalId: f.chatId }, select: { optedOutAt: true, patientId: true } });
     if (link?.optedOutAt) return 'opted_out';
+    // a visit ahead, booked after the follow-up was planned (here, by phone or at the desk)
+    if (link?.patientId && (await this.prisma.visit.count({ where: { clinicId: f.clinicId, patientId: link.patientId, startsAt: { gt: now }, status: { notIn: ['CANCELLED', 'DID_NOT_COME', 'MOVED'] } } }))) return 'booked';
     if (!(await this.messenger.windowOpenAt(f.clinicId, f.channel, f.chatId, now))) return 'window_closed';
     return null;
   }
@@ -232,6 +236,7 @@ export class FollowUpService {
 
   // Due follow-ups: invalid ones are cancelled; in a dialogue the agent answers on its own the message goes out; otherwise it waits for a staff member
   async process(clinicId: string, now = new Date()) {
+    await this.dropAnswered(clinicId);
     const due = await this.prisma.followUp.findMany({ where: { clinicId, status: { in: ['PLANNED', 'PENDING_APPROVAL'] }, dueAt: { lte: now } }, orderBy: { dueAt: 'asc' }, take: 50 });
     let sent = 0;
     for (const f of due) {
@@ -250,6 +255,17 @@ export class FollowUpService {
       if ((await this.deliver(f.id, null, now)) === 'SENT') sent++;
     }
     return sent;
+  }
+
+  // The patient wrote after the scenario was planned: every message still open in it (also a later Telegram step) is cancelled at once.
+  // A new scenario starts only from a new quiet dialogue (a new basis message), never by reviving this one.
+  private async dropAnswered(clinicId: string) {
+    const open = await this.prisma.followUp.findMany({ where: { clinicId, status: { in: ['PLANNED', 'PENDING_APPROVAL'] } }, select: { channel: true, chatId: true, basisMessageId: true }, distinct: ['channel', 'chatId', 'basisMessageId'] });
+    for (const o of open) {
+      const lastIn = await this.prisma.chatMessage.findFirst({ where: { clinicId, channel: o.channel, chatId: o.chatId, direction: 'IN' }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+      if (lastIn?.id === o.basisMessageId) continue;
+      await this.prisma.followUp.updateMany({ where: { clinicId, channel: o.channel, chatId: o.chatId, basisMessageId: o.basisMessageId, status: { in: ['PLANNED', 'PENDING_APPROVAL'] } }, data: { status: 'CANCELLED', error: 'patient_wrote' } });
+    }
   }
 
   // A staff member sends a waiting follow-up now (or one planned for later); checked again right before sending
