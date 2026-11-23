@@ -205,7 +205,7 @@ export class NetworkService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   // Signals of the network: the same measures as a clinic's signals (InsightsService.measure), per branch, with the branch's own thresholds where it
-  // has set them (the defaults otherwise). A rate measure is also computed for the network from the added counts.
+  // has set them (the defaults otherwise), only the rules the branch keeps switched on. A rate measure is also computed for the network from the added counts.
   async signals(userId: string, networkId: string) {
     const { branches } = await this.access(userId, networkId);
     const now = new Date();
@@ -213,6 +213,8 @@ export class NetworkService implements OnApplicationBootstrap, OnModuleDestroy {
     for (const b of branches) {
       const rules = await this.insights.alerts(b.id);
       for (const r of rules) {
+        // a rule the branch switched off is not part of the network's signals
+        if (!r.active) continue;
         const m = await this.insights.measure(b.id, { kind: r.kind, windowDays: r.windowDays, hours: r.hours }, now);
         if (m) out.push({ branch: b.name, kind: r.kind, value: m.value, threshold: r.threshold, fired: m.value >= r.threshold });
       }

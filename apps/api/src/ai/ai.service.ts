@@ -79,6 +79,8 @@ export class AiService {
       assistantInPlan: hasFeature(c.plan, 'ai_assistant'),
       sendingEnabled: c.sendingEnabled,
       autoBookingSupported: bookingWriteSupported(),
+      // the AI's own booking and rescheduling in Cliniccards is a Pro feature
+      autoBookingInPlan: hasFeature(c.plan, 'auto_booking'),
       // The temporary server restriction of automatic booking to chosen dialogs (AUTOBOOKING_TEST_ONLY / AUTOBOOKING_TEST_DIALOGS)
       autoBookingTest: autoBookingTestStatus(),
       used,
@@ -100,6 +102,7 @@ export class AiService {
       if (!(patch.enabled ?? cur.aiEnabled)) throw new BadRequestException('ai_disabled');
     }
     if (patch.autoBooking && !bookingWriteSupported()) throw new BadRequestException('booking_write_unsupported');
+    if (patch.autoBooking && !hasFeature((await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } })).plan, 'auto_booking')) throw new BadRequestException('plan_feature');
     await this.prisma.clinic.update({
       where: { id: clinicId },
       data: { ...(patch.assistant !== undefined ? { aiAssistantEnabled: patch.assistant } : {}), ...(patch.enabled === false ? { aiAutoReply: false } : patch.autoReply !== undefined ? { aiAutoReply: patch.autoReply } : {}), ...(patch.autoBooking !== undefined ? { aiAutoBooking: patch.autoBooking } : {}), ...(patch.repliesPerChatDay !== undefined ? { aiRepliesPerChatDay: patch.repliesPerChatDay } : {}), ...(patch.pauseMinutes !== undefined ? { aiPauseMinutes: patch.pauseMinutes } : {}), ...(patch.enabled !== undefined ? { aiEnabled: patch.enabled } : {}), ...(patch.monthlyLimit !== undefined ? { aiMonthlyLimit: patch.monthlyLimit } : {}) },

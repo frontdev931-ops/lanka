@@ -23,6 +23,8 @@ class SchedulePatchDto {
   @IsOptional() @IsBoolean() enabled?: boolean;
 }
 class AlertDto {
+  // the master switch of the rule (off: not measured, nothing delivered on any channel)
+  @IsOptional() @IsBoolean() active?: boolean;
   // the email to the owner
   @IsOptional() @IsBoolean() enabled?: boolean;
   // Push notifications to the clinic's subscribed devices

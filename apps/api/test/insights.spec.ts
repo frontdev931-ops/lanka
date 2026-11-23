@@ -413,6 +413,71 @@ describe('сигнали керівнику', () => {
     }
   });
 
+  it('головний перемикач: вимкнений сигнал не рахується, не входить у підсумки мережі й нічого не шле; канали зберігаються після вимкнення й увімкнення', async () => {
+    const { StaffNotifierService } = await import('../src/automations/staff-notifier.service');
+    const { PushService } = await import('../src/push/push.service');
+    const { NetworkService } = await import('../src/network/network.service');
+    const deliver = jest.spyOn(app.get(StaffNotifierService), 'deliver').mockResolvedValue('sent');
+    const push = jest.spyOn(app.get(PushService), 'notify').mockResolvedValue(undefined as never);
+    const network = app.get(NetworkService);
+    let access: jest.SpyInstance | undefined;
+    try {
+      const c = await clinic();
+      const other = await clinic();
+      for (let i = 0; i < 3; i++) await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: `m${i}`, kind: 'BOOKING', summary: 'x', createdAt: new Date(Date.now() - 6 * 3_600_000) } });
+      const rule = () => prisma.alertRule.findUniqueOrThrow({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } } });
+      // new rules: on (monitored), every channel off
+      expect((await http().get('/alerts').set(auth(c.token)).expect(200)).body.every((a: { active: boolean; enabled: boolean; push: boolean; telegram: boolean }) => a.active && !a.enabled && !a.push && !a.telegram)).toBe(true);
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ enabled: true, push: true, telegram: true, threshold: 2 }).expect(200);
+      // off: no assessment in the section, nothing in the network view, nothing sent on any channel
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ active: false }).expect(200);
+      const off = await sig(c.token, 'STALE_REQUESTS');
+      expect(off).toMatchObject({ state: 'off', active: false, emailOn: true, pushOn: true, telegramOn: true, threshold: 2 });
+      expect(off.value).toBeUndefined();
+      access = jest.spyOn(network as never as { access: () => unknown }, 'access').mockResolvedValue({ branches: [{ id: c.clinicId, name: 'A', role: 'OWNER' }] } as never);
+      expect((await network.signals(c.userId, 'n')).signals.map((x) => x.kind)).not.toContain('STALE_REQUESTS');
+      const mails = mail.outbox.length;
+      expect(await insights.evaluate(c.clinicId)).toEqual([]);
+      expect(deliver).not.toHaveBeenCalled();
+      expect(push).not.toHaveBeenCalled();
+      expect(mail.outbox.length).toBe(mails);
+      // a channel cannot be changed while the rule is off; the saved channels are kept
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ telegram: false }).expect(400);
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ active: false, push: false }).expect(400);
+      expect(await rule()).toMatchObject({ active: false, enabled: true, push: true, telegram: true });
+      // switched off between the check and the claim (a run already in progress): still nothing sent
+      const realFind = prisma.alertRule.findMany.bind(prisma.alertRule);
+      const findSpy = jest.spyOn(prisma.alertRule, 'findMany').mockImplementationOnce((async () => (await realFind({ where: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } })).map((r) => ({ ...r, active: true }))) as never);
+      expect(await insights.evaluate(c.clinicId)).toEqual([]);
+      findSpy.mockRestore();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(push).not.toHaveBeenCalled();
+      // back on (a fresh read, as after a refresh): the earlier channels apply again
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ active: true }).expect(200);
+      expect(await sig(c.token, 'STALE_REQUESTS')).toMatchObject({ state: 'fired', active: true, value: 3, emailOn: true, pushOn: true, telegramOn: true });
+      expect((await network.signals(c.userId, 'n')).signals.find((x) => x.kind === 'STALE_REQUESTS')).toMatchObject({ fired: true });
+      const before = mail.outbox.length;
+      expect(await insights.evaluate(c.clinicId)).toEqual(['STALE_REQUESTS']);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(push).toHaveBeenCalledTimes(1);
+      expect(mail.outbox.length).toBe(before + 1);
+      // permissions and isolation: an administrator cannot switch it; another clinic's rules are untouched
+      const admin = await member(c.token, 'ADMIN');
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(admin.token)).send({ active: false }).expect(403);
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(other.token)).send({ active: false }).expect(200);
+      expect(await rule()).toMatchObject({ active: true });
+      expect((await prisma.alertRule.findUniqueOrThrow({ where: { clinicId_kind: { clinicId: other.clinicId, kind: 'STALE_REQUESTS' } } }))).toMatchObject({ active: false, enabled: false, push: false, telegram: false });
+      // Start cannot switch a rule on
+      const start = await clinic('START');
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(start.token)).send({ active: false }).expect(200);
+      await http().patch('/alerts/STALE_REQUESTS').set(auth(start.token)).send({ active: true }).expect(400);
+    } finally {
+      deliver.mockRestore();
+      push.mockRestore();
+      access?.mockRestore();
+    }
+  });
+
   it('розділ «Сигнали»: лише «Про» отримує числа; лише власник і керуючий', async () => {
     const start = await clinic('START');
     expect((await http().get('/signals').set(auth(start.token)).expect(200)).body).toMatchObject({ inPlan: false, signals: [] });

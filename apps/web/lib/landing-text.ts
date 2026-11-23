@@ -1,528 +1,774 @@
 import type { Locale } from './i18n';
 
-// Text of the public landing page. Prices and limits repeat apps/api/src/service/plans.ts (PLANS, LAUNCH_FEE_UAH, AI_PACK, NETWORK_PRICE): change both together.
+// Text of the public landing page (design of 2026-11-23, "dark accent"). Prices and limits repeat apps/api/src/service/plans.ts (PLANS,
+// LAUNCH_FEE_UAH, AI_PACK, NETWORK_PRICE, BILLING_TERMS): change both together.
 // Rules for this text:
-//   - benefits are what LANKA lets a clinic do, never measured results (there are no validated conversion, savings or ROI figures);
-//   - three levels are kept apart: standard features; features that depend on a channel, a plan, a permission or controlled activation (said beside
-//     the claim); individual work that is assessed first (custom website work, non-standard form integrations, ad forms, other systems, custom reports).
-//     Forwarding from existing website forms is included in Start and Pro, with assisted connection available in Settings. Custom website work is quoted separately.
-//   - the patient agent: drafts by default, replies on its own (Instagram, Messenger, Telegram) only after the clinic owner switches it on in Pro; a request is not a
-//     booking; writes to the clinic's system only where they are switched on;
-//   - screens are real app screens on the demo clinic (made-up data, dates and phones removed); drawings are labelled as examples.
+//   - benefits are what LANKA lets a clinic do, never measured results (there are no validated conversion, savings or ROI figures); drawn screens
+//     carry made-up demo data and are labelled as examples;
+//   - the plan split agreed on 2026-11-23: the AI administrator replies on its own in Instagram, Telegram and Messenger on Start and Pro and prepares
+//     a booking request; on Start the administrator enters it in Cliniccards, on Pro the AI books and reschedules visits in Cliniccards itself.
+//     The product's plan gates (apps/api/src/service/plans.ts) and the controlled write-back must match this before the page is released;
+//   - the AI answers only with what the clinic approved; medical questions, complaints and anything unusual go to a person;
+//   - individual work (custom website work, other systems) is quoted separately; the website chat is not offered, website forms are.
 // Channel marks: components/ChannelIcon.tsx
 export type ChannelIconKey = 'cliniccards' | 'telegram' | 'instagram' | 'messenger' | 'email';
-// The app screens in public/landing/<lang>/ (made by a script on the demo clinic)
-export type Shot = 'workspace' | 'periods' | 'now' | 'inbox' | 'report' | 'requests';
+
+type Tone = 'ai' | 'warn' | 'ok' | 'neutral' | 'ig' | 'tg' | 'ms';
 
 export interface LandingText {
-  nav: { agent: string; roles: string; product: string; connect: string; pricing: string; faq: string; login: string; menu: string; terms: string; privacy: string };
-  ui: { example: string; demoData: string; enlarge: string; close: string; next: string };
-  hero: { eyebrow: string; title1: string; title2: string; sub: string; demo: string; discuss: string; integration: string; note: string; shotAlt: string; chat: { in: string; out: string; slots: string[]; request: string } };
-  agent: {
-    eyebrow: string;
-    title: string;
-    value: string;
-    stages: { t: string; d: string }[];
-    chat: { from: 'in' | 'out' | 'event'; text: string; stage: number; slots?: string[] }[];
-    adaptive: string;
-    facts: { t: string; d: string }[];
+  nav: { product: string; ai: string; launch: string; pricing: string; faq: string; login: string; demo: string; menu: string; terms: string; privacy: string };
+  ui: { example: string; demoData: string };
+  hero: {
+    badgeNew: string;
+    badge: string;
+    title1: string;
+    title2: string;
+    sub: string;
+    demo: string;
+    discuss: string;
+    // the app preview: a browser frame with the dashboard (demo data) and an Instagram conversation answered by the AI
+    appUrl: string;
+    stats: { label: string; value: string; delta: string; tone: 'ok' | 'warn' | 'neutral' }[];
+    nowTitle: string;
+    nowUpdated: string;
+    now: { text: string; tag: string; tone: Tone }[];
+    chat: { handle: string; status: string; time: string; in1: string; out1: string; in2: string; out2: string; slots: string[]; ai: string; input: string };
+    floatReq: { t: string; d: string };
+    floatSignal: string;
   };
-  roles: {
-    eyebrow: string;
-    title: string;
-    lead: string;
-    items: { key: string; tab: string; q: string; points: string[]; shot?: Shot; telegram?: boolean; alt: string; note?: string; extra?: { t: string; d: string } }[];
-    // the owner's Telegram: a digest and a signal, drawn as an example (the texts follow digest.service.ts and insights.service.ts)
-    telegram: { chat: string; digest: string[]; signal: string[]; hint: string };
-    sources: { title: string; cols: [string, string, string]; rows: [string, string, string][] };
-    access: string;
-  };
+  strip: { label: string; items: string[] };
+  problem: { eyebrow: string; title1: string; title2: string; lead: string; rows: { when: string; loss: string; lossD: string; fixT: string; fixD: string; icon: 'ai' | 'back' | 'bell' }[] };
   product: {
     eyebrow: string;
-    title: string;
-    tabs: { key: 'reports' | 'chats' | 'auto' | 'assistant'; tab: string; title: string; points: string[]; next: string; channels?: ChannelIconKey[]; channelNote?: string; shot?: Shot; alt: string }[];
-    // the manager's assistant: a question and the report it builds (an example; the questions are the app's own examples)
-    ask: { q: string; title: string; cols: [string, string]; rows: [string, string][]; rule: string; save: string };
-    rule: { title: string; on: string; lines: [string, string][]; text: string; history: string; results: [string, string, 'ok' | 'off'][] };
+    title1: string;
+    title2: string;
+    lead: string;
+    hub: { sources: { key: 'web' | ChannelIconKey; name: string }[]; center: string; feedTitle: string; feed: { text: string; ch: string; tone: Tone }[]; points: string[] };
+    inbox: { t: string; d: string; rows: { ini: string; name: string; text: string; tag: string; tone: Tone }[] };
+    assistant: { t: string; q: string; rows: [string, number][]; note: string };
+    report: { t: string; d: string; cols: [string, string]; rows: [string, string][]; btn: string };
+    remind: { t: string; d: string; rules: string[] };
   };
-  connect: {
+  ai: { eyebrow: string; title1: string; title2: string; lead: string; stages: { t: string; d: string }[]; notes: string[]; modes: { k: string; t: string; d: string; accent?: boolean }[] };
+  mid: { title1: string; title2: string; cta: string };
+  team: {
     eyebrow: string;
     title: string;
-    readyTitle: string;
-    ready: { icons: ChannelIconKey[]; name: string; what: string; note?: string }[];
-    customTitle: string;
-    custom: { t: string; d: string }[];
-    // standard help with the start (part of the one-time launch), apart from the individual work
-    onboarding: { title: string; items: string[]; note: string };
-    support: { t: string; d: string; write: string; call: string };
-    journeyLabel: string;
-    journey: string[];
-    scope: string;
-    discuss: string;
+    roles: { t: string; q: string; d: string }[];
+    owner: { eyebrow: string; title: string; text: string; chips: string[]; chat: string; chatSub: string; digestT: string; digest: string[]; aiLine: string; signalT: string; signal: string; open: string };
   };
+  launch: { eyebrow: string; title1: string; title2: string; lead: string; steps: { t: string; d: string }[] };
   pricing: {
+    eyebrow: string;
     title: string;
     sub: string;
+    monthly: string;
+    yearly: string;
+    yearBadge: string;
+    yearNote: string;
     perMonth: string;
-    // from: a "from" mark before the price; note: a line under the list (the network offer is individual work, not yet a product)
-    // launch: the one-time launch and the first payment under the price; lines: the benefits first; limits: below them, smaller
-    // annual: the public annual option (12 months for 10 monthly prices, one payment) and its first payment with the launch
-    plans: { name: string; price: string; from?: string; extra?: string; launch?: string; annual?: string; lead: string; lines: string[]; limits?: string[]; note?: string; cta?: string }[];
-    cta: string;
-    // the one-time launch (2026-11-19): Start's work (lines), what Pro adds (proT, pro), when the paid month starts (next), what is quoted apart (other)
-    setup: { t: string; price: string; label: string; next: string; lines: string[]; proT: string; pro: string[]; other: string };
-    pack: { t: string; d: string };
-    custom: { t: string; d: string };
-    details: { summary: string; items: string[] };
-    noTrial: string;
+    perYear: string;
+    // {sum}: the annual price, {save}: the saving against 12 monthly payments
+    orYear: string;
+    save: string;
+    approx: string;
+    best: string;
+    // Start and Pro, in this order (the billing screen reuses name, lead and lines)
+    plans: { name: string; price: string; year: string; full: string; save: string; perMonthYear: string; lead: string; aiT: string; aiTag: string; aiD: string; aiMeta: string; alsoT: string; lines: string[]; cta: string }[];
+    compareT: string;
+    compareCols: [string, string, string];
+    // a cell: '✓', '—' or a short text; strong: the cell is a Pro advantage
+    compare: { label: string; start: string; pro: string; strong?: boolean }[];
+    pack: string;
+    launchT: string;
+    launchD: string;
+    network: { name: string; d: string; price: string; cta: string };
   };
-  trust: { title: string; items: { icon: string; t: string; d: string }[] };
-  faq: { title: string; items: { q: string; a: string }[] };
-  final: { title: string; text: string; support: string };
+  trust: { eyebrow: string; title: string; items: { t: string; d: string }[] };
+  faq: { eyebrow: string; title: string; more: string; moreLink: string; items: { q: string; a: string }[] };
+  final: { title1: string; title2: string; text: string; demo: string; formT: string };
   // the "call me back" form (POST /contact-requests): a phone, an optional name, the consent; the demo is offered while waiting
   contact: { title: string; text: string; phone: string; name: string; consent: string; privacy: string; submit: string; sending: string; done: string; demoHint: string; demo: string; error: string; close: string };
-  footer: string;
+  // the service owner's legal name (components/OwnerDetails.tsx holds the names)
+  footer: { tagline: string; product: string; clients: string; docs: string; features: string; contact: string; copyright: string; owner: { title: string } };
 }
 
 const uk: LandingText = {
-  nav: { agent: 'ШІ-адміністратор', roles: 'Для команди', product: 'Продукт', connect: 'Підключення', pricing: 'Тарифи', faq: 'Питання', login: 'Увійти', menu: 'Меню', terms: 'Умови', privacy: 'Конфіденційність' },
-  ui: { example: 'Приклад', demoData: 'Екран застосунку, демо-дані', enlarge: 'Збільшити', close: 'Закрити', next: 'Наступна дія' },
+  nav: { product: 'Продукт', ai: 'ШІ-адміністратор', launch: 'Запуск', pricing: 'Тарифи', faq: 'Питання', login: 'Увійти', demo: 'Демо за хвилину', menu: 'Меню', terms: 'Умови', privacy: 'Конфіденційність' },
+  ui: { example: 'Приклад', demoData: 'демо-дані' },
   hero: {
-    eyebrow: 'Робочий простір для стоматологічної клініки',
-    title1: 'Перетворюйте звернення на записи.',
-    title2: 'Звільняйте час команди.',
-    sub: 'ШІ-адміністратор, повідомлення пацієнтам, завдання та звіти — в одному робочому просторі. Для власника, керуючого, адміністратора й маркетолога.',
-    demo: 'Подивитися демо',
-    discuss: 'Обговорити підключення',
-    integration: 'Готове підключення Cliniccards. Допоможемо підключити наявні форми сайту. Інші системи й доробку сайту погоджуємо окремо.',
-    note: 'Демо — копія вигаданої клініки, без реєстрації.',
-    shotAlt: 'Головна сторінка LANKA: показники за період і робота, що чекає на команду',
-    chat: { in: 'Можна на гігієну в четвер після обіду?', out: 'Так, є такі варіанти:', slots: ['Чт, 14:30', 'Чт, 16:00'], request: 'Заявка на запис' },
+    badgeNew: 'Нове',
+    badge: 'ШІ-адміністратор відповідає в Instagram',
+    title1: 'Кожне звернення —',
+    title2: 'у запис.',
+    sub: 'ШІ відповідає пацієнтам у месенджерах навіть уночі, нагадує про візити й показує власнику, де клініка втрачає гроші. Поруч із Cliniccards — без переїзду.',
+    demo: 'Відкрити демо — без реєстрації',
+    discuss: 'Обговорити запуск',
+    appUrl: 'app.lankaclinic.app · Головна · демо-дані',
+    stats: [
+      { label: 'Нові записи', value: '64', delta: '↑ було 58', tone: 'ok' },
+      { label: 'Прийоми', value: '86', delta: 'за тиждень', tone: 'neutral' },
+      { label: 'Неявки', value: '7', delta: '↑ було 5', tone: 'warn' },
+    ],
+    nowTitle: 'Потрібна дія зараз',
+    nowUpdated: 'оновлено щойно',
+    now: [
+      { text: 'ШІ підготував заявку: гігієна, чт 14:30', tag: 'Instagram', tone: 'ai' },
+      { text: '2 заявки чекають понад 4 години', tag: 'Сигнал', tone: 'warn' },
+      { text: '12 пацієнтів без наступного запису', tag: 'Звіт', tone: 'ok' },
+    ],
+    chat: {
+      handle: 'olena.k',
+      status: 'Instagram · активна щойно',
+      time: 'Сьогодні 23:12',
+      in1: 'Скільки коштує чистка? Трохи боюся',
+      out1: 'Розумію, так буває в багатьох. Скажіть про це лікарю на початку — він працюватиме у вашому темпі. Професійна гігієна — 1 400 грн. Підібрати зручний час?',
+      in2: 'Так, у четвер',
+      out2: 'Є вільні: чт 14:30 або 16:00',
+      slots: ['14:30', '16:00'],
+      ai: 'Відповідає ШІ-адміністратор LANKA',
+      input: 'Повідомлення…',
+    },
+    floatReq: { t: 'Нова заявка на запис', d: 'о 23:12 · поки адміністратор спав' },
+    floatSignal: 'Сигнал: неявки 27% ↑',
   },
-  agent: {
-    eyebrow: 'ШІ-адміністратор',
-    title: 'ШІ-адміністратор, який веде пацієнта від запитання до запису',
-    value: 'Допомагайте зверненням доходити до запису без ручної відповіді на кожне типове запитання.',
-    stages: [
-      { t: 'Звернення', d: 'Розуміє, про що питають' },
-      { t: 'Потреба', d: 'Уточнює послугу, якщо треба' },
-      { t: 'Запитання й сумніви', d: 'Ціна, страх, вагання — лише затвердженими відповідями' },
-      { t: 'Вибір часу', d: 'Вільний час перевіряється в розкладі' },
-      { t: 'Запис', d: 'Заявка адміністратору або запис, де це ввімкнено' },
+  strip: { label: 'Працює з тим, що у вас уже є', items: ['Cliniccards', 'Instagram', 'Telegram', 'Messenger', 'Форми сайту', 'Excel і PDF'] },
+  problem: {
+    eyebrow: '01 — Де губляться пацієнти',
+    title1: 'Клініка втрачає пацієнтів не в кріслі, а',
+    title2: 'між повідомленнями.',
+    lead: 'Три тихі ситуації, які щотижня трапляються майже в кожній клініці — і що з ними робить LANKA.',
+    rows: [
+      { when: '23:12', loss: 'Повідомлення в Instagram уночі', lossD: 'Відповідь зранку — пацієнт уже записався деінде.', fixT: 'З LANKA: ШІ відповідає одразу', fixD: 'Називає затверджену ціну, пропонує вільний час і готує заявку до ранку.', icon: 'ai' },
+      { when: 'Пн', loss: 'Пацієнтка скасувала візит', lossD: 'Ніхто не передзвонив, і вона не повернулася.', fixT: 'З LANKA: вона в списку на дзвінок', fixD: 'Скасування без нового запису видно одразу, завдання адміністратору — в один клік.', icon: 'back' },
+      { when: '30+ дн.', loss: 'Лікування почали, але не закінчили', lossD: 'Наступного запису немає, і про план ніхто не нагадав.', fixT: 'З LANKA: сигнал керівнику', fixD: 'Коли таких пацієнтів більше за поріг — повідомлення в службовий Telegram.', icon: 'bell' },
     ],
-    chat: [
-      { from: 'in', stage: 0, text: 'Добрий день! Скільки коштує чистка зубів?' },
-      { from: 'out', stage: 1, text: 'Добрий день! Професійна гігієна — 1 400 грн, триває близько години. Вам потрібна саме гігієна чи ще й огляд лікаря?' },
-      { from: 'in', stage: 2, text: 'Гігієна. Чесно кажучи, трохи боюся — минулого разу було неприємно.' },
-      { from: 'out', stage: 2, text: 'Розумію. Про це можна сказати лікарю на початку — процедуру проведуть у зручному для вас темпі. Підібрати час?' },
-      { from: 'in', stage: 3, text: 'Так, на цьому тижні після обіду.' },
-      { from: 'out', stage: 3, text: 'Є такі варіанти:', slots: ['Чт, 14:30', 'Чт, 16:00', 'Пт, 15:00'] },
-      { from: 'in', stage: 3, text: 'Чт, 14:30' },
-      { from: 'event', stage: 4, text: 'Заявка: професійна гігієна, чт 14:30 — підтвердження адміністратором' },
-    ],
-    adaptive: 'Це не анкета. Пацієнт, який одразу пише «запишіть мене на четвер», переходить до вибору часу. Хто питає лише ціну, отримує ціну без нав’язування запису.',
-    facts: [
-      { t: 'Людина поруч', d: 'Медичні питання, скарги, знижки й прохання покликати людину ШІ одразу передає адміністратору.' },
-      { t: 'Вмикається поступово', d: 'Спершу ШІ готує чернетки, які надсилає людина. На «Про» клініка сама вмикає самостійні відповіді після налаштування — для обраних послуг.' },
-      { t: 'Канали', d: 'Самостійно відповідає в Instagram, Facebook Messenger і Telegram — після того як клініка ввімкне його на «Про».' },
-      { t: 'Заявка — ще не запис', d: 'Запис у Cliniccards створюється лише там, де це ввімкнено для клініки; інакше адміністратор вносить його за готовою заявкою. Змінити чи скасувати ШІ може лише запис, створений у цій самій розмові.' },
-    ],
-  },
-  roles: {
-    eyebrow: 'Один продукт — чотири ролі',
-    title: 'Користь для всієї команди',
-    lead: 'Власник бачить результат, керуючий — що чекає на команду, адміністратор встигає відповісти всім, а маркетолог розуміє, звідки приходять звернення.',
-    items: [
-      { key: 'owner', tab: 'Власнику', q: 'Де клініка може заробити більше — і на що звернути увагу?', points: ['Хто був на прийомі й не записався знову — списком', 'Записи, оплати, борги й незавершене лікування у звітах', 'Скільки пацієнтів записалися й прийшли після повідомлень'], telegram: true, extra: { t: 'Важливе про клініку — у вашому Telegram', d: 'Зведення щотижня або щодня (тариф «Про»): прийоми, неявки, записи, оплати порівняно з минулим періодом і що чекає уваги. Сигнали (тариф «Про») — коли неявок і скасувань забагато, завершених візитів стало помітно менше чи заявки довго без відповіді.' }, alt: 'Приклад зведення й сигналу в Telegram', note: '«Після повідомлення» — збіг у часі протягом 14 днів, а не доказ, що саме повідомлення привело пацієнта.' },
-      { key: 'manager', tab: 'Керуючому', q: 'Що зараз чекає на команду?', points: ['Нові заявки, повідомлення на погодження й відкриті завдання — на головній', 'Сигнал у службовий чат, якщо заявки чекають відповіді понад 4 години', 'Завдання для адміністратора з будь-якого списку пацієнтів', 'Оцінки пацієнтів після візиту й результати повідомлень'], shot: 'now', alt: 'Блок «Потрібна дія зараз»: завдання, заявки, погодження' },
-      { key: 'admin', tab: 'Адміністратору', q: 'Як встигнути відповісти всім?', points: ['Розмови з Telegram, Instagram і Messenger в одному списку', 'Чернетка ШІ на типове запитання: перевірити й надіслати', 'Заявки на запис, перенесення й скасування з кнопками дій'], shot: 'inbox', alt: 'Список розмов із позначкою каналу' },
-      { key: 'marketing', tab: 'Маркетологу та SEO', q: 'Звідки приходять звернення і де вони зупиняються?', points: ['Журнал звернень: канал і джерело кожного звернення', 'Воронка: картка → запис → візит → лікування, за джерелами з Cliniccards', 'Вивантаження звітів у Excel для власного аналізу'], alt: 'Приклад: звернення й записи за джерелами' },
-    ],
-    telegram: { chat: 'LANKA', digest: ['Дайджест клініки «Усмішка»', 'Минулий тиждень', '', 'Прийоми: проведено 86 (було 91), неявки 7 (було 5)', 'Нових записів: 64 (було 58)', 'Записано на 7 днів: 72 (підтвердили: 41)', '', 'Увага', '• Є заявки без відповіді: 2', '• Записів минулих днів без підсумку: 3'], signal: ['Сигнал: за останні 7 дн. скасувань і неявок 27% від візитів (поріг 25%).', 'Відкрити: аналітика'], hint: 'Ви бачите не лише цифри — ви отримуєте підказку, на що звернути увагу.' },
-    sources: { title: 'Звернення за джерелами', cols: ['Джерело', 'Звернення', 'Записались'], rows: [['Instagram', '24', '9'], ['Google', '15', '7'], ['Сайт', '11', '4']] },
-    access: 'Права доступу — за наявними ролями (власник, керуючий, адміністратор, аналітик, лікар). Окремої ролі для маркетолога немає.',
   },
   product: {
-    eyebrow: 'Продукт',
-    title: 'Звіти, розмови й нагадування — в одному місці',
-    tabs: [
-      { key: 'reports', tab: 'Звіти та результати', title: 'Бачте, з ким варто відновити зв’язок', points: ['9 готових звітів і конструктор власних', 'Правило розрахунку й дата даних — у кожного звіту', 'Excel, PDF, CSV і звіти за розкладом на пошту'], next: 'Знайти пацієнтів без наступного запису й одним кліком створити завдання адміністратору.', shot: 'report', alt: 'Звіт «Немає наступного запису після візиту» з кнопкою створення завдань' },
-      { key: 'chats', tab: 'Листування та заявки', title: 'Жодне звернення не губиться між каналами', points: ['Канал видно в кожній розмові', 'Заявки на запис, перенесення й питання для людини — в окремому списку', 'Позначка «Внесено в Cliniccards» закриває заявку'], next: 'Відкрити заявку, перейти в діалог і відповісти пацієнту в тому ж каналі.', channels: ['telegram', 'instagram', 'messenger'], shot: 'requests', alt: 'Заявки адміністратору: запис, перенесення, питання для людини' },
-      { key: 'auto', tab: 'Нагадування й розсилки', title: 'Підтримуйте зв’язок без ручного надсилання', points: ['Готові правила: нагадування, після неявки, гігієна, «давно не були», подяка й оцінка', 'Перед нагадуванням запис звіряється з Cliniccards — зі старим часом нічого не піде', 'Історія з причиною: надіслано, скасовано чи не вдалося'], next: 'Увімкнути нагадування, налаштувати текст і час, переглянути результат в історії.', channels: ['telegram', 'instagram'], channelNote: 'Нагадування — у Telegram; в Instagram лише протягом 24 годин після повідомлення пацієнта. Розсилки — тільки Telegram.', alt: 'Приклад правила нагадування та історії відправок' },
-      { key: 'assistant', tab: 'ШІ-помічник керівника', title: 'Запитайте про стан клініки своїми словами', points: ['Питання звичайною мовою — помічник складає звіт із готових показників', 'Рахує система за своїми правилами, а не ШІ; дані — за останнім оновленням', 'Звіт можна зберегти й вивантажити; гроші бачать лише ролі, яким це дозволено'], next: 'Запитати «Покажи неявки за останні 3 місяці по лікарях» і зберегти відповідь як звіт.', alt: 'Приклад: запитання помічнику й звіт' },
-    ],
-    ask: { q: 'Покажи неявки за останні 3 місяці по лікарях', title: 'Неявки за 3 місяці', cols: ['Лікар', 'Неявки'], rows: [['Іваненко', '6'], ['Петренко', '4'], ['Сидоренко', '2']], rule: 'Правило розрахунку — під звітом', save: 'Зберегти як звіт' },
-    rule: { title: 'Нагадати про візит', on: 'Увімкнено', lines: [['Коли', 'за 24 години до візиту'], ['Канал', 'Telegram'], ['Погодження', 'співробітником']], text: 'Вітаємо, {ім’я}! Нагадуємо про візит {дата} о {час}.', history: 'Історія', results: [['Олена К.', 'Надіслано', 'ok'], ['Андрій М.', 'Скасовано: запис змінено в Cliniccards', 'off']] },
-  },
-  connect: {
-    eyebrow: 'Підключення',
-    title: 'Підключимо ваші джерела звернень і налаштуємо роботу під клініку',
-    readyTitle: 'Готові підключення',
-    ready: [
-      { icons: ['cliniccards'], name: 'Cliniccards', what: 'Пацієнти, візити, плани лікування, оплати й розклад. Оновлення щодня о 03:00 і за кнопкою, вільний час перевіряється наживо.', note: 'Записи змінюються лише там, де це ввімкнено для клініки.' },
-      { icons: ['telegram'], name: 'Telegram', what: 'Бот клініки: розмови, заявки, нагадування, розсилки й службовий чат.', note: 'Пацієнт сам запускає бота — через QR-код чи посилання.' },
-      { icons: ['instagram', 'messenger'], name: 'Instagram і Messenger', what: 'Розмови в Direct і на сторінці клініки, ШІ-адміністратор.', note: 'Тариф «Про». Підключення залежить від дозволів Meta.' },
-      { icons: ['email'], name: 'Email', what: 'Звіти за розкладом і службові листи.' },
-    ],
-    customTitle: 'Індивідуальне налаштування',
-    custom: [
-      { t: 'Сайт і форми заявок', d: 'Копії прийнятих заявок із наявних форм сайту потрапляють у LANKA зі сторінкою й мітками кампанії, якщо вони доступні. Форми й далі працюють як раніше.' },
-      { t: 'Рекламні форми', d: 'Заявки з рекламних форм — там, де платформа дає доступ.' },
-      { t: 'Інша медична система', d: 'Інша система обліку чи джерело даних — за наявності API або вивантаження.' },
-      { t: 'Ваші звіти й процеси', d: 'Власні звіти, правила повідомлень і порядок роботи команди.' },
-    ],
-    onboarding: { title: 'Допоможемо налаштувати й почати роботу', items: ['Підключимо Cliniccards і завантажимо дані', 'Налаштуємо обрані канали: Telegram-бот, а на «Про» — Instagram і Messenger', 'Допоможемо підготувати знання клініки для відповідей ШІ', 'Покажемо команді, де звіти, розмови й заявки'], note: 'Входить у разовий запуск. Підключення наявних форм можна замовити в налаштуваннях. Доробку сайту, нестандартні форми й інші системи оцінюємо окремо.' },
-    support: { t: 'Підтримка, до якої можна звернутися', d: 'Допоможемо з налаштуваннями, відповімо на запитання й розберемося, якщо щось не працює.', write: 'Написати', call: 'Замовити дзвінок' },
-    journeyLabel: 'Як це має працювати із сайтом',
-    journey: ['Заявка із сайту', 'Звернення в LANKA', 'Опрацювання командою', 'Запис'],
-    scope: 'Можливість, обсяг і вартість індивідуального підключення погоджуємо після оцінки. Воно не входить у стандартний тариф.',
-    discuss: 'Обговорити підключення',
-  },
-  pricing: {
-    title: 'Тарифи',
-    sub: 'Одна ціна на клініку, без оплати за кожного пацієнта.',
-    perMonth: 'грн/міс',
-    plans: [
-      { name: 'Старт', price: '1 990', launch: '+ 4 990 грн разовий запуск · перша оплата 6 980 грн', annual: 'Або 19 900 грн/рік одним платежем — 2 місяці в подарунок · з запуском 24 890 грн', lead: 'Контроль клініки та повторних візитів.', lines: ['Готові звіти й конструктор звітів з експортом в Excel і PDF', 'Воронка пацієнтів: хто не дійшов до лікування й кому час на повторний візит', 'Заявки з форм вашого сайту в одному журналі', 'Telegram-бот: нагадування про візити, листування й чернетки відповідей ШІ', 'Щотижневе зведення для керівника'], limits: ['До 5 користувачів LANKA (облікові записи команди, не лікарі з Cliniccards)', '2 000 повідомлень пацієнтам і 500 відповідей ШІ на місяць'] },
-      { name: 'Про', price: '4 990', launch: '+ 4 990 грн разовий запуск · перша оплата 9 980 грн', annual: 'Або 49 900 грн/рік одним платежем — 2 місяці в подарунок · з запуском 54 890 грн', lead: 'Обробка звернень з ШІ та контроль роботи клініки.', lines: ['ШІ-адміністратор у Telegram, Instagram і Messenger відповідає пацієнтам і готує заявку на запис; власник вмикає його після налаштування', 'Розмови з усіх каналів в одній скриньці команди, з передачею людині', 'ШІ-помічник керівника: питання про дані клініки, відповідь звітом', 'Щоденне зведення й сигнали керівнику про відхилення'], limits: ['До 30 користувачів LANKA', '10 000 повідомлень і 3 000 відповідей ШІ на місяць', 'Instagram і Messenger — після підключення сторінок клініки в Meta'] },
-      { name: 'Мережа', price: '7 990', from: 'від', extra: '2 філіали; кожен наступний — +2 990 грн/міс', lead: 'Для клінік із кількома філіалами.', lines: ['«Про» для кожного філіалу', 'Спільна аналітика й порівняння філіалів', 'Звіти й доступи по мережі'], note: 'Індивідуальне впровадження. Склад і строки погоджуємо до оплати. Мережеві можливості ще не готові до самостійного підключення.', cta: 'Обговорити підключення' },
-    ],
-    cta: 'Обговорити підключення',
-    setup: { t: 'Разовий запуск', price: '4 990 грн', label: 'за одну клініку, однаково для «Старту» і «Про», окремо від підписки', next: 'Оплачений період (місяць або рік) починається в день запуску, який погоджуємо з клінікою, а не в день оплати. Після запуску підписка продовжується без повторної оплати запуску.', lines: ['Підключення Cliniccards вашої клініки й перевірка перших даних', 'Telegram і стандартні нагадування', 'Погоджені наявні форми одного сайту через підтримуване під’єднання', 'Одна зустріч із командою й перевірка запуску'], proT: '«Про» додатково: стандартне налаштування агента в погодженому обсязі', pro: ['Знання для ШІ-адміністратора й погоджені послуги', 'Канали, доступні в тарифі', 'Передача розмови людині й перевірка погоджених сценаріїв', 'Зведення й сигнали для керівника'], other: 'Нестандартні інтеграції, доробку сайту й власні сценарії оцінюємо окремо. Наступний філіал мережі — від 2 990 грн за тієї самої системи й типового налаштування.' },
-    pack: { t: 'Додаткові відповіді ШІ — 500 за 390 грн', d: 'Купуються в кабінеті й не згоряють.' },
-    custom: { t: 'Індивідуальне підключення', d: 'Доробка сайту, нестандартні форми, рекламні форми, інша система: ціну називаємо після оцінки.' },
-    details: {
-      summary: 'Як рахуються відповіді ШІ і що буде, коли вони закінчаться',
-      items: [
-        'Одна відповідь — це відповідь пацієнту, чернетка для адміністратора або запит до помічника керівника. Повторна спроба того самого запиту не рахується.',
-        'Спершу витрачаються відповіді тарифу (оновлюються щомісяця з оплатою), потім докуплені.',
-        'Коли відповіді закінчуються, ШІ стає на паузу до нового періоду або докупівлі. Власник і керівник бачать повідомлення в кабінеті, у службовий чат Telegram приходить сповіщення, а листування веде персонал. Боргу не виникає.',
+    eyebrow: '02 — Продукт',
+    title1: 'Сайт, Instagram, Telegram, Messenger —',
+    title2: 'в одному місці.',
+    lead: 'Звернення з усіх каналів сходяться в одну стрічку, а заявки, нагадування й звіти — на одному екрані. Більше не треба перемикатися між телефоном, Direct і поштою.',
+    hub: {
+      sources: [
+        { key: 'web', name: 'Форми сайту' },
+        { key: 'instagram', name: 'Instagram' },
+        { key: 'telegram', name: 'Telegram' },
+        { key: 'messenger', name: 'Messenger' },
+      ],
+      center: 'ШІ відповідає · команда бачить',
+      feedTitle: 'Одна стрічка звернень',
+      feed: [
+        { text: 'Заявка з форми «Запис на огляд»', ch: 'Сайт', tone: 'neutral' },
+        { text: 'Скільки коштує чистка?', ch: 'Instagram', tone: 'ig' },
+        { text: 'Перенесіть мене на п’ятницю', ch: 'Telegram', tone: 'tg' },
+        { text: 'Чи працюєте в суботу?', ch: 'Messenger', tone: 'ms' },
+      ],
+      points: ['Канал видно в кожній розмові', 'Відповідь іде в той самий канал', 'Записи звіряються з Cliniccards', 'ШІ відповідає в усіх каналах — на будь-якому тарифі'],
+    },
+    inbox: {
+      t: 'Усі месенджери — в одному списку',
+      d: 'Telegram, Instagram і Messenger разом. Канал видно в кожній розмові, заявки — окремо, з кнопками дій.',
+      rows: [
+        { ini: 'ОК', name: 'Олена К.', text: 'Так, у четвер о 14:30 підходить', tag: 'Instagram', tone: 'ig' },
+        { ini: 'АМ', name: 'Андрій М.', text: 'Можна перенести на п’ятницю?', tag: 'Telegram', tone: 'tg' },
+        { ini: 'ІС', name: 'Ірина С.', text: 'Покличте, будь ласка, лікаря', tag: 'Людині', tone: 'warn' },
       ],
     },
-    noTrial: 'Безкоштовного періоду немає — замість нього демо на вигаданих даних.',
+    assistant: { t: 'Запитайте про клініку своїми словами', q: 'Покажи неявки за 3 місяці по лікарях', rows: [['Іваненко', 6], ['Петренко', 4], ['Сидоренко', 2]], note: 'Рахує система за правилами, не ШІ · тариф «Про»' },
+    report: { t: '9 готових звітів', d: 'Кому час на повторний візит — і завдання адміністратору в один клік.', cols: ['Пацієнт', 'Без запису'], rows: [['Пацієнт 1', '48 дн.'], ['Пацієнт 2', '63 дн.'], ['Пацієнт 3', '91 дн.']], btn: 'Створити завдання · 3' },
+    remind: { t: 'Нагадування самі', d: 'Перед відправкою запис звіряється з Cliniccards — зі старим часом нічого не піде.', rules: ['За 24 год до візиту', 'Після неявки', 'Час на гігієну'] },
+  },
+  ai: {
+    eyebrow: '03 — ШІ-адміністратор',
+    title1: 'Веде пацієнта по воронці продажу —',
+    title2: 'від запитання до запису.',
+    lead: 'Як досвідчений адміністратор: розуміє запит, знімає сумніви й доводить до запису. Хто одразу пише «запишіть на четвер» — переходить просто до вибору часу.',
+    stages: [
+      { t: 'Звернення', d: 'Розуміє, про що питають' },
+      { t: 'Потреба', d: 'Уточнює послугу' },
+      { t: 'Сумніви', d: 'Ціна, страх, вагання — затвердженими відповідями' },
+      { t: 'Вибір часу', d: 'Вільні вікна з розкладу наживо' },
+      { t: 'Запис', d: 'Заявка або запис у Cliniccards' },
+    ],
+    notes: ['Не анкета — підлаштовується під розмову', 'Хто питає лише ціну, отримує ціну без нав’язування', 'Нестандартне — одразу людині'],
+    modes: [
+      { k: 'Будь-який тариф · за бажанням', t: 'Чернетки для адміністратора', d: 'ШІ пише — людина перевіряє й надсилає одним натиском.' },
+      { k: 'Будь-який тариф', t: 'Самостійні відповіді', d: 'Клініка вмикає після налаштування — і вимикає будь-коли.', accent: true },
+      { k: 'Завжди', t: 'Людина поруч', d: 'Медичні питання, скарги й знижки — одразу адміністратору.' },
+    ],
+  },
+  mid: { title1: 'Подивіться на живій клініці —', title2: 'за хвилину, без реєстрації.', cta: 'Відкрити демо →' },
+  team: {
+    eyebrow: '04 — Для всієї команди',
+    title: 'Кожен бачить своє.',
+    roles: [
+      { t: 'Власник', q: 'Де заробити більше?', d: 'Хто не записався знову, оплати й борги, дайджест у Telegram.' },
+      { t: 'Керуючий', q: 'Що чекає на команду?', d: 'Заявки й завдання на головній, сигнали в службовий чат.' },
+      { t: 'Адміністратор', q: 'Як встигнути всім?', d: 'Усі месенджери разом, відповіді ШІ, заявки з кнопками.' },
+      { t: 'Маркетолог', q: 'Звідки пацієнти?', d: 'Джерело кожного звернення, воронка до візиту, Excel.' },
+    ],
+    owner: {
+      eyebrow: 'Для власника · тариф «Про»',
+      title: 'Клініка під контролем — прямо в Telegram.',
+      text: 'Щоранку — дайджест: прийоми, записи, неявки. Коли щось іде не так, LANKA пише сама: неявки, спад оплат, заявки без відповіді. Пороги ви задаєте самі.',
+      chips: ['Неявки й скасування', 'Спад оплат', 'Заявки без відповіді', 'Незавершене лікування', 'Ще 4 сигнали'],
+      chat: 'Команда клініки',
+      chatSub: 'LANKA · службовий чат',
+      digestT: 'Дайджест · вчора',
+      digest: ['Прийоми: 18 · нових записів: 14', 'Неявки: 2 · заявок без відповіді: 0'],
+      aiLine: 'ШІ підготував 9 заявок',
+      signalT: 'Сигнал',
+      signal: 'Скасовано або пропущено 27% візитів за 7 днів — поріг 25%.',
+      open: 'Відкрити звіт →',
+    },
+  },
+  launch: {
+    eyebrow: '05 — Запуск',
+    title1: 'Ви не налаштовуєте самі.',
+    title2: 'Запускаємо разом.',
+    lead: 'Разовий запуск — 4 990 грн. Оплачений період починається в день запуску, а не в день оплати.',
+    steps: [
+      { t: 'Підключаємо Cliniccards', d: 'Завантажуємо пацієнтів, візити, плани лікування й оплати, перевіряємо перші дані.' },
+      { t: 'Підключаємо канали', d: 'Instagram, Telegram, Messenger і форми сайту — в одну стрічку.' },
+      { t: 'Навчаємо ШІ', d: 'Послуги, ціни, відповіді на типові питання — ви затверджуєте кожну.' },
+      { t: 'Вмикаємо й показуємо команді', d: 'Пояснюємо, де заявки, розмови й звіти. Далі — підтримка, коли потрібно.' },
+    ],
+  },
+  pricing: {
+    eyebrow: '06 — Тарифи',
+    title: 'ШІ працює на кожному тарифі.',
+    sub: 'ШІ-адміністратор сам відповідає в Instagram, Telegram і Messenger уже на «Старті». «Про» записує й переносить візити прямо в Cliniccards — адміністратору не треба нічого вносити.',
+    monthly: 'Щомісяця',
+    yearly: 'За рік',
+    yearBadge: '−2 міс.',
+    yearNote: 'Рік одним платежем — 12 місяців за ціною 10.',
+    perMonth: 'грн/міс',
+    perYear: 'грн/рік',
+    orYear: 'або {sum} грн за рік —',
+    save: 'економія {save} грн',
+    approx: '≈ {sum} грн/міс',
+    best: 'Найкращий вибір',
+    plans: [
+      {
+        name: 'Старт', price: '1 990', year: '19 900', full: '23 880', save: '3 980', perMonthYear: '1 658',
+        lead: 'ШІ відповідає сам, адміністратор підтверджує запис',
+        aiT: 'ШІ-адміністратор', aiTag: 'відповідає сам',
+        aiD: 'Відповідає пацієнтам 24/7, веде по воронці, пропонує вільний час і готує заявку — адміністратор вносить її в Cliniccards одним кліком.',
+        aiMeta: 'Instagram, Telegram, Messenger · 500 відповідей ШІ/міс',
+        alsoT: 'Також у тарифі',
+        lines: ['ШІ-адміністратор сам відповідає в Instagram, Telegram і Messenger та готує заявку на запис', 'Нагадування й розсилки в Telegram', 'Заявки з форм сайту в одному журналі', '9 звітів, конструктор, воронка пацієнтів', 'Щотижневий дайджест керівнику'],
+        cta: 'Обрати «Старт»',
+      },
+      {
+        name: 'Про', price: '4 990', year: '49 900', full: '59 880', save: '9 980', perMonthYear: '4 158',
+        lead: 'Запис без участі адміністратора',
+        aiT: 'ШІ-адміністратор Pro', aiTag: 'записує сам',
+        aiD: 'Усе зі «Старту», плюс сам створює й переносить візити в Cliniccards — пацієнт записаний ще до того, як адміністратор прийшов на роботу.',
+        aiMeta: 'Автозапис і перенесення в Cliniccards',
+        alsoT: 'Усе зі «Старту», а також',
+        lines: ['ШІ сам записує й переносить візити в Cliniccards', '3 000 відповідей ШІ на місяць', 'ШІ-помічник керівника: питання — відповідь звітом', 'Щоденний дайджест і сигнали про відхилення'],
+        cta: 'Обрати «Про»',
+      },
+    ],
+    compareT: 'Старт і Про: чим відрізняються',
+    compareCols: ['Можливість', 'Старт', 'Про'],
+    compare: [
+      { label: 'ШІ сам відповідає 24/7 в Instagram, Telegram і Messenger', start: '✓', pro: '✓' },
+      { label: 'Веде по воронці, пропонує вільний час із розкладу', start: '✓', pro: '✓' },
+      { label: 'Передає людині медичні питання, скарги й нестандартне', start: '✓', pro: '✓' },
+      { label: 'Запис у Cliniccards', start: 'заявка → адміністратор вносить', pro: 'ШІ записує сам', strong: true },
+      { label: 'Перенесення візиту', start: 'заявка адміністратору', pro: 'ШІ переносить сам', strong: true },
+      { label: 'Відповідей ШІ на місяць', start: '500', pro: '3 000' },
+      { label: 'ШІ-помічник керівника: питання — звіт', start: '—', pro: '✓' },
+      { label: 'Сигнали про відхилення й щоденний дайджест', start: '—', pro: '✓' },
+      { label: 'Користувачів', start: '5', pro: '30' },
+    ],
+    pack: 'Закінчилися відповіді — докупіть 500 за 390 грн, вони не згоряють.',
+    launchT: 'Запуск — 4 990 грн',
+    launchD: 'Разово, для «Старту» і «Про». Підключимо Cliniccards і канали, підготуємо знання для ШІ, навчимо команду. Оплачений період починається в день запуску.',
+    network: { name: 'Мережа клінік', d: '— «Про» для кожного філіалу й порівняння філіалів. Від 7 990 грн/міс за 2 філіали, +2 990 грн за кожен наступний.', price: '7 990', cta: 'Обговорити →' },
   },
   trust: {
-    title: 'Контроль залишається за клінікою',
+    eyebrow: '07 — Безпека',
+    title: 'Контроль завжди за клінікою.',
     items: [
-      { icon: 'check', t: 'Погодження', d: 'За замовчуванням повідомлення пацієнтам погоджує співробітник, а загальну відправку клініка вмикає сама.' },
-      { icon: 'users', t: 'Ролі', d: 'Кожен бачить те, що дозволяє його роль; доступ співробітника закривається одразу.' },
-      { icon: 'sparkles', t: 'Затверджені відповіді', d: 'ШІ відповідає лише за інформацією, яку затвердила клініка; ціну, не підтверджену 90 днів, не називає.' },
-      { icon: 'alert', t: 'Дані пацієнтів', d: 'Імена й телефони з бази клініки до ШІ не передаються; контакти, які пацієнт пише в чаті, маскуються. Текст звернення ШІ бачить — інакше не відповість.' },
-      { icon: 'refresh', t: 'Свіжі дані', d: 'Звіти — за щоденною копією з датою оновлення; вільний час і актуальність візиту перевіряються в момент дії.' },
-      { icon: 'settings', t: 'Захист', d: 'Двофакторний вхід, журнал дій, зашифровані ключі, дані кожної клініки окремо.' },
+      { t: 'Затверджені відповіді', d: 'ШІ відповідає лише тим, що затвердила клініка.' },
+      { t: 'Людина поруч', d: 'Медичні питання, скарги й нестандартне ШІ одразу передає адміністратору.' },
+      { t: 'Дані пацієнтів', d: 'Імена й телефони з бази клініки до ШІ не передаються.' },
+      { t: 'Захист', d: 'Двофакторний вхід, журнал дій, ролі й доступи.' },
     ],
   },
   faq: {
+    eyebrow: '08 — Питання',
     title: 'Часті питання',
+    more: 'Не знайшли відповідь?',
+    moreLink: 'Залиште номер — передзвонимо.',
     items: [
-      { q: 'Ми працюємо в Cliniccards. Чи треба щось змінювати?', a: 'Ні. Cliniccards залишається основною системою для пацієнтів, лікування й розкладу, а LANKA працює поруч. Якщо у вас інша система, оцінимо, чи можна її підключити: це залежить від доступу до її даних.' },
-      { q: 'Як LANKA допомагає з доходом і навантаженням?', a: 'Показує пацієнтів, з якими варто відновити зв’язок, допомагає не втрачати звернення з месенджерів і знімає частину ручної роботи зі звітами й нагадуваннями. Гарантованого приросту ми не обіцяємо: результат залежить від того, як команда працює з цими списками й зверненнями.' },
-      { q: 'Що ШІ робить сам, а коли потрібна людина?', a: 'ШІ відповідає за затвердженою інформацією клініки, уточнює послугу, пропонує вільний час і збирає заявку. За замовчуванням надсилає й підтверджує співробітник. Медичні питання, скарги, знижки й усе нестандартне ШІ передає людині. На тарифі «Про» клініка сама вмикає самостійні відповіді після налаштування й може вимкнути їх будь-коли.' },
-      { q: 'Які канали підтримуються?', a: 'Telegram-бот клініки, а на тарифі «Про» — Instagram і Facebook Messenger (підключення залежить від дозволів Meta). Самостійні відповіді ШІ на «Про» — в Instagram, Messenger і Telegram, після ввімкнення клінікою; на «Старті» — чернетки. Нагадування й розсилки — у Telegram; в Instagram нагадування можливе лише протягом 24 годин після повідомлення пацієнта.' },
-      { q: 'Наскільки свіжі дані?', a: 'Дані з Cliniccards оновлюються щодня о 03:00 за київським часом і будь-коли кнопкою «Оновити зараз». Вільний час для запису й актуальність візиту перед нагадуванням перевіряються в Cliniccards у момент дії.' },
-      { q: 'Що буде, коли закінчаться відповіді ШІ?', a: 'Відповіді, чернетки й помічник керівника стають на паузу до нового періоду або докупівлі пакета. Власник і керівник бачать повідомлення в кабінеті, у службовий чат Telegram приходить сповіщення, а листування продовжує персонал.' },
-      { q: 'Хто допоможе з налаштуванням і до кого звертатися потім?', a: 'Під час підключення ми налаштовуємо дані, канали й знання для ШІ та показуємо команді кабінет. Далі пишіть нам на пошту або залиште номер у формі — допоможемо з налаштуваннями й розберемося, якщо щось не працює.' },
-      { q: 'Що таке сигнали і куди вони приходять?', a: 'LANKA перевіряє вибрані показники за останніми даними: частку неявок і скасувань, падіння кількості завершених візитів порівняно з попереднім періодом і заявки, що довго чекають відповіді. Коли показник перевищує поріг, сигнал приходить у службовий чат Telegram і листом власнику, не частіше разу на добу. Сигнали вмикаються в налаштуваннях і входять у тариф «Про». Сигнал підказує, куди подивитися, але не пояснює причину.' },
-      { q: 'Чи можна підключити наш сайт або іншу систему?', a: 'Так. «Старт» і «Про» включають пересилання копій заявок із наявних форм сайту. Опцію підключення можна замовити в налаштуваннях. Сайт має підтримувати серверне пересилання після прийняття заявки або код, що отримує підтвердження від форми. Доробку сайту, нестандартну форму чи іншу систему оцінюємо окремо.' },
+      { q: 'Ми працюємо в Cliniccards. Що треба змінювати?', a: 'Нічого. Cliniccards лишається основною системою для пацієнтів, лікування й розкладу. LANKA працює поруч і щодня оновлює дані.' },
+      { q: 'ШІ відповідає сам. А якщо він помилиться?', a: 'ШІ відповідає лише тим, що затвердила клініка: послуги, ціни, типові відповіді. Медичні питання, скарги, знижки й усе нестандартне він одразу передає адміністратору. Самостійні відповіді можна будь-коли перемкнути на чернетки.' },
+      { q: 'Чим «Старт» відрізняється від «Про»?', a: 'На обох тарифах ШІ сам відповідає в Instagram, Telegram і Messenger та готує заявку. На «Старті» запис у Cliniccards вносить адміністратор, на «Про» ШІ записує й переносить візити сам. «Про» також додає помічника керівника, сигнали й щоденний дайджест.' },
+      { q: 'Що буде, коли закінчаться відповіді ШІ?', a: 'ШІ стане на паузу до нового періоду, а листування продовжить команда. Можна докупити 500 відповідей за 390 грн — вони не згоряють. Боргу не виникає.' },
+      { q: 'Наскільки свіжі дані?', a: 'Дані з Cliniccards оновлюються щодня о 03:00 і будь-коли кнопкою. Вільний час для запису перевіряється в розкладі в момент розмови.' },
+      { q: 'Чи є безкоштовний період?', a: 'Замість нього — демо на вигаданій клініці. Відкривається за хвилину, без реєстрації.' },
+      { q: 'Хто допоможе з налаштуванням?', a: 'Ми. Під час запуску підключимо дані й канали, підготуємо знання для ШІ та покажемо команді кабінет. Після запуску — підтримка поштою або дзвінком.' },
     ],
   },
-  final: { title: 'Подивіться, як LANKA може працювати для вашої клініки', text: 'Відкрийте демо за хвилину або залиште номер — обговоримо підключення.', support: 'Після підключення ви не залишаєтеся сам на сам: допоможемо з налаштуваннями й відповімо на запитання.' },
-  contact: { title: 'Зв’яжемося з вами', text: 'Залиште номер — зателефонуємо, розповімо про підключення й відповімо на запитання.', phone: 'Телефон', name: 'Ім’я (необов’язково)', consent: 'Погоджуюся, щоб LANKA зв’язалася зі мною щодо підключення.', privacy: 'Політика конфіденційності', submit: 'Чекаю дзвінка', sending: 'Надсилаємо…', done: 'Дякуємо! Ми зв’яжемося з вами найближчим часом.', demoHint: 'Поки чекаєте — подивіться демо: копія вигаданої клініки, без реєстрації.', demo: 'Відкрити демо', error: 'Не вдалося надіслати. Перевірте номер або напишіть нам:', close: 'Закрити' },
-  footer: '© LANKA — робочий простір для стоматологічних клінік.',
+  final: { title1: 'Наступне звернення', title2: 'не загубиться.', text: 'Демо відкривається за хвилину. Або залиште номер — розповімо, як пройде запуск у вашій клініці.', demo: 'Відкрити демо', formT: 'Передзвонимо й розкажемо про запуск' },
+  contact: { title: 'Зв’яжемося з вами', text: 'Залиште номер — зателефонуємо, розповімо про запуск і відповімо на запитання.', phone: 'Телефон', name: 'Ім’я (необов’язково)', consent: 'Погоджуюся, щоб LANKA зв’язалася зі мною щодо підключення.', privacy: 'Політика конфіденційності', submit: 'Чекаю дзвінка', sending: 'Надсилаємо…', done: 'Дякуємо! Ми зв’яжемося з вами найближчим часом.', demoHint: 'Поки чекаєте — подивіться демо: копія вигаданої клініки, без реєстрації.', demo: 'Відкрити демо', error: 'Не вдалося надіслати. Перевірте номер або напишіть нам:', close: 'Закрити' },
+  footer: { tagline: 'ШІ-адміністратор і робочий простір для стоматологічних клінік на Cliniccards.', product: 'Продукт', clients: 'Клієнтам', docs: 'Документи', features: 'Можливості', contact: 'Зв’язатися', copyright: '© LANKA, 2026', owner: { title: 'Власник сервісу LANKA' } },
 };
 
 const ru: LandingText = {
-  nav: { agent: 'ИИ-администратор', roles: 'Для команды', product: 'Продукт', connect: 'Подключение', pricing: 'Тарифы', faq: 'Вопросы', login: 'Войти', menu: 'Меню', terms: 'Условия', privacy: 'Конфиденциальность' },
-  ui: { example: 'Пример', demoData: 'Экран приложения, демо-данные', enlarge: 'Увеличить', close: 'Закрыть', next: 'Следующее действие' },
+  nav: { product: 'Продукт', ai: 'ИИ-администратор', launch: 'Запуск', pricing: 'Тарифы', faq: 'Вопросы', login: 'Войти', demo: 'Демо за минуту', menu: 'Меню', terms: 'Условия', privacy: 'Конфиденциальность' },
+  ui: { example: 'Пример', demoData: 'демо-данные' },
   hero: {
-    eyebrow: 'Рабочее пространство для стоматологической клиники',
-    title1: 'Превращайте обращения в записи.',
-    title2: 'Освобождайте время команды.',
-    sub: 'ИИ-администратор, сообщения пациентам, задачи и отчёты — в одном рабочем пространстве. Для владельца, управляющего, администратора и маркетолога.',
-    demo: 'Посмотреть демо',
-    discuss: 'Обсудить подключение',
-    integration: 'Готовое подключение Cliniccards. Поможем подключить существующие формы сайта. Другие системы и доработку сайта согласуем отдельно.',
-    note: 'Демо — копия выдуманной клиники, без регистрации.',
-    shotAlt: 'Главная страница LANKA: показатели за период и работа, которая ждёт команду',
-    chat: { in: 'Можно на гигиену в четверг после обеда?', out: 'Да, есть такие варианты:', slots: ['Чт, 14:30', 'Чт, 16:00'], request: 'Заявка на запись' },
+    badgeNew: 'Новое',
+    badge: 'ИИ-администратор отвечает в Instagram',
+    title1: 'Каждое обращение —',
+    title2: 'в запись.',
+    sub: 'ИИ отвечает пациентам в мессенджерах даже ночью, напоминает о визитах и показывает владельцу, где клиника теряет деньги. Рядом с Cliniccards — без переезда.',
+    demo: 'Открыть демо — без регистрации',
+    discuss: 'Обсудить запуск',
+    appUrl: 'app.lankaclinic.app · Главная · демо-данные',
+    stats: [
+      { label: 'Новые записи', value: '64', delta: '↑ было 58', tone: 'ok' },
+      { label: 'Приёмы', value: '86', delta: 'за неделю', tone: 'neutral' },
+      { label: 'Неявки', value: '7', delta: '↑ было 5', tone: 'warn' },
+    ],
+    nowTitle: 'Нужно действие сейчас',
+    nowUpdated: 'обновлено только что',
+    now: [
+      { text: 'ИИ подготовил заявку: гигиена, чт 14:30', tag: 'Instagram', tone: 'ai' },
+      { text: '2 заявки ждут больше 4 часов', tag: 'Сигнал', tone: 'warn' },
+      { text: '12 пациентов без следующей записи', tag: 'Отчёт', tone: 'ok' },
+    ],
+    chat: {
+      handle: 'olena.k',
+      status: 'Instagram · в сети',
+      time: 'Сегодня 23:12',
+      in1: 'Сколько стоит чистка? Немного боюсь',
+      out1: 'Понимаю, так бывает у многих. Скажите об этом врачу в начале — он будет работать в вашем темпе. Профессиональная гигиена — 1 400 грн. Подобрать удобное время?',
+      in2: 'Да, в четверг',
+      out2: 'Свободно: чт 14:30 или 16:00',
+      slots: ['14:30', '16:00'],
+      ai: 'Отвечает ИИ-администратор LANKA',
+      input: 'Сообщение…',
+    },
+    floatReq: { t: 'Новая заявка на запись', d: 'в 23:12 · пока администратор спал' },
+    floatSignal: 'Сигнал: неявки 27% ↑',
   },
-  agent: {
-    eyebrow: 'ИИ-администратор',
-    title: 'ИИ-администратор, который ведёт пациента от вопроса до записи',
-    value: 'Помогайте обращениям доходить до записи без ручного ответа на каждый типовой вопрос.',
-    stages: [
-      { t: 'Обращение', d: 'Понимает, о чём спрашивают' },
-      { t: 'Потребность', d: 'Уточняет услугу, если нужно' },
-      { t: 'Вопросы и сомнения', d: 'Цена, страх, колебания — только утверждёнными ответами' },
-      { t: 'Выбор времени', d: 'Свободное время проверяется в расписании' },
-      { t: 'Запись', d: 'Заявка администратору или запись, где это включено' },
+  strip: { label: 'Работает с тем, что у вас уже есть', items: ['Cliniccards', 'Instagram', 'Telegram', 'Messenger', 'Формы сайта', 'Excel и PDF'] },
+  problem: {
+    eyebrow: '01 — Где теряются пациенты',
+    title1: 'Клиника теряет пациентов не в кресле, а',
+    title2: 'между сообщениями.',
+    lead: 'Три тихие ситуации, которые каждую неделю случаются почти в каждой клинике, — и что с ними делает LANKA.',
+    rows: [
+      { when: '23:12', loss: 'Сообщение в Instagram ночью', lossD: 'Ответ утром — пациент уже записался в другом месте.', fixT: 'С LANKA: ИИ отвечает сразу', fixD: 'Называет утверждённую цену, предлагает свободное время и готовит заявку к утру.', icon: 'ai' },
+      { when: 'Пн', loss: 'Пациентка отменила визит', lossD: 'Никто не перезвонил, и она не вернулась.', fixT: 'С LANKA: она в списке на звонок', fixD: 'Отмена без новой записи видна сразу, задача администратору — в один клик.', icon: 'back' },
+      { when: '30+ дн.', loss: 'Лечение начали, но не закончили', lossD: 'Следующей записи нет, и о плане никто не напомнил.', fixT: 'С LANKA: сигнал руководителю', fixD: 'Когда таких пациентов больше порога — сообщение в служебный Telegram.', icon: 'bell' },
     ],
-    chat: [
-      { from: 'in', stage: 0, text: 'Добрый день! Сколько стоит чистка зубов?' },
-      { from: 'out', stage: 1, text: 'Добрый день! Профессиональная гигиена — 1 400 грн, длится около часа. Вам нужна именно гигиена или ещё и осмотр врача?' },
-      { from: 'in', stage: 2, text: 'Гигиена. Честно говоря, немного боюсь — в прошлый раз было неприятно.' },
-      { from: 'out', stage: 2, text: 'Понимаю. Об этом можно сказать врачу в начале — процедуру проведут в удобном для вас темпе. Подобрать время?' },
-      { from: 'in', stage: 3, text: 'Да, на этой неделе после обеда.' },
-      { from: 'out', stage: 3, text: 'Есть такие варианты:', slots: ['Чт, 14:30', 'Чт, 16:00', 'Пт, 15:00'] },
-      { from: 'in', stage: 3, text: 'Чт, 14:30' },
-      { from: 'event', stage: 4, text: 'Заявка: профессиональная гигиена, чт 14:30 — подтверждение администратором' },
-    ],
-    adaptive: 'Это не анкета. Пациент, который сразу пишет «запишите меня на четверг», переходит к выбору времени. Кто спрашивает только цену, получает цену без навязывания записи.',
-    facts: [
-      { t: 'Человек рядом', d: 'Медицинские вопросы, жалобы, скидки и просьбы позвать человека ИИ сразу передаёт администратору.' },
-      { t: 'Включается постепенно', d: 'Сначала ИИ готовит черновики, которые отправляет человек. На «Про» клиника сама включает самостоятельные ответы после настройки — для выбранных услуг.' },
-      { t: 'Каналы', d: 'Самостоятельно отвечает в Instagram, Facebook Messenger и Telegram — после того как клиника включит его на «Про».' },
-      { t: 'Заявка — ещё не запись', d: 'Запись в Cliniccards создаётся только там, где это включено для клиники; иначе администратор вносит её по готовой заявке. Изменить или отменить ИИ может только запись, созданную в этом же разговоре.' },
-    ],
-  },
-  roles: {
-    eyebrow: 'Один продукт — четыре роли',
-    title: 'Польза для всей команды',
-    lead: 'Владелец видит результат, управляющий — что ждёт команду, администратор успевает ответить всем, а маркетолог понимает, откуда приходят обращения.',
-    items: [
-      { key: 'owner', tab: 'Владельцу', q: 'Где клиника может заработать больше — и на что обратить внимание?', points: ['Кто был на приёме и не записался снова — списком', 'Записи, оплаты, долги и незавершённое лечение в отчётах', 'Сколько пациентов записались и пришли после сообщений'], telegram: true, extra: { t: 'Важное о клинике — в вашем Telegram', d: 'Сводка еженедельно или ежедневно (тариф «Про»): приёмы, неявки, записи, оплаты в сравнении с прошлым периодом и что ждёт внимания. Сигналы (тариф «Про») — когда неявок и отмен слишком много, завершённых визитов стало заметно меньше или заявки долго без ответа.' }, alt: 'Пример сводки и сигнала в Telegram', note: '«После сообщения» — совпадение во времени в течение 14 дней, а не доказательство, что именно сообщение привело пациента.' },
-      { key: 'manager', tab: 'Управляющему', q: 'Что сейчас ждёт команду?', points: ['Новые заявки, сообщения на согласование и открытые задачи — на главной', 'Сигнал в служебный чат, если заявки ждут ответа больше 4 часов', 'Задачи для администратора из любого списка пациентов', 'Оценки пациентов после визита и результаты сообщений'], shot: 'now', alt: 'Блок «Требуется действие сейчас»: задачи, заявки, согласования' },
-      { key: 'admin', tab: 'Администратору', q: 'Как успеть ответить всем?', points: ['Разговоры из Telegram, Instagram и Messenger в одном списке', 'Черновик ИИ на типовой вопрос: проверить и отправить', 'Заявки на запись, перенос и отмену с кнопками действий'], shot: 'inbox', alt: 'Список разговоров с отметкой канала' },
-      { key: 'marketing', tab: 'Маркетологу и SEO', q: 'Откуда приходят обращения и где они останавливаются?', points: ['Журнал обращений: канал и источник каждого обращения', 'Воронка: карточка → запись → визит → лечение, по источникам из Cliniccards', 'Выгрузка отчётов в Excel для собственного анализа'], alt: 'Пример: обращения и записи по источникам' },
-    ],
-    telegram: { chat: 'LANKA', digest: ['Дайджест клиники «Улыбка»', 'Прошлая неделя', '', 'Приёмы: проведено 86 (было 91), неявки 7 (было 5)', 'Новых записей: 64 (было 58)', 'Записано на 7 дней: 72 (подтвердили: 41)', '', 'Внимание', '• Есть заявки без ответа: 2', '• Записей прошлых дней без итога: 3'], signal: ['Сигнал: за последние 7 дн. отмен и неявок 27% от визитов (порог 25%).', 'Открыть: аналитика'], hint: 'Вы видите не только цифры — вы получаете подсказку, на что обратить внимание.' },
-    sources: { title: 'Обращения по источникам', cols: ['Источник', 'Обращения', 'Записались'], rows: [['Instagram', '24', '9'], ['Google', '15', '7'], ['Сайт', '11', '4']] },
-    access: 'Права доступа — по существующим ролям (владелец, управляющий, администратор, аналитик, врач). Отдельной роли для маркетолога нет.',
   },
   product: {
-    eyebrow: 'Продукт',
-    title: 'Отчёты, разговоры и напоминания — в одном месте',
-    tabs: [
-      { key: 'reports', tab: 'Отчёты и результаты', title: 'Видьте, с кем стоит восстановить связь', points: ['9 готовых отчётов и конструктор собственных', 'Правило расчёта и дата данных — у каждого отчёта', 'Excel, PDF, CSV и отчёты по расписанию на почту'], next: 'Найти пациентов без следующей записи и одним кликом создать задачи администратору.', shot: 'report', alt: 'Отчёт «Нет следующей записи после визита» с кнопкой создания задач' },
-      { key: 'chats', tab: 'Переписка и заявки', title: 'Ни одно обращение не теряется между каналами', points: ['Канал виден в каждом разговоре', 'Заявки на запись, перенос и вопросы для человека — в отдельном списке', 'Отметка «Внесено в Cliniccards» закрывает заявку'], next: 'Открыть заявку, перейти в диалог и ответить пациенту в том же канале.', channels: ['telegram', 'instagram', 'messenger'], shot: 'requests', alt: 'Заявки администратору: запись, перенос, вопрос для человека' },
-      { key: 'auto', tab: 'Напоминания и рассылки', title: 'Поддерживайте связь без ручной отправки', points: ['Готовые правила: напоминание, после неявки, гигиена, «давно не были», благодарность и оценка', 'Перед напоминанием запись сверяется с Cliniccards — со старым временем ничего не уйдёт', 'История с причиной: отправлено, отменено или не удалось'], next: 'Включить напоминание, настроить текст и время, посмотреть результат в истории.', channels: ['telegram', 'instagram'], channelNote: 'Напоминания — в Telegram; в Instagram только в течение 24 часов после сообщения пациента. Рассылки — только Telegram.', alt: 'Пример правила напоминания и истории отправок' },
-      { key: 'assistant', tab: 'ИИ-помощник руководителя', title: 'Спросите о состоянии клиники своими словами', points: ['Вопрос обычным языком — помощник составляет отчёт из готовых показателей', 'Считает система по своим правилам, а не ИИ; данные — по последнему обновлению', 'Отчёт можно сохранить и выгрузить; деньги видят только роли, которым это разрешено'], next: 'Спросить «Покажи неявки за последние 3 месяца по врачам» и сохранить ответ как отчёт.', alt: 'Пример: вопрос помощнику и отчёт' },
-    ],
-    ask: { q: 'Покажи неявки за последние 3 месяца по врачам', title: 'Неявки за 3 месяца', cols: ['Врач', 'Неявки'], rows: [['Иваненко', '6'], ['Петренко', '4'], ['Сидоренко', '2']], rule: 'Правило расчёта — под отчётом', save: 'Сохранить как отчёт' },
-    rule: { title: 'Напомнить о визите', on: 'Включено', lines: [['Когда', 'за 24 часа до визита'], ['Канал', 'Telegram'], ['Согласование', 'сотрудником']], text: 'Здравствуйте, {имя}! Напоминаем о визите {дата} в {время}.', history: 'История', results: [['Елена К.', 'Отправлено', 'ok'], ['Андрей М.', 'Отменено: запись изменена в Cliniccards', 'off']] },
-  },
-  connect: {
-    eyebrow: 'Подключение',
-    title: 'Подключим ваши источники обращений и настроим работу под клинику',
-    readyTitle: 'Готовые подключения',
-    ready: [
-      { icons: ['cliniccards'], name: 'Cliniccards', what: 'Пациенты, визиты, планы лечения, оплаты и расписание. Обновление ежедневно в 03:00 и по кнопке, свободное время проверяется вживую.', note: 'Записи меняются только там, где это включено для клиники.' },
-      { icons: ['telegram'], name: 'Telegram', what: 'Бот клиники: разговоры, заявки, напоминания, рассылки и служебный чат.', note: 'Пациент сам запускает бота — через QR-код или ссылку.' },
-      { icons: ['instagram', 'messenger'], name: 'Instagram и Messenger', what: 'Разговоры в Direct и на странице клиники, ИИ-администратор.', note: 'Тариф «Про». Подключение зависит от разрешений Meta.' },
-      { icons: ['email'], name: 'Email', what: 'Отчёты по расписанию и служебные письма.' },
-    ],
-    customTitle: 'Индивидуальная настройка',
-    custom: [
-      { t: 'Сайт и формы заявок', d: 'Копии принятых заявок из существующих форм сайта поступают в LANKA со страницей и метками кампании, если они доступны. Формы продолжают работать как раньше.' },
-      { t: 'Рекламные формы', d: 'Заявки из рекламных форм — там, где платформа даёт доступ.' },
-      { t: 'Другая медицинская система', d: 'Другая система учёта или источник данных — при наличии API или выгрузки.' },
-      { t: 'Ваши отчёты и процессы', d: 'Собственные отчёты, правила сообщений и порядок работы команды.' },
-    ],
-    onboarding: { title: 'Поможем настроить и начать работу', items: ['Подключим Cliniccards и загрузим данные', 'Настроим выбранные каналы: Telegram-бот, а на «Про» — Instagram и Messenger', 'Поможем подготовить знания клиники для ответов ИИ', 'Покажем команде, где отчёты, разговоры и заявки'], note: 'Входит в разовый запуск. Подключение существующих форм можно заказать в настройках. Доработку сайта, нестандартные формы и другие системы оцениваем отдельно.' },
-    support: { t: 'Поддержка, к которой можно обратиться', d: 'Поможем с настройками, ответим на вопросы и разберёмся, если что-то не работает.', write: 'Написать', call: 'Заказать звонок' },
-    journeyLabel: 'Как это должно работать с сайтом',
-    journey: ['Заявка с сайта', 'Обращение в LANKA', 'Обработка командой', 'Запись'],
-    scope: 'Возможность, объём и стоимость индивидуального подключения согласуем после оценки. Оно не входит в стандартный тариф.',
-    discuss: 'Обсудить подключение',
-  },
-  pricing: {
-    title: 'Тарифы',
-    sub: 'Одна цена на клинику, без оплаты за каждого пациента.',
-    perMonth: 'грн/мес',
-    plans: [
-      { name: 'Старт', price: '1 990', launch: '+ 4 990 грн разовый запуск · первая оплата 6 980 грн', annual: 'Или 19 900 грн/год одним платежом — 2 месяца в подарок · с запуском 24 890 грн', lead: 'Контроль клиники и повторных визитов.', lines: ['Готовые отчёты и конструктор отчётов с экспортом в Excel и PDF', 'Воронка пациентов: кто не дошёл до лечения и кому пора на повторный визит', 'Заявки из форм вашего сайта в одном журнале', 'Telegram-бот: напоминания о визитах, переписка и черновики ответов ИИ', 'Еженедельная сводка для руководителя'], limits: ['До 5 пользователей LANKA (учётные записи команды, не врачи из Cliniccards)', '2 000 сообщений пациентам и 500 ответов ИИ в месяц'] },
-      { name: 'Про', price: '4 990', launch: '+ 4 990 грн разовый запуск · первая оплата 9 980 грн', annual: 'Или 49 900 грн/год одним платежом — 2 месяца в подарок · с запуском 54 890 грн', lead: 'Обработка обращений с ИИ и контроль работы клиники.', lines: ['ИИ-администратор в Telegram, Instagram и Messenger отвечает пациентам и готовит заявку на запись; владелец включает его после настройки', 'Разговоры из всех каналов в одном ящике команды, с передачей человеку', 'ИИ-помощник руководителя: вопрос о данных клиники, ответ отчётом', 'Ежедневная сводка и сигналы руководителю об отклонениях'], limits: ['До 30 пользователей LANKA', '10 000 сообщений и 3 000 ответов ИИ в месяц', 'Instagram и Messenger — после подключения страниц клиники в Meta'] },
-      { name: 'Сеть', price: '7 990', from: 'от', extra: '2 филиала; каждый следующий — +2 990 грн/мес', lead: 'Для клиник с несколькими филиалами.', lines: ['«Про» для каждого филиала', 'Общая аналитика и сравнение филиалов', 'Отчёты и доступы по сети'], note: 'Индивидуальное внедрение. Состав и сроки согласуем до оплаты. Сетевые возможности ещё не готовы к самостоятельному подключению.', cta: 'Обсудить подключение' },
-    ],
-    cta: 'Обсудить подключение',
-    setup: { t: 'Разовый запуск', price: '4 990 грн', label: 'за одну клинику, одинаково для «Старта» и «Про», отдельно от подписки', next: 'Оплаченный период (месяц или год) начинается в день запуска, который согласуем с клиникой, а не в день оплаты. После запуска подписка продлевается без повторной оплаты запуска.', lines: ['Подключение Cliniccards вашей клиники и проверка первых данных', 'Telegram и стандартные напоминания', 'Согласованные существующие формы одного сайта через поддерживаемое подключение', 'Одна встреча с командой и проверка запуска'], proT: '«Про» дополнительно: стандартная настройка агента в согласованном объёме', pro: ['Знания для ИИ-администратора и согласованные услуги', 'Каналы, доступные в тарифе', 'Передача разговора человеку и проверка согласованных сценариев', 'Сводка и сигналы для руководителя'], other: 'Нестандартные интеграции, доработку сайта и собственные сценарии оцениваем отдельно. Следующий филиал сети — от 2 990 грн при той же системе и типовой настройке.' },
-    pack: { t: 'Дополнительные ответы ИИ — 500 за 390 грн', d: 'Покупаются в кабинете и не сгорают.' },
-    custom: { t: 'Индивидуальное подключение', d: 'Доработка сайта, нестандартные формы, рекламные формы, другая система: цену называем после оценки.' },
-    details: {
-      summary: 'Как считаются ответы ИИ и что будет, когда они закончатся',
-      items: [
-        'Один ответ — это ответ пациенту, черновик для администратора или запрос к помощнику руководителя. Повторная попытка того же запроса не считается.',
-        'Сначала расходуются ответы тарифа (обновляются ежемесячно с оплатой), затем докупленные.',
-        'Когда ответы заканчиваются, ИИ встаёт на паузу до нового периода или докупки. Владелец и руководитель видят сообщение в кабинете, в служебный чат Telegram приходит уведомление, а переписку ведёт персонал. Долга не возникает.',
+    eyebrow: '02 — Продукт',
+    title1: 'Сайт, Instagram, Telegram, Messenger —',
+    title2: 'в одном месте.',
+    lead: 'Обращения из всех каналов сходятся в одну ленту, а заявки, напоминания и отчёты — на одном экране. Больше не нужно переключаться между телефоном, Direct и почтой.',
+    hub: {
+      sources: [
+        { key: 'web', name: 'Формы сайта' },
+        { key: 'instagram', name: 'Instagram' },
+        { key: 'telegram', name: 'Telegram' },
+        { key: 'messenger', name: 'Messenger' },
+      ],
+      center: 'ИИ отвечает · команда видит',
+      feedTitle: 'Одна лента обращений',
+      feed: [
+        { text: 'Заявка с формы «Запись на осмотр»', ch: 'Сайт', tone: 'neutral' },
+        { text: 'Сколько стоит чистка?', ch: 'Instagram', tone: 'ig' },
+        { text: 'Перенесите меня на пятницу', ch: 'Telegram', tone: 'tg' },
+        { text: 'Работаете в субботу?', ch: 'Messenger', tone: 'ms' },
+      ],
+      points: ['Канал виден в каждом разговоре', 'Ответ уходит в тот же канал', 'Записи сверяются с Cliniccards', 'ИИ отвечает во всех каналах — на любом тарифе'],
+    },
+    inbox: {
+      t: 'Все мессенджеры — в одном списке',
+      d: 'Telegram, Instagram и Messenger вместе. Канал виден в каждом разговоре, заявки — отдельно, с кнопками действий.',
+      rows: [
+        { ini: 'ЕК', name: 'Елена К.', text: 'Да, в четверг в 14:30 подходит', tag: 'Instagram', tone: 'ig' },
+        { ini: 'АМ', name: 'Андрей М.', text: 'Можно перенести на пятницу?', tag: 'Telegram', tone: 'tg' },
+        { ini: 'ИС', name: 'Ирина С.', text: 'Позовите, пожалуйста, врача', tag: 'Человеку', tone: 'warn' },
       ],
     },
-    noTrial: 'Бесплатного периода нет — вместо него демо на выдуманных данных.',
+    assistant: { t: 'Спросите о клинике своими словами', q: 'Покажи неявки за 3 месяца по врачам', rows: [['Иваненко', 6], ['Петренко', 4], ['Сидоренко', 2]], note: 'Считает система по правилам, не ИИ · тариф «Про»' },
+    report: { t: '9 готовых отчётов', d: 'Кому пора на повторный визит — и задача администратору в один клик.', cols: ['Пациент', 'Без записи'], rows: [['Пациент 1', '48 дн.'], ['Пациент 2', '63 дн.'], ['Пациент 3', '91 дн.']], btn: 'Создать задачи · 3' },
+    remind: { t: 'Напоминания сами', d: 'Перед отправкой запись сверяется с Cliniccards — со старым временем ничего не уйдёт.', rules: ['За 24 ч до визита', 'После неявки', 'Пора на гигиену'] },
+  },
+  ai: {
+    eyebrow: '03 — ИИ-администратор',
+    title1: 'Ведёт пациента по воронке продаж —',
+    title2: 'от вопроса до записи.',
+    lead: 'Как опытный администратор: понимает запрос, снимает сомнения и доводит до записи. Кто сразу пишет «запишите на четверг» — переходит прямо к выбору времени.',
+    stages: [
+      { t: 'Обращение', d: 'Понимает, о чём спрашивают' },
+      { t: 'Потребность', d: 'Уточняет услугу' },
+      { t: 'Сомнения', d: 'Цена, страх, колебания — утверждёнными ответами' },
+      { t: 'Выбор времени', d: 'Свободные окна из расписания вживую' },
+      { t: 'Запись', d: 'Заявка или запись в Cliniccards' },
+    ],
+    notes: ['Не анкета — подстраивается под разговор', 'Кто спрашивает только цену, получает цену без навязывания', 'Нестандартное — сразу человеку'],
+    modes: [
+      { k: 'Любой тариф · по желанию', t: 'Черновики для администратора', d: 'ИИ пишет — человек проверяет и отправляет одним нажатием.' },
+      { k: 'Любой тариф', t: 'Самостоятельные ответы', d: 'Клиника включает после настройки — и выключает в любой момент.', accent: true },
+      { k: 'Всегда', t: 'Человек рядом', d: 'Медицинские вопросы, жалобы и скидки — сразу администратору.' },
+    ],
+  },
+  mid: { title1: 'Посмотрите на живой клинике —', title2: 'за минуту, без регистрации.', cta: 'Открыть демо →' },
+  team: {
+    eyebrow: '04 — Для всей команды',
+    title: 'Каждый видит своё.',
+    roles: [
+      { t: 'Владелец', q: 'Где заработать больше?', d: 'Кто не записался снова, оплаты и долги, дайджест в Telegram.' },
+      { t: 'Управляющий', q: 'Что ждёт команду?', d: 'Заявки и задачи на главной, сигналы в служебный чат.' },
+      { t: 'Администратор', q: 'Как успеть всем?', d: 'Все мессенджеры вместе, ответы ИИ, заявки с кнопками.' },
+      { t: 'Маркетолог', q: 'Откуда пациенты?', d: 'Источник каждого обращения, воронка до визита, Excel.' },
+    ],
+    owner: {
+      eyebrow: 'Для владельца · тариф «Про»',
+      title: 'Клиника под контролем — прямо в Telegram.',
+      text: 'Каждое утро — дайджест: приёмы, записи, неявки. Когда что-то идёт не так, LANKA пишет сама: неявки, спад оплат, заявки без ответа. Пороги вы задаёте сами.',
+      chips: ['Неявки и отмены', 'Спад оплат', 'Заявки без ответа', 'Незавершённое лечение', 'Ещё 4 сигнала'],
+      chat: 'Команда клиники',
+      chatSub: 'LANKA · служебный чат',
+      digestT: 'Дайджест · вчера',
+      digest: ['Приёмы: 18 · новых записей: 14', 'Неявки: 2 · заявок без ответа: 0'],
+      aiLine: 'ИИ подготовил 9 заявок',
+      signalT: 'Сигнал',
+      signal: 'Отменено или пропущено 27% визитов за 7 дней — порог 25%.',
+      open: 'Открыть отчёт →',
+    },
+  },
+  launch: {
+    eyebrow: '05 — Запуск',
+    title1: 'Вы не настраиваете сами.',
+    title2: 'Запускаем вместе.',
+    lead: 'Разовый запуск — 4 990 грн. Оплаченный период начинается в день запуска, а не в день оплаты.',
+    steps: [
+      { t: 'Подключаем Cliniccards', d: 'Загружаем пациентов, визиты, планы лечения и оплаты, проверяем первые данные.' },
+      { t: 'Подключаем каналы', d: 'Instagram, Telegram, Messenger и формы сайта — в одну ленту.' },
+      { t: 'Обучаем ИИ', d: 'Услуги, цены, ответы на типовые вопросы — вы утверждаете каждый.' },
+      { t: 'Включаем и показываем команде', d: 'Объясняем, где заявки, разговоры и отчёты. Дальше — поддержка, когда нужно.' },
+    ],
+  },
+  pricing: {
+    eyebrow: '06 — Тарифы',
+    title: 'ИИ работает на каждом тарифе.',
+    sub: 'ИИ-администратор сам отвечает в Instagram, Telegram и Messenger уже на «Старте». «Про» записывает и переносит визиты прямо в Cliniccards — администратору ничего не нужно вносить.',
+    monthly: 'Ежемесячно',
+    yearly: 'За год',
+    yearBadge: '−2 мес.',
+    yearNote: 'Год одним платежом — 12 месяцев по цене 10.',
+    perMonth: 'грн/мес',
+    perYear: 'грн/год',
+    orYear: 'или {sum} грн за год —',
+    save: 'экономия {save} грн',
+    approx: '≈ {sum} грн/мес',
+    best: 'Лучший выбор',
+    plans: [
+      {
+        name: 'Старт', price: '1 990', year: '19 900', full: '23 880', save: '3 980', perMonthYear: '1 658',
+        lead: 'ИИ отвечает сам, администратор подтверждает запись',
+        aiT: 'ИИ-администратор', aiTag: 'отвечает сам',
+        aiD: 'Отвечает пациентам 24/7, ведёт по воронке, предлагает свободное время и готовит заявку — администратор вносит её в Cliniccards одним кликом.',
+        aiMeta: 'Instagram, Telegram, Messenger · 500 ответов ИИ/мес',
+        alsoT: 'Также в тарифе',
+        lines: ['ИИ-администратор сам отвечает в Instagram, Telegram и Messenger и готовит заявку на запись', 'Напоминания и рассылки в Telegram', 'Заявки из форм сайта в одном журнале', '9 отчётов, конструктор, воронка пациентов', 'Еженедельный дайджест руководителю'],
+        cta: 'Выбрать «Старт»',
+      },
+      {
+        name: 'Про', price: '4 990', year: '49 900', full: '59 880', save: '9 980', perMonthYear: '4 158',
+        lead: 'Запись без участия администратора',
+        aiT: 'ИИ-администратор Pro', aiTag: 'записывает сам',
+        aiD: 'Всё из «Старта», плюс сам создаёт и переносит визиты в Cliniccards — пациент записан ещё до того, как администратор пришёл на работу.',
+        aiMeta: 'Автозапись и перенос в Cliniccards',
+        alsoT: 'Всё из «Старта», а также',
+        lines: ['ИИ сам записывает и переносит визиты в Cliniccards', '3 000 ответов ИИ в месяц', 'ИИ-помощник руководителя: вопрос — ответ отчётом', 'Ежедневный дайджест и сигналы об отклонениях'],
+        cta: 'Выбрать «Про»',
+      },
+    ],
+    compareT: 'Старт и Про: чем отличаются',
+    compareCols: ['Возможность', 'Старт', 'Про'],
+    compare: [
+      { label: 'ИИ сам отвечает 24/7 в Instagram, Telegram и Messenger', start: '✓', pro: '✓' },
+      { label: 'Ведёт по воронке, предлагает свободное время из расписания', start: '✓', pro: '✓' },
+      { label: 'Передаёт человеку медицинские вопросы, жалобы и нестандартное', start: '✓', pro: '✓' },
+      { label: 'Запись в Cliniccards', start: 'заявка → администратор вносит', pro: 'ИИ записывает сам', strong: true },
+      { label: 'Перенос визита', start: 'заявка администратору', pro: 'ИИ переносит сам', strong: true },
+      { label: 'Ответов ИИ в месяц', start: '500', pro: '3 000' },
+      { label: 'ИИ-помощник руководителя: вопрос — отчёт', start: '—', pro: '✓' },
+      { label: 'Сигналы об отклонениях и ежедневный дайджест', start: '—', pro: '✓' },
+      { label: 'Пользователей', start: '5', pro: '30' },
+    ],
+    pack: 'Закончились ответы — докупите 500 за 390 грн, они не сгорают.',
+    launchT: 'Запуск — 4 990 грн',
+    launchD: 'Разово, для «Старта» и «Про». Подключим Cliniccards и каналы, подготовим знания для ИИ, обучим команду. Оплаченный период начинается в день запуска.',
+    network: { name: 'Сеть клиник', d: '— «Про» для каждого филиала и сравнение филиалов. От 7 990 грн/мес за 2 филиала, +2 990 грн за каждый следующий.', price: '7 990', cta: 'Обсудить →' },
   },
   trust: {
-    title: 'Контроль остаётся за клиникой',
+    eyebrow: '07 — Безопасность',
+    title: 'Контроль всегда за клиникой.',
     items: [
-      { icon: 'check', t: 'Согласование', d: 'По умолчанию сообщения пациентам согласует сотрудник, а общую отправку клиника включает сама.' },
-      { icon: 'users', t: 'Роли', d: 'Каждый видит то, что разрешает его роль; доступ сотрудника закрывается сразу.' },
-      { icon: 'sparkles', t: 'Утверждённые ответы', d: 'ИИ отвечает только по информации, утверждённой клиникой; цену, не подтверждённую 90 дней, не называет.' },
-      { icon: 'alert', t: 'Данные пациентов', d: 'Имена и телефоны из базы клиники в ИИ не передаются; контакты, которые пациент пишет в чате, маскируются. Текст обращения ИИ видит — иначе не ответит.' },
-      { icon: 'refresh', t: 'Свежие данные', d: 'Отчёты — по ежедневной копии с датой обновления; свободное время и актуальность визита проверяются в момент действия.' },
-      { icon: 'settings', t: 'Защита', d: 'Двухфакторный вход, журнал действий, зашифрованные ключи, данные каждой клиники отдельно.' },
+      { t: 'Утверждённые ответы', d: 'ИИ отвечает только тем, что утвердила клиника.' },
+      { t: 'Человек рядом', d: 'Медицинские вопросы, жалобы и нестандартное ИИ сразу передаёт администратору.' },
+      { t: 'Данные пациентов', d: 'Имена и телефоны из базы клиники в ИИ не передаются.' },
+      { t: 'Защита', d: 'Двухфакторный вход, журнал действий, роли и доступы.' },
     ],
   },
   faq: {
+    eyebrow: '08 — Вопросы',
     title: 'Частые вопросы',
+    more: 'Не нашли ответ?',
+    moreLink: 'Оставьте номер — перезвоним.',
     items: [
-      { q: 'Мы работаем в Cliniccards. Нужно ли что-то менять?', a: 'Нет. Cliniccards остаётся основной системой для пациентов, лечения и расписания, а LANKA работает рядом. Если у вас другая система, оценим, можно ли её подключить: это зависит от доступа к её данным.' },
-      { q: 'Как LANKA помогает с доходом и нагрузкой?', a: 'Показывает пациентов, с которыми стоит восстановить связь, помогает не терять обращения из мессенджеров и снимает часть ручной работы с отчётами и напоминаниями. Гарантированного прироста мы не обещаем: результат зависит от того, как команда работает с этими списками и обращениями.' },
-      { q: 'Что ИИ делает сам, а когда нужен человек?', a: 'ИИ отвечает по утверждённой информации клиники, уточняет услугу, предлагает свободное время и собирает заявку. По умолчанию отправляет и подтверждает сотрудник. Медицинские вопросы, жалобы, скидки и всё нестандартное ИИ передаёт человеку. На тарифе «Про» клиника сама включает самостоятельные ответы после настройки и может выключить их в любой момент.' },
-      { q: 'Какие каналы поддерживаются?', a: 'Telegram-бот клиники, а на тарифе «Про» — Instagram и Facebook Messenger (подключение зависит от разрешений Meta). Самостоятельные ответы ИИ на «Про» — в Instagram, Messenger и Telegram, после включения клиникой; на «Старте» — черновики. Напоминания и рассылки — в Telegram; в Instagram напоминание возможно только в течение 24 часов после сообщения пациента.' },
-      { q: 'Насколько свежие данные?', a: 'Данные из Cliniccards обновляются ежедневно в 03:00 по киевскому времени и в любой момент кнопкой «Обновить сейчас». Свободное время для записи и актуальность визита перед напоминанием проверяются в Cliniccards в момент действия.' },
-      { q: 'Что будет, когда закончатся ответы ИИ?', a: 'Ответы, черновики и помощник руководителя встают на паузу до нового периода или докупки пакета. Владелец и руководитель видят сообщение в кабинете, в служебный чат Telegram приходит уведомление, а переписку продолжает персонал.' },
-      { q: 'Кто поможет с настройкой и к кому обращаться потом?', a: 'Во время подключения мы настраиваем данные, каналы и знания для ИИ и показываем команде кабинет. Дальше пишите нам на почту или оставьте номер в форме — поможем с настройками и разберёмся, если что-то не работает.' },
-      { q: 'Что такое сигналы и куда они приходят?', a: 'LANKA проверяет выбранные показатели по последним данным: долю неявок и отмен, падение числа завершённых визитов по сравнению с предыдущим периодом и заявки, которые долго ждут ответа. Когда показатель превышает порог, сигнал приходит в служебный чат Telegram и письмом владельцу, не чаще раза в сутки. Сигналы включаются в настройках и входят в тариф «Про». Сигнал подсказывает, куда посмотреть, но не объясняет причину.' },
-      { q: 'Можно ли подключить наш сайт или другую систему?', a: 'Да. «Старт» и «Про» включают пересылку копий заявок из существующих форм. Подключение можно заказать в настройках. Сайт должен поддерживать пересылку с сервера после принятия заявки или код, который получает подтверждение от формы. Доработку сайта, нестандартную форму или другую систему оцениваем отдельно.' },
+      { q: 'Мы работаем в Cliniccards. Что нужно менять?', a: 'Ничего. Cliniccards остаётся основной системой для пациентов, лечения и расписания. LANKA работает рядом и ежедневно обновляет данные.' },
+      { q: 'ИИ отвечает сам. А если он ошибётся?', a: 'ИИ отвечает только тем, что утвердила клиника: услуги, цены, типовые ответы. Медицинские вопросы, жалобы, скидки и всё нестандартное он сразу передаёт администратору. Самостоятельные ответы можно в любой момент переключить на черновики.' },
+      { q: 'Чем «Старт» отличается от «Про»?', a: 'На обоих тарифах ИИ сам отвечает в Instagram, Telegram и Messenger и готовит заявку. На «Старте» запись в Cliniccards вносит администратор, на «Про» ИИ записывает и переносит визиты сам. «Про» также добавляет помощника руководителя, сигналы и ежедневный дайджест.' },
+      { q: 'Что будет, когда закончатся ответы ИИ?', a: 'ИИ встанет на паузу до нового периода, а переписку продолжит команда. Можно докупить 500 ответов за 390 грн — они не сгорают. Долга не возникает.' },
+      { q: 'Насколько свежие данные?', a: 'Данные из Cliniccards обновляются ежедневно в 03:00 и в любой момент кнопкой. Свободное время для записи проверяется в расписании в момент разговора.' },
+      { q: 'Есть ли бесплатный период?', a: 'Вместо него — демо на вымышленной клинике. Открывается за минуту, без регистрации.' },
+      { q: 'Кто поможет с настройкой?', a: 'Мы. Во время запуска подключим данные и каналы, подготовим знания для ИИ и покажем команде кабинет. После запуска — поддержка по почте или звонком.' },
     ],
   },
-  final: { title: 'Посмотрите, как LANKA может работать для вашей клиники', text: 'Откройте демо за минуту или оставьте номер — обсудим подключение.', support: 'После подключения вы не остаётесь один на один: поможем с настройками и ответим на вопросы.' },
-  contact: { title: 'Свяжемся с вами', text: 'Оставьте номер — позвоним, расскажем о подключении и ответим на вопросы.', phone: 'Телефон', name: 'Имя (необязательно)', consent: 'Согласен(на), чтобы LANKA связалась со мной по поводу подключения.', privacy: 'Политика конфиденциальности', submit: 'Жду звонка', sending: 'Отправляем…', done: 'Спасибо! Мы свяжемся с вами в ближайшее время.', demoHint: 'Пока ждёте — посмотрите демо: копия выдуманной клиники, без регистрации.', demo: 'Открыть демо', error: 'Не удалось отправить. Проверьте номер или напишите нам:', close: 'Закрыть' },
-  footer: '© LANKA — рабочее пространство для стоматологических клиник.',
+  final: { title1: 'Следующее обращение', title2: 'не потеряется.', text: 'Демо открывается за минуту. Или оставьте номер — расскажем, как пройдёт запуск в вашей клинике.', demo: 'Открыть демо', formT: 'Перезвоним и расскажем о запуске' },
+  contact: { title: 'Свяжемся с вами', text: 'Оставьте номер — позвоним, расскажем о запуске и ответим на вопросы.', phone: 'Телефон', name: 'Имя (необязательно)', consent: 'Согласен(на), чтобы LANKA связалась со мной по поводу подключения.', privacy: 'Политика конфиденциальности', submit: 'Жду звонка', sending: 'Отправляем…', done: 'Спасибо! Мы свяжемся с вами в ближайшее время.', demoHint: 'Пока ждёте — посмотрите демо: копия выдуманной клиники, без регистрации.', demo: 'Открыть демо', error: 'Не удалось отправить. Проверьте номер или напишите нам:', close: 'Закрыть' },
+  footer: { tagline: 'ИИ-администратор и рабочее пространство для стоматологических клиник на Cliniccards.', product: 'Продукт', clients: 'Клиентам', docs: 'Документы', features: 'Возможности', contact: 'Связаться', copyright: '© LANKA, 2026', owner: { title: 'Владелец сервиса LANKA' } },
 };
 
 const en: LandingText = {
-  nav: { agent: 'AI front desk', roles: 'For the team', product: 'Product', connect: 'Integrations', pricing: 'Pricing', faq: 'FAQ', login: 'Sign in', menu: 'Menu', terms: 'Terms', privacy: 'Privacy' },
-  ui: { example: 'Example', demoData: 'App screen, demo data', enlarge: 'Enlarge', close: 'Close', next: 'Next step' },
+  nav: { product: 'Product', ai: 'AI administrator', launch: 'Launch', pricing: 'Pricing', faq: 'FAQ', login: 'Sign in', demo: 'Demo in a minute', menu: 'Menu', terms: 'Terms', privacy: 'Privacy' },
+  ui: { example: 'Example', demoData: 'demo data' },
   hero: {
-    eyebrow: 'A workspace for dental clinics',
-    title1: 'Turn inquiries into appointments.',
-    title2: 'Free up your team’s time.',
-    sub: 'An AI front desk, patient messages, tasks and reports in one workspace. For the owner, the manager, the front desk and marketing.',
-    demo: 'See the demo',
-    discuss: 'Discuss a connection',
-    integration: 'Ready-made Cliniccards integration. We help connect existing website forms. Other systems and website changes are quoted separately.',
-    note: 'The demo is a copy of a made-up clinic, no sign-up.',
-    shotAlt: 'LANKA home: figures for the period and the work waiting for the team',
-    chat: { in: 'Can I book a cleaning on Thursday afternoon?', out: 'Yes, these times are free:', slots: ['Thu, 14:30', 'Thu, 16:00'], request: 'Booking request' },
+    badgeNew: 'New',
+    badge: 'The AI administrator replies in Instagram',
+    title1: 'Every enquiry —',
+    title2: 'a booking.',
+    sub: 'AI replies to patients in messengers even at night, reminds them of visits and shows the owner where the clinic loses money. Next to Cliniccards — no migration.',
+    demo: 'Open the demo — no sign-up',
+    discuss: 'Discuss the launch',
+    appUrl: 'app.lankaclinic.app · Home · demo data',
+    stats: [
+      { label: 'New bookings', value: '64', delta: '↑ was 58', tone: 'ok' },
+      { label: 'Visits', value: '86', delta: 'this week', tone: 'neutral' },
+      { label: 'No-shows', value: '7', delta: '↑ was 5', tone: 'warn' },
+    ],
+    nowTitle: 'Needs action now',
+    nowUpdated: 'updated just now',
+    now: [
+      { text: 'AI prepared a request: hygiene, Thu 14:30', tag: 'Instagram', tone: 'ai' },
+      { text: '2 requests waiting over 4 hours', tag: 'Signal', tone: 'warn' },
+      { text: '12 patients with no next booking', tag: 'Report', tone: 'ok' },
+    ],
+    chat: {
+      handle: 'olena.k',
+      status: 'Instagram · active now',
+      time: 'Today 23:12',
+      in1: 'How much is a cleaning? I’m a bit scared',
+      out1: 'I understand, many people feel that way. Tell the dentist at the start — they will work at your pace. Professional hygiene is 1,400 UAH. Shall I find a convenient time?',
+      in2: 'Yes, on Thursday',
+      out2: 'Free slots: Thu 14:30 or 16:00',
+      slots: ['14:30', '16:00'],
+      ai: 'Answered by the LANKA AI administrator',
+      input: 'Message…',
+    },
+    floatReq: { t: 'New booking request', d: 'at 23:12 · while the administrator slept' },
+    floatSignal: 'Signal: no-shows 27% ↑',
   },
-  agent: {
-    eyebrow: 'AI front desk',
-    title: 'An AI front desk that takes a patient from a question to a booking',
-    value: 'Help inquiries reach a booking without answering every routine question by hand.',
-    stages: [
-      { t: 'Inquiry', d: 'Understands what is asked' },
-      { t: 'Need', d: 'Clarifies the service if needed' },
-      { t: 'Questions and doubts', d: 'Price, fear, hesitation: only approved answers' },
-      { t: 'Choosing a time', d: 'Free times are checked in the schedule' },
-      { t: 'Booking', d: 'A request for the front desk, or a booking where enabled' },
+  strip: { label: 'Works with what you already have', items: ['Cliniccards', 'Instagram', 'Telegram', 'Messenger', 'Website forms', 'Excel and PDF'] },
+  problem: {
+    eyebrow: '01 — Where patients get lost',
+    title1: 'A clinic loses patients not in the chair, but',
+    title2: 'between messages.',
+    lead: 'Three quiet situations that happen in almost every clinic every week — and what LANKA does about them.',
+    rows: [
+      { when: '23:12', loss: 'An Instagram message at night', lossD: 'A reply in the morning — the patient has already booked elsewhere.', fixT: 'With LANKA: AI replies at once', fixD: 'Gives the approved price, offers free time and prepares a request by morning.', icon: 'ai' },
+      { when: 'Mon', loss: 'A patient cancelled her visit', lossD: 'Nobody called back, and she never returned.', fixT: 'With LANKA: she is on the call list', fixD: 'A cancellation with no new booking shows at once; a task for the administrator in one click.', icon: 'back' },
+      { when: '30+ d', loss: 'Treatment started but not finished', lossD: 'No next booking, and nobody reminded them of the plan.', fixT: 'With LANKA: a signal to the manager', fixD: 'When there are more such patients than the threshold — a message to the staff Telegram.', icon: 'bell' },
     ],
-    chat: [
-      { from: 'in', stage: 0, text: 'Hello! How much is a teeth cleaning?' },
-      { from: 'out', stage: 1, text: 'Hello! A professional cleaning is 1,400 UAH and takes about an hour. Do you need just the cleaning, or a check-up too?' },
-      { from: 'in', stage: 2, text: 'Just the cleaning. Honestly, I’m a bit nervous: last time was unpleasant.' },
-      { from: 'out', stage: 2, text: 'I understand. You can tell the dentist at the start, and they will go at a pace that suits you. Shall I find a time?' },
-      { from: 'in', stage: 3, text: 'Yes, this week in the afternoon.' },
-      { from: 'out', stage: 3, text: 'These times are free:', slots: ['Thu, 14:30', 'Thu, 16:00', 'Fri, 15:00'] },
-      { from: 'in', stage: 3, text: 'Thu, 14:30' },
-      { from: 'event', stage: 4, text: 'Request: professional cleaning, Thu 14:30 — confirmed by the front desk' },
-    ],
-    adaptive: 'It is not a questionnaire. A patient who writes “book me for Thursday” goes straight to choosing a time. Someone who only asks the price gets the price without being pushed to book.',
-    facts: [
-      { t: 'A person is close by', d: 'Medical questions, complaints, discounts and requests for a person go to the front desk at once.' },
-      { t: 'Turned on step by step', d: 'First the AI prepares drafts that a person sends. On Pro the clinic itself turns on replies on its own after setup, for chosen services.' },
-      { t: 'Channels', d: 'Replies on its own in Instagram, Facebook Messenger and Telegram, once the clinic switches it on in Pro.' },
-      { t: 'A request is not yet a booking', d: 'An appointment is created in Cliniccards only where this is enabled for the clinic; otherwise the front desk enters it from the ready request. The AI can move or cancel only an appointment made in the same conversation.' },
-    ],
-  },
-  roles: {
-    eyebrow: 'One product, four roles',
-    title: 'Value for the whole team',
-    lead: 'The owner sees results, the manager sees what is waiting, the front desk keeps up with every message, and marketing sees where inquiries come from.',
-    items: [
-      { key: 'owner', tab: 'Owner', q: 'Where can the clinic earn more, and what needs attention?', points: ['Who came for a visit and did not book again, as a list', 'Appointments, payments, debts and unfinished treatment in reports', 'How many patients booked and came after messages'], telegram: true, extra: { t: 'What matters about your clinic, in your Telegram', d: 'A weekly or daily summary (Pro plan): visits, no-shows, bookings and payments against the previous period, and what needs attention. Signals (Pro plan) when no-shows and cancellations run high, completed visits drop noticeably, or requests wait too long.' }, alt: 'Example of a summary and a signal in Telegram', note: '“After a message” is a coincidence in time within 14 days, not proof that the message brought the patient.' },
-      { key: 'manager', tab: 'Manager', q: 'What is waiting for the team right now?', points: ['New requests, messages to approve and open tasks on the home page', 'A signal to the staff chat when requests wait over 4 hours', 'Tasks for the front desk from any patient list', 'Patient ratings after visits and message results'], shot: 'now', alt: 'The “Needs action now” block: tasks, requests, approvals' },
-      { key: 'admin', tab: 'Front desk', q: 'How do I answer everyone in time?', points: ['Conversations from Telegram, Instagram and Messenger in one list', 'An AI draft for a routine question: check and send', 'Booking, reschedule and cancellation requests with action buttons'], shot: 'inbox', alt: 'Conversation list with the channel of each' },
-      { key: 'marketing', tab: 'Marketing & SEO', q: 'Where do inquiries come from, and where do they stop?', points: ['An inquiry log: the channel and source of every inquiry', 'Funnel: record → booking → visit → treatment, by source from Cliniccards', 'Excel exports for your own analysis'], alt: 'Example: inquiries and bookings by source' },
-    ],
-    telegram: { chat: 'LANKA', digest: ['Clinic digest “Smile”', 'Last week', '', 'Appointments: completed 86 (was 91), no-shows 7 (was 5)', 'New bookings: 64 (was 58)', 'Booked for the next 7 days: 72 (confirmed: 41)', '', 'Attention', '• Requests waiting for a reply: 2', '• Past appointments without an outcome: 3'], signal: ['Signal: in the last 7 days cancellations and no-shows were 27% of visits (threshold 25%).', 'Open: analytics'], hint: 'You get more than numbers: you get a hint about what to look at.' },
-    sources: { title: 'Inquiries by source', cols: ['Source', 'Inquiries', 'Booked'], rows: [['Instagram', '24', '9'], ['Google', '15', '7'], ['Website', '11', '4']] },
-    access: 'Access follows the existing roles (owner, manager, front desk, analyst, doctor). There is no separate marketing role.',
   },
   product: {
-    eyebrow: 'Product',
-    title: 'Reports, conversations and reminders in one place',
-    tabs: [
-      { key: 'reports', tab: 'Reports & results', title: 'See whom to reconnect with', points: ['9 ready reports and a builder for your own', 'Every report shows its rule and data date', 'Excel, PDF, CSV and scheduled reports by email'], next: 'Find patients without a next appointment and create front-desk tasks in one click.', shot: 'report', alt: 'The “No next appointment after a visit” report with the create-tasks button' },
-      { key: 'chats', tab: 'Conversations & requests', title: 'No inquiry gets lost between channels', points: ['Every conversation shows its channel', 'Booking, reschedule and person-needed requests in their own list', '“Entered in Cliniccards” closes a request'], next: 'Open a request, go to the chat and reply to the patient in the same channel.', channels: ['telegram', 'instagram', 'messenger'], shot: 'requests', alt: 'Front-desk requests: booking, reschedule, question for a person' },
-      { key: 'auto', tab: 'Reminders & campaigns', title: 'Stay in touch without sending by hand', points: ['Ready rules: reminder, after a no-show, hygiene recall, “long absent”, thank-you and rating', 'Before a reminder, the appointment is checked in Cliniccards, so nothing goes with the old time', 'History with the reason: sent, cancelled or failed'], next: 'Turn on a reminder, set its text and time, then check the result in History.', channels: ['telegram', 'instagram'], channelNote: 'Reminders go to Telegram; on Instagram only within 24 hours of the patient’s message. Campaigns: Telegram only.', alt: 'Example of a reminder rule and its sending history' },
-      { key: 'assistant', tab: 'Manager’s AI assistant', title: 'Ask about your clinic in your own words', points: ['A plain-language question: the assistant builds a report from the available measures', 'The system does the counting by its rules, not the AI; data as of the latest refresh', 'Save and export the report; money is visible only to roles allowed to see it'], next: 'Ask “Show no-shows for the last 3 months by doctor” and save the answer as a report.', alt: 'Example: a question to the assistant and its report' },
-    ],
-    ask: { q: 'Show no-shows for the last 3 months by doctor', title: 'No-shows, 3 months', cols: ['Doctor', 'No-shows'], rows: [['Ivanenko', '6'], ['Petrenko', '4'], ['Sydorenko', '2']], rule: 'The calculation rule is under the report', save: 'Save as a report' },
-    rule: { title: 'Visit reminder', on: 'On', lines: [['When', '24 hours before the visit'], ['Channel', 'Telegram'], ['Approval', 'by a staff member']], text: 'Hello, {name}! A reminder of your visit on {date} at {time}.', history: 'History', results: [['Olena K.', 'Sent', 'ok'], ['Andrii M.', 'Cancelled: appointment changed in Cliniccards', 'off']] },
-  },
-  connect: {
-    eyebrow: 'Integrations',
-    title: 'We connect your inquiry sources and set LANKA up for your clinic',
-    readyTitle: 'Ready integrations',
-    ready: [
-      { icons: ['cliniccards'], name: 'Cliniccards', what: 'Patients, visits, treatment plans, payments and the schedule. Refreshed daily at 03:00 and on demand; free times are checked live.', note: 'Appointments change only where this is enabled for the clinic.' },
-      { icons: ['telegram'], name: 'Telegram', what: 'The clinic’s bot: conversations, requests, reminders, campaigns and a staff chat.', note: 'The patient starts the bot themselves, via a QR code or a link.' },
-      { icons: ['instagram', 'messenger'], name: 'Instagram & Messenger', what: 'Direct and page conversations, the AI front desk.', note: 'Pro plan. Connection depends on Meta’s permissions.' },
-      { icons: ['email'], name: 'Email', what: 'Scheduled reports and service emails.' },
-    ],
-    customTitle: 'Individual setup',
-    custom: [
-      { t: 'Website and forms', d: 'LANKA receives a copy of accepted enquiries from your existing forms, with their source page and campaign tags when available. Your forms continue working as before.' },
-      { t: 'Ad lead forms', d: 'Requests from ad forms, where the platform gives access.' },
-      { t: 'Another practice system', d: 'Another records system or data source, if it has an API or an export.' },
-      { t: 'Your reports and processes', d: 'Custom reports, messaging rules and team workflows.' },
-    ],
-    onboarding: { title: 'We help you set up and get started', items: ['We connect Cliniccards and load the data', 'We set up the channels you choose: the Telegram bot, and on Pro also Instagram and Messenger', 'We help prepare the clinic’s information for AI replies', 'We show the team where reports, conversations and requests are'], note: 'Included in the one-time launch. You can request help connecting existing forms in Settings. We quote separately for website changes, non-standard forms and other systems.' },
-    support: { t: 'Support you can reach', d: 'We help with settings, answer questions and look into it when something does not work.', write: 'Write to us', call: 'Request a call' },
-    journeyLabel: 'How it should work with your website',
-    journey: ['Website request', 'Inquiry in LANKA', 'Handled by the team', 'Appointment'],
-    scope: 'We agree the feasibility, scope and price of an individual connection after an assessment. It is not part of the standard plan.',
-    discuss: 'Discuss a connection',
-  },
-  pricing: {
-    title: 'Pricing',
-    sub: 'One price per clinic, no fee per patient.',
-    perMonth: 'UAH/mo',
-    plans: [
-      { name: 'Start', price: '1 990', launch: '+ 4,990 UAH one-time launch · first payment 6,980 UAH', annual: 'Or 19,900 UAH/year in one payment — 2 months free · 24,890 UAH with the launch', lead: 'Control of the clinic and repeat visits.', lines: ['Ready reports and a report builder with Excel and PDF export', 'The patient funnel: who did not reach treatment and who is due a repeat visit', 'Enquiries from your website forms in one journal', 'Telegram bot: visit reminders, conversations and AI reply drafts', 'A weekly summary for the manager'], limits: ['Up to 5 LANKA users (team accounts, not the doctors from Cliniccards)', '2,000 messages to patients and 500 AI replies a month'] },
-      { name: 'Pro', price: '4 990', launch: '+ 4,990 UAH one-time launch · first payment 9,980 UAH', annual: 'Or 49,900 UAH/year in one payment — 2 months free · 54,890 UAH with the launch', lead: 'AI handling of enquiries and control of the clinic’s work.', lines: ['AI front desk in Telegram, Instagram and Messenger answers patients and prepares a booking request; the owner turns it on after setup', 'Conversations from all channels in one team inbox, with handoff to a person', 'Manager’s AI assistant: a question about the clinic’s data, answered with a report', 'A daily summary and signals to the manager about deviations'], limits: ['Up to 30 LANKA users', '10,000 messages and 3,000 AI replies a month', 'Instagram and Messenger once the clinic’s pages are connected in Meta'] },
-      { name: 'Network', price: '7 990', from: 'from', extra: '2 branches; each further one +2,990 UAH/mo', lead: 'For clinics with several branches.', lines: ['Pro for every branch', 'Shared analytics and branch comparison', 'Reports and access across the network'], note: 'Individual implementation. We agree the scope and timing before payment. The network features are not yet ready for self-service.', cta: 'Discuss a connection' },
-    ],
-    cta: 'Discuss a connection',
-    setup: { t: 'One-time launch', price: '4,990 UAH', label: 'per clinic, the same for Start and Pro, separate from the subscription', next: 'The paid period (a month or a year) starts on the launch day we agree with the clinic, not on the payment day. After the launch the subscription renews with no launch fee again.', lines: ['Connecting your clinic’s Cliniccards and checking the first data', 'Telegram and the standard reminders', 'The agreed existing forms of one website through the supported connection', 'One session with the team and a launch check'], proT: 'Pro also: the standard agent setup within the agreed scope', pro: ['Knowledge for the AI front desk and the agreed services', 'The channels your plan includes', 'Handoff to a person and a check of the agreed scenarios', 'The manager’s summary and signals'], other: 'Non-standard integrations, website changes and custom scenarios are quoted separately. A further network branch from 2,990 UAH with the same system and a standard setup.' },
-    pack: { t: 'Extra AI replies: 500 for 390 UAH', d: 'Bought in the workspace; they do not expire.' },
-    custom: { t: 'Individual connection', d: 'Website changes, non-standard forms, ad forms, another system: priced after an assessment.' },
-    details: {
-      summary: 'How AI replies are counted, and what happens when they run out',
-      items: [
-        'One reply is a reply to a patient, a draft for the front desk or a question to the manager’s assistant. A retry of the same request is not counted.',
-        'The plan’s replies are used first (renewed monthly with payment), then bought ones.',
-        'When the replies run out, the AI pauses until the new period or a top-up. The owner and the manager see a notice in the workspace, the staff Telegram chat gets a message, and staff keep handling the conversations. No debt builds up.',
+    eyebrow: '02 — Product',
+    title1: 'Website, Instagram, Telegram, Messenger —',
+    title2: 'in one place.',
+    lead: 'Enquiries from every channel meet in one feed; requests, reminders and reports on one screen. No more switching between the phone, Direct and email.',
+    hub: {
+      sources: [
+        { key: 'web', name: 'Website forms' },
+        { key: 'instagram', name: 'Instagram' },
+        { key: 'telegram', name: 'Telegram' },
+        { key: 'messenger', name: 'Messenger' },
+      ],
+      center: 'AI replies · the team sees',
+      feedTitle: 'One enquiry feed',
+      feed: [
+        { text: 'Request from the “Check-up” form', ch: 'Website', tone: 'neutral' },
+        { text: 'How much is a cleaning?', ch: 'Instagram', tone: 'ig' },
+        { text: 'Move me to Friday, please', ch: 'Telegram', tone: 'tg' },
+        { text: 'Are you open on Saturday?', ch: 'Messenger', tone: 'ms' },
+      ],
+      points: ['The channel shows in every conversation', 'The reply goes to the same channel', 'Bookings are checked against Cliniccards', 'AI replies in every channel — on any plan'],
+    },
+    inbox: {
+      t: 'Every messenger in one list',
+      d: 'Telegram, Instagram and Messenger together. The channel shows in every conversation; requests are separate, with action buttons.',
+      rows: [
+        { ini: 'OK', name: 'Olena K.', text: 'Yes, Thursday 14:30 works', tag: 'Instagram', tone: 'ig' },
+        { ini: 'AM', name: 'Andrii M.', text: 'Can I move it to Friday?', tag: 'Telegram', tone: 'tg' },
+        { ini: 'IS', name: 'Iryna S.', text: 'Please call the dentist', tag: 'To a person', tone: 'warn' },
       ],
     },
-    noTrial: 'There is no free period; there is a demo on made-up data instead.',
+    assistant: { t: 'Ask about the clinic in your own words', q: 'Show no-shows for 3 months by dentist', rows: [['Ivanenko', 6], ['Petrenko', 4], ['Sydorenko', 2]], note: 'The system counts by rules, not AI · Pro plan' },
+    report: { t: '9 ready reports', d: 'Who is due a repeat visit — and a task for the administrator in one click.', cols: ['Patient', 'No booking'], rows: [['Patient 1', '48 d'], ['Patient 2', '63 d'], ['Patient 3', '91 d']], btn: 'Create tasks · 3' },
+    remind: { t: 'Reminders on their own', d: 'Before sending, the booking is checked against Cliniccards — nothing goes out with an old time.', rules: ['24 h before the visit', 'After a no-show', 'Time for hygiene'] },
+  },
+  ai: {
+    eyebrow: '03 — AI administrator',
+    title1: 'Leads the patient through the sales funnel —',
+    title2: 'from question to booking.',
+    lead: 'Like an experienced administrator: understands the request, removes doubts and brings it to a booking. Someone who writes “book me for Thursday” goes straight to picking a time.',
+    stages: [
+      { t: 'Enquiry', d: 'Understands the question' },
+      { t: 'Need', d: 'Clarifies the service' },
+      { t: 'Doubts', d: 'Price, fear, hesitation — with approved answers' },
+      { t: 'Time', d: 'Free slots from the live schedule' },
+      { t: 'Booking', d: 'A request or a booking in Cliniccards' },
+    ],
+    notes: ['Not a questionnaire — adapts to the conversation', 'Someone asking only the price gets the price, no pressure', 'Anything unusual goes to a person'],
+    modes: [
+      { k: 'Any plan · optional', t: 'Drafts for the administrator', d: 'AI writes — a person checks and sends in one tap.' },
+      { k: 'Any plan', t: 'Replies on its own', d: 'The clinic switches it on after setup — and off at any time.', accent: true },
+      { k: 'Always', t: 'A person nearby', d: 'Medical questions, complaints and discounts go straight to the administrator.' },
+    ],
+  },
+  mid: { title1: 'See it on a live clinic —', title2: 'in a minute, no sign-up.', cta: 'Open the demo →' },
+  team: {
+    eyebrow: '04 — For the whole team',
+    title: 'Everyone sees their part.',
+    roles: [
+      { t: 'Owner', q: 'Where to earn more?', d: 'Who did not rebook, payments and debts, a digest in Telegram.' },
+      { t: 'Manager', q: 'What is waiting for the team?', d: 'Requests and tasks on the home page, signals to the staff chat.' },
+      { t: 'Administrator', q: 'How to answer everyone?', d: 'All messengers together, AI replies, requests with buttons.' },
+      { t: 'Marketer', q: 'Where do patients come from?', d: 'The source of every enquiry, the funnel to a visit, Excel.' },
+    ],
+    owner: {
+      eyebrow: 'For the owner · Pro plan',
+      title: 'The clinic under control — right in Telegram.',
+      text: 'Every morning, a digest: visits, bookings, no-shows. When something goes wrong, LANKA writes on its own: no-shows, falling payments, unanswered requests. You set the thresholds.',
+      chips: ['No-shows and cancellations', 'Falling payments', 'Unanswered requests', 'Unfinished treatment', '4 more signals'],
+      chat: 'Clinic team',
+      chatSub: 'LANKA · staff chat',
+      digestT: 'Digest · yesterday',
+      digest: ['Visits: 18 · new bookings: 14', 'No-shows: 2 · unanswered requests: 0'],
+      aiLine: 'AI prepared 9 requests',
+      signalT: 'Signal',
+      signal: '27% of visits cancelled or missed in 7 days — threshold 25%.',
+      open: 'Open the report →',
+    },
+  },
+  launch: {
+    eyebrow: '05 — Launch',
+    title1: 'You don’t set it up alone.',
+    title2: 'We launch together.',
+    lead: 'One-time launch — 4,990 UAH. The paid period starts on the launch day, not the payment day.',
+    steps: [
+      { t: 'We connect Cliniccards', d: 'We load patients, visits, treatment plans and payments and check the first data.' },
+      { t: 'We connect the channels', d: 'Instagram, Telegram, Messenger and website forms — into one feed.' },
+      { t: 'We teach the AI', d: 'Services, prices, answers to common questions — you approve each one.' },
+      { t: 'We switch it on and show the team', d: 'Where requests, conversations and reports are. Then support whenever you need it.' },
+    ],
+  },
+  pricing: {
+    eyebrow: '06 — Pricing',
+    title: 'AI works on every plan.',
+    sub: 'The AI administrator replies on its own in Instagram, Telegram and Messenger already on Start. Pro books and reschedules visits right in Cliniccards — the administrator has nothing to enter.',
+    monthly: 'Monthly',
+    yearly: 'Yearly',
+    yearBadge: '−2 mo',
+    yearNote: 'A year in one payment — 12 months for the price of 10.',
+    perMonth: 'UAH/mo',
+    perYear: 'UAH/yr',
+    orYear: 'or {sum} UAH a year —',
+    save: 'save {save} UAH',
+    approx: '≈ {sum} UAH/mo',
+    best: 'Best choice',
+    plans: [
+      {
+        name: 'Start', price: '1,990', year: '19,900', full: '23,880', save: '3,980', perMonthYear: '1,658',
+        lead: 'AI replies on its own, the administrator confirms the booking',
+        aiT: 'AI administrator', aiTag: 'replies on its own',
+        aiD: 'Replies to patients 24/7, leads through the funnel, offers free time and prepares a request — the administrator enters it in Cliniccards in one click.',
+        aiMeta: 'Instagram, Telegram, Messenger · 500 AI replies/mo',
+        alsoT: 'Also included',
+        lines: ['The AI administrator replies on its own in Instagram, Telegram and Messenger and prepares a booking request', 'Reminders and campaigns in Telegram', 'Website form requests in one log', '9 reports, a report builder, the patient funnel', 'A weekly digest for the manager'],
+        cta: 'Choose Start',
+      },
+      {
+        name: 'Pro', price: '4,990', year: '49,900', full: '59,880', save: '9,980', perMonthYear: '4,158',
+        lead: 'Booking without the administrator',
+        aiT: 'AI administrator Pro', aiTag: 'books on its own',
+        aiD: 'Everything in Start, plus it creates and reschedules visits in Cliniccards itself — the patient is booked before the administrator gets to work.',
+        aiMeta: 'Auto-booking and rescheduling in Cliniccards',
+        alsoT: 'Everything in Start, plus',
+        lines: ['AI books and reschedules visits in Cliniccards itself', '3,000 AI replies a month', 'The manager’s AI assistant: a question — a report', 'A daily digest and deviation signals'],
+        cta: 'Choose Pro',
+      },
+    ],
+    compareT: 'Start and Pro: the difference',
+    compareCols: ['Feature', 'Start', 'Pro'],
+    compare: [
+      { label: 'AI replies on its own 24/7 in Instagram, Telegram and Messenger', start: '✓', pro: '✓' },
+      { label: 'Leads through the funnel, offers free time from the schedule', start: '✓', pro: '✓' },
+      { label: 'Hands medical questions, complaints and anything unusual to a person', start: '✓', pro: '✓' },
+      { label: 'Booking in Cliniccards', start: 'request → the administrator enters it', pro: 'AI books itself', strong: true },
+      { label: 'Rescheduling a visit', start: 'a request to the administrator', pro: 'AI reschedules itself', strong: true },
+      { label: 'AI replies a month', start: '500', pro: '3,000' },
+      { label: 'The manager’s AI assistant: a question — a report', start: '—', pro: '✓' },
+      { label: 'Deviation signals and a daily digest', start: '—', pro: '✓' },
+      { label: 'Users', start: '5', pro: '30' },
+    ],
+    pack: 'Ran out of replies? Buy 500 more for 390 UAH; they do not expire.',
+    launchT: 'Launch — 4,990 UAH',
+    launchD: 'One-time, for Start and Pro. We connect Cliniccards and the channels, prepare the AI’s knowledge and train the team. The paid period starts on the launch day.',
+    network: { name: 'Clinic network', d: '— Pro for every branch and a branch comparison. From 7,990 UAH/mo for 2 branches, +2,990 UAH for each further one.', price: '7,990', cta: 'Discuss →' },
   },
   trust: {
-    title: 'The clinic stays in control',
+    eyebrow: '07 — Security',
+    title: 'The clinic is always in control.',
     items: [
-      { icon: 'check', t: 'Approval', d: 'By default a staff member approves messages to patients, and the clinic itself turns sending on.' },
-      { icon: 'users', t: 'Roles', d: 'Everyone sees what their role allows; a staff member’s access closes at once.' },
-      { icon: 'sparkles', t: 'Approved answers', d: 'The AI answers only from information the clinic approved and does not quote a price unconfirmed for 90 days.' },
-      { icon: 'alert', t: 'Patient data', d: 'Names and phone numbers from the clinic’s database are not sent to the AI; contacts a patient types in the chat are masked. The AI does see the message text, otherwise it could not reply.' },
-      { icon: 'refresh', t: 'Fresh data', d: 'Reports use a daily copy with its update date; free times and whether a visit is current are checked at the moment of the action.' },
-      { icon: 'settings', t: 'Protection', d: 'Two-factor sign-in, an action log, encrypted keys, each clinic’s data kept apart.' },
+      { t: 'Approved answers', d: 'AI answers only with what the clinic approved.' },
+      { t: 'A person nearby', d: 'Medical questions, complaints and anything unusual go straight to the administrator.' },
+      { t: 'Patient data', d: 'Names and phones from the clinic’s database are never sent to the AI.' },
+      { t: 'Protection', d: 'Two-factor sign-in, an action log, roles and access rights.' },
     ],
   },
   faq: {
-    title: 'Questions',
+    eyebrow: '08 — Questions',
+    title: 'Frequent questions',
+    more: 'Didn’t find the answer?',
+    moreLink: 'Leave your number — we’ll call back.',
     items: [
-      { q: 'We use Cliniccards. Do we need to change anything?', a: 'No. Cliniccards stays the main system for patients, treatment and the schedule, and LANKA works next to it. If you use another system, we assess whether it can be connected: that depends on access to its data.' },
-      { q: 'How does LANKA help with revenue and workload?', a: 'It shows patients worth reconnecting with, helps you not lose messenger inquiries and takes part of the manual work off reports and reminders. We do not promise a guaranteed increase: the result depends on how the team works with these lists and inquiries.' },
-      { q: 'What does the AI do on its own, and when is a person needed?', a: 'The AI answers from the clinic’s approved information, clarifies the service, offers free times and builds a request. By default a staff member sends and confirms. Medical questions, complaints, discounts and anything unusual go to a person. On the Pro plan the clinic itself turns on replies on its own after setup and can turn them off at any time.' },
-      { q: 'Which channels are supported?', a: 'The clinic’s Telegram bot, and on Pro also Instagram and Facebook Messenger (connection depends on Meta’s permissions). On Pro the AI replies on its own in Instagram, Messenger and Telegram once the clinic switches it on; on Start it prepares drafts. Reminders and campaigns go to Telegram; on Instagram a reminder is possible only within 24 hours of the patient’s message.' },
-      { q: 'How fresh is the data?', a: 'Cliniccards data refreshes daily at 03:00 Kyiv time and any time with “Refresh now”. Free times for booking and whether a visit is still current before a reminder are checked in Cliniccards at the moment of the action.' },
-      { q: 'What happens when the AI replies run out?', a: 'Replies, drafts and the manager’s assistant pause until the new period or a pack top-up. The owner and the manager see a notice in the workspace, the staff Telegram chat gets a message, and staff keep handling the conversations.' },
-      { q: 'Who helps with the setup, and whom do we contact later?', a: 'During the setup we configure the data, channels and AI information and show the team around. After that, email us or leave your number in the form: we help with settings and look into it when something does not work.' },
-      { q: 'What are signals, and where do they arrive?', a: 'LANKA checks chosen measures on the latest data: the share of no-shows and cancellations, a drop in completed visits against the previous period, and requests waiting too long. When a measure passes its threshold, a signal goes to the staff Telegram chat and by email to the owner, at most once a day. Signals are turned on in the settings and are part of the Pro plan. A signal points where to look; it does not explain the cause.' },
-      { q: 'Can you connect our website or another system?', a: 'Yes. Start and Pro include forwarding copies from existing website forms. You can request connection in Settings. The site needs server-side forwarding after acceptance or code that can receive the form’s success signal. We quote separately for website changes, non-standard forms and other systems.' },
+      { q: 'We work in Cliniccards. What do we need to change?', a: 'Nothing. Cliniccards stays the main system for patients, treatment and the schedule. LANKA works next to it and updates the data daily.' },
+      { q: 'AI replies on its own. What if it makes a mistake?', a: 'AI answers only with what the clinic approved: services, prices, common answers. Medical questions, complaints, discounts and anything unusual go straight to the administrator. Replies on its own can be switched back to drafts at any time.' },
+      { q: 'How does Start differ from Pro?', a: 'On both plans AI replies on its own in Instagram, Telegram and Messenger and prepares a request. On Start the administrator enters the booking in Cliniccards; on Pro AI books and reschedules visits itself. Pro also adds the manager’s assistant, signals and a daily digest.' },
+      { q: 'What happens when the AI replies run out?', a: 'AI pauses until the next period and the team carries on with the conversations. You can buy 500 more replies for 390 UAH; they do not expire. No debt arises.' },
+      { q: 'How fresh is the data?', a: 'Data from Cliniccards updates daily at 03:00 and any time with a button. Free time for a booking is checked in the schedule during the conversation.' },
+      { q: 'Is there a free trial?', a: 'Instead, a demo on a made-up clinic. It opens in a minute, no sign-up.' },
+      { q: 'Who helps with the setup?', a: 'We do. During the launch we connect the data and channels, prepare the AI’s knowledge and show the team the workspace. After the launch — support by email or phone.' },
     ],
   },
-  final: { title: 'See how LANKA could work for your clinic', text: 'Open the demo in a minute, or leave your number to discuss a connection.', support: 'After the setup you are not on your own: we help with settings and answer your questions.' },
-  contact: { title: 'We will call you back', text: 'Leave your number: we will call, explain the setup and answer your questions.', phone: 'Phone', name: 'Name (optional)', consent: 'I agree that LANKA may contact me about connecting.', privacy: 'Privacy policy', submit: 'Call me back', sending: 'Sending…', done: 'Thank you! We will get in touch soon.', demoHint: 'While you wait, try the demo: a copy of a made-up clinic, no sign-up.', demo: 'Open the demo', error: 'Could not send. Check the number or write to us:', close: 'Close' },
-  footer: '© LANKA, a workspace for dental clinics.',
+  final: { title1: 'The next enquiry', title2: 'won’t get lost.', text: 'The demo opens in a minute. Or leave your number — we’ll tell you how the launch goes in your clinic.', demo: 'Open the demo', formT: 'We’ll call back and tell you about the launch' },
+  contact: { title: 'We’ll get in touch', text: 'Leave your number — we’ll call, tell you about the launch and answer your questions.', phone: 'Phone', name: 'Name (optional)', consent: 'I agree that LANKA may contact me about the connection.', privacy: 'Privacy policy', submit: 'Call me back', sending: 'Sending…', done: 'Thank you! We’ll be in touch soon.', demoHint: 'While you wait, try the demo: a copy of a made-up clinic, no sign-up.', demo: 'Open the demo', error: 'Could not send. Check the number or write to us:', close: 'Close' },
+  footer: { tagline: 'An AI administrator and workspace for dental clinics on Cliniccards.', product: 'Product', clients: 'Clients', docs: 'Documents', features: 'Features', contact: 'Contact us', copyright: '© LANKA, 2026', owner: { title: 'Owner of the LANKA service' } },
 };
 
 export const LANDING: Record<Locale, LandingText> = { uk, ru, en };

@@ -1,183 +1,52 @@
 'use client';
 
+import { Inter_Tight, Onest } from 'next/font/google';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { LOCALES, Locale, useI18n } from '../lib/i18n';
+import { LANDING, LandingText } from '../lib/landing-text';
 import { LANDING_PATH } from '../lib/site';
-import { LANDING, LandingText, Shot } from '../lib/landing-text';
-import { Brand } from './Brand';
 import { ChannelIcon } from './ChannelIcon';
+import { OwnerDetails } from './OwnerDetails';
 import { Icon } from './ui';
 
-// The public contact address (footer, structured data, and the fallback when the call-back form cannot send)
+// The landing's own type: a tight display face for headings and a Cyrillic-first text face (self-hosted by Next, no request to Google at runtime)
+const display = Inter_Tight({ subsets: ['latin', 'cyrillic'], weight: ['600', '700', '800'], variable: '--lp-display', display: 'swap' });
+const text = Onest({ subsets: ['latin', 'cyrillic'], weight: ['400', '500', '600', '700'], variable: '--lp-text', display: 'swap' });
+
+// The public contact address (footer and the fallback when the call-back form cannot send)
 const EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL ?? 'hello@lankaclinic.app';
-// The real app screens, taken on the demo clinic (made-up data, dates and phone numbers removed): their natural size keeps the layout from jumping
-const SHOT_SIZE: Record<Shot, [number, number]> = { workspace: [1920, 960], periods: [1440, 527], now: [1440, 250], inbox: [1440, 340], report: [1440, 900], requests: [1440, 675] };
-const shotSrc = (lang: Locale, s: Shot) => `/landing/${lang}/${s}.jpg`;
 
-type Zoom = { src: string; alt: string } | null;
+const fill = (s: string, v: Record<string, string>) => s.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '');
 
-// An app screen that opens larger on click (a native dialog: Esc and the close button work, focus returns to the screen)
-function Screen({ lang, shot, alt, label, enlarge, onZoom, className }: { lang: Locale; shot: Shot; alt: string; label: string; enlarge: string; onZoom: (z: Zoom) => void; className?: string }) {
-  const [w, h] = SHOT_SIZE[shot];
+// The LANKA mark: a gradient tile with the letter
+function Mark({ size = 34 }: { size?: number }) {
+  return <span className="lp-mark" style={{ width: size, height: size, fontSize: size * 0.53 }} aria-hidden="true">L</span>;
+}
+
+function Logo() {
   return (
-    <figure className={`lp-screen${className ? ` ${className}` : ''}`}>
-      <button type="button" className="lp-screen-btn" onClick={() => onZoom({ src: shotSrc(lang, shot), alt })} aria-label={`${enlarge}: ${alt}`}>
-        <img src={shotSrc(lang, shot)} alt={alt} width={w} height={h} loading={shot === 'workspace' ? 'eager' : 'lazy'} decoding="async" />
-        <span className="lp-zoom" aria-hidden="true"><Icon name="search" size={16} /></span>
-      </button>
-      <figcaption>{label}</figcaption>
-    </figure>
+    <span className="lp-logo">
+      <Mark />
+      <span>LANKA</span>
+    </span>
   );
 }
 
-// Tabs with the keyboard pattern of the app (arrows, Home, End; only the active tab is in the Tab order)
-function Tabs<K extends string>({ id, label, items, active, onPick }: { id: string; label: string; items: { key: K; tab: string }[]; active: K; onPick: (k: K) => void }) {
-  const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
-    const keys = items.map((x) => x.key);
-    const i = keys.indexOf(active);
-    const next = e.key === 'ArrowRight' ? keys[(i + 1) % keys.length] : e.key === 'ArrowLeft' ? keys[(i - 1 + keys.length) % keys.length] : e.key === 'Home' ? keys[0] : e.key === 'End' ? keys[keys.length - 1] : null;
-    if (!next) return;
-    e.preventDefault();
-    onPick(next);
-    document.getElementById(`${id}-tab-${next}`)?.focus();
-  };
-  return (
-    <div className="lp-tabs" role="tablist" aria-label={label}>
-      {items.map((x) => (
-        <button key={x.key} id={`${id}-tab-${x.key}`} type="button" role="tab" aria-selected={active === x.key} aria-controls={`${id}-panel`} tabIndex={active === x.key ? 0 : -1} className={`lp-tab${active === x.key ? ' active' : ''}`} onClick={() => onPick(x.key)} onKeyDown={onKey}>
-          {x.tab}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// The agent's conversation, one example, with each message marked by its stage; picking a stage highlights its messages
-function AgentDemo({ L }: { L: LandingText }) {
-  const A = L.agent;
-  const [stage, setStage] = useState<number | null>(null);
-  return (
-    <div className="lp-agent-demo">
-      <ol className="lp-stages" aria-label={A.eyebrow}>
-        {A.stages.map((s, i) => (
-          <li key={s.t}>
-            <button type="button" className={`lp-stage${stage === i ? ' active' : ''}`} aria-pressed={stage === i} onClick={() => setStage(stage === i ? null : i)}>
-              <span className="lp-stage-n">{i + 1}</span>
-              <span><b>{s.t}</b><small>{s.d}</small></span>
-            </button>
-          </li>
-        ))}
-      </ol>
-      <figure className="lp-phone" aria-label={`${L.ui.example}: ${A.title}`}>
-        <figcaption className="lp-phone-head">
-          <ChannelIcon name="instagram" size={26} />
-          <b>Instagram</b>
-          <span className="lp-badge">{L.ui.example}</span>
-        </figcaption>
-        <div className="lp-phone-body">
-          {A.chat.map((m, i) => (
-            <div key={i} className={`lp-msg ${m.from}${stage !== null && stage !== m.stage ? ' dim' : ''}`}>
-              <span className="lp-msg-stage" aria-hidden="true">{m.stage + 1}</span>
-              <div className="lp-bubble">
-                {m.from === 'event' && <Icon name="calendar" size={16} />}
-                <span>{m.text}</span>
-                {m.slots && <span className="lp-slots">{m.slots.map((s, j) => <span key={s} className={`lp-slot${j === 0 ? ' picked' : ''}`}>{s}</span>)}</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      </figure>
-    </div>
-  );
-}
-
-// The marketing view: a drawing (the demo clinic has no inquiry sources), marked as an example
-function SourcesExample({ L }: { L: LandingText }) {
-  const s = L.roles.sources;
-  return (
-    <figure className="lp-example">
-      <figcaption><b>{s.title}</b><span className="lp-badge">{L.ui.example}</span></figcaption>
-      <div className="lp-ex-table" role="table">
-        <div className="lp-ex-row head" role="row">{s.cols.map((c) => <span key={c} role="columnheader">{c}</span>)}</div>
-        {s.rows.map((r) => (
-          <div key={r[0]} className="lp-ex-row" role="row">
-            <span role="cell">{r[0]}</span>
-            <span role="cell">{r[1]}</span>
-            <span role="cell"><span className="lp-bar" style={{ width: `${(Number(r[2]) / Number(r[1])) * 100}%` }} />{r[2]}</span>
-          </div>
-        ))}
-      </div>
-    </figure>
-  );
-}
-
-// The owner's Telegram: the weekly digest and a signal, as they arrive (the wording of digest.service.ts and insights.service.ts), marked as an example
-function TelegramExample({ L }: { L: LandingText }) {
-  const T = L.roles.telegram;
-  return (
-    <figure className="lp-example lp-tg">
-      <figcaption><span className="lp-tg-head"><ChannelIcon name="telegram" size={24} /><b>{T.chat}</b></span><span className="lp-badge">{L.ui.example}</span></figcaption>
-      <div className="lp-tg-msg">{T.digest.map((l, i) => (l ? <div key={i} className={i === 0 || i === 7 ? 'lp-tg-strong' : undefined}>{l}</div> : <div key={i} className="lp-tg-gap" />))}</div>
-      <div className="lp-tg-msg lp-tg-signal">{T.signal.map((l, i) => <div key={i} className={i ? 'lp-tg-link' : undefined}>{l}</div>)}</div>
-    </figure>
-  );
-}
-
-// The manager's assistant: a question and the report it builds, marked as an example
-function AskExample({ L }: { L: LandingText }) {
-  const a = L.product.ask;
-  return (
-    <figure className="lp-example lp-ask">
-      <figcaption><span className="lp-tg-head"><Icon name="sparkles" size={18} /><b>{a.title}</b></span><span className="lp-badge">{L.ui.example}</span></figcaption>
-      <div className="lp-ask-q">{a.q}</div>
-      <div className="lp-ex-table" role="table">
-        <div className="lp-ex-row two head" role="row">{a.cols.map((c) => <span key={c} role="columnheader">{c}</span>)}</div>
-        {a.rows.map((r) => <div key={r[0]} className="lp-ex-row two" role="row"><span role="cell">{r[0]}</span><span role="cell">{r[1]}</span></div>)}
-      </div>
-      <div className="lp-ask-foot"><span className="lp-small" style={{ margin: 0 }}>{a.rule}</span><span className="lp-ask-actions"><span className="lp-mini-btn primary">{a.save}</span><span className="lp-mini-btn">Excel</span></span></div>
-    </figure>
-  );
-}
-
-// The reminder rule and its history: a drawing (the demo's rule is off and has sent nothing), marked as an example
-function RuleExample({ L }: { L: LandingText }) {
-  const r = L.product.rule;
-  return (
-    <figure className="lp-example lp-rule">
-      <figcaption><b>{r.title}</b><span className="lp-badge">{L.ui.example}</span></figcaption>
-      <div className="lp-rule-on"><span className="lp-switch" aria-hidden="true" />{r.on}</div>
-      <dl>{r.lines.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
-      <blockquote>{r.text}</blockquote>
-      <div className="lp-rule-hist"><b>{r.history}</b>{r.results.map(([who, what, tone]) => <div key={who}><span>{who}</span><span className={`lp-pill ${tone}`}>{what}</span></div>)}</div>
-    </figure>
-  );
-}
-
-// "Discuss a connection": a small call-back form in a dialog (POST /contact-requests: the phone, an optional name, the consent). The request reaches the
-// service owner (/platform and an email); the demo link is offered while the visitor waits. A hidden trap field catches simple bots.
-function ContactDialog({ lang, L, open, onClose }: { lang: Locale; L: LandingText; open: boolean; onClose: () => void }) {
+// "Call me back" (POST /contact-requests: the phone, an optional name, the consent). The request reaches the service owner (/platform and an email);
+// the demo is offered while the visitor waits. A hidden trap field catches simple bots. Used inline (the closing section) and in a dialog.
+function ContactForm({ lang, L, dark, title }: { lang: Locale; L: LandingText; dark?: boolean; title?: string }) {
   const C = L.contact;
-  const ref = useRef<HTMLDialogElement>(null);
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
   const [consent, setConsent] = useState(false);
   const [trap, setTrap] = useState('');
   const [state, setState] = useState<'form' | 'sending' | 'done' | 'error'>('form');
-  useEffect(() => {
-    const d = ref.current;
-    if (!d) return;
-    if (open && !d.open) {
-      setState((s) => (s === 'done' ? 'done' : 'form'));
-      d.showModal();
-    }
-    if (!open && d.open) d.close();
-  }, [open]);
   const digits = phone.replace(/\D/g, '');
   const ready = digits.length >= 9 && digits.length <= 15 && consent && state !== 'sending';
-  async function submit(e: React.FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault();
     if (!ready) return;
     setState('sending');
@@ -188,38 +57,51 @@ function ContactDialog({ lang, L, open, onClose }: { lang: Locale; L: LandingTex
       setState('error');
     }
   }
+  if (state === 'done')
+    return (
+      <div className={`lp-form${dark ? ' dark' : ''}`} role="status">
+        <p className="lp-form-ok"><Icon name="check" size={22} />{C.done}</p>
+        <p className="lp-form-small">{C.demoHint}</p>
+        <Link href="/demo" className="lp-btn lp-btn-mint">{C.demo}</Link>
+      </div>
+    );
   return (
-    <dialog ref={ref} className="lp-contact" aria-labelledby="lp-contact-title" onClose={onClose} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <button type="button" className="lp-contact-close" onClick={onClose} aria-label={C.close}><Icon name="close" size={20} /></button>
-      <h2 id="lp-contact-title">{C.title}</h2>
-      {state === 'done' ? (
-        <div className="lp-contact-done" role="status">
-          <p className="lp-contact-ok"><Icon name="check" size={22} />{C.done}</p>
-          <p className="lp-small">{C.demoHint}</p>
-          <Link href="/demo" className="btn btn-primary btn-lg">{C.demo}</Link>
-        </div>
-      ) : (
-        <form onSubmit={submit} noValidate>
-          <p className="lp-small" style={{ marginTop: 0 }}>{C.text}</p>
-          <label className="lp-field">
-            <span>{C.phone}</span>
-            <input className="input" type="tel" inputMode="tel" autoComplete="tel" placeholder="+380 __ ___ __ __" value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={40} required />
-          </label>
-          <label className="lp-field">
-            <span>{C.name}</span>
-            <input className="input" type="text" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
-          </label>
-          {/* a field people do not see: a bot that fills it gets the usual answer, and nothing is saved */}
-          <input className="lp-trap" type="text" tabIndex={-1} autoComplete="off" aria-hidden="true" value={trap} onChange={(e) => setTrap(e.target.value)} name="website" />
-          <label className="lp-consent">
-            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-            <span>{C.consent} <Link href="/privacy" target="_blank">{C.privacy}</Link></span>
-          </label>
-          {state === 'error' && <p className="lp-contact-err" role="alert">{C.error} <a href={`mailto:${EMAIL}`}>{EMAIL}</a></p>}
-          <button type="submit" className="btn btn-primary btn-lg" disabled={!ready}>{state === 'sending' ? C.sending : C.submit}</button>
-          <p className="lp-small">{C.demoHint} <Link href="/demo">{C.demo} →</Link></p>
-        </form>
-      )}
+    <form className={`lp-form${dark ? ' dark' : ''}`} onSubmit={submit} noValidate>
+      {title && <b className="lp-form-title">{title}</b>}
+      <label className="lp-field">
+        <span>{C.phone}</span>
+        <input type="tel" inputMode="tel" autoComplete="tel" placeholder="+380 __ ___ __ __" value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={40} required />
+      </label>
+      <label className="lp-field">
+        <span>{C.name}</span>
+        <input type="text" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+      </label>
+      {/* a field people do not see: a bot that fills it gets the usual answer, and nothing is saved */}
+      <input className="lp-trap" type="text" tabIndex={-1} autoComplete="off" aria-hidden="true" value={trap} onChange={(e) => setTrap(e.target.value)} name="website" />
+      <label className="lp-consent">
+        <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+        <span>{C.consent} <Link href="/privacy" target="_blank">{C.privacy}</Link></span>
+      </label>
+      {state === 'error' && <p className="lp-form-err" role="alert">{C.error} <a href={`mailto:${EMAIL}`}>{EMAIL}</a></p>}
+      <button type="submit" className="lp-btn lp-btn-white" disabled={!ready}>{state === 'sending' ? C.sending : C.submit}</button>
+    </form>
+  );
+}
+
+function ContactDialog({ lang, L, open, onClose }: { lang: Locale; L: LandingText; open: boolean; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    if (open && !d.open) d.showModal();
+    if (!open && d.open) d.close();
+  }, [open]);
+  return (
+    <dialog ref={ref} className="lp-dialog" aria-labelledby="lp-dialog-title" onClose={onClose} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <button type="button" className="lp-dialog-close" onClick={onClose} aria-label={L.contact.close}><Icon name="close" size={20} /></button>
+      <h2 id="lp-dialog-title">{L.contact.title}</h2>
+      <p className="lp-form-small">{L.contact.text}</p>
+      {open && <ContactForm lang={lang} L={L} />}
     </dialog>
   );
 }
@@ -227,9 +109,9 @@ function ContactDialog({ lang, L, open, onClose }: { lang: Locale; L: LandingTex
 // Real links, one address per language, so crawlers can follow them
 function LandingLangs({ lang }: { lang: Locale }) {
   return (
-    <div className="lang compact" role="group" aria-label="Language">
+    <div className="lp-langs" role="group" aria-label="Language">
       {LOCALES.map((l) => (
-        <Link key={l.code} href={LANDING_PATH[l.code]} hrefLang={l.code} lang={l.code} className={`lang-btn${lang === l.code ? ' active' : ''}`} title={l.label} aria-current={lang === l.code ? 'page' : undefined}>
+        <Link key={l.code} href={LANDING_PATH[l.code]} hrefLang={l.code} lang={l.code} className={lang === l.code ? 'active' : undefined} title={l.label} aria-current={lang === l.code ? 'page' : undefined}>
           {l.code.toUpperCase()}
         </Link>
       ))}
@@ -237,9 +119,38 @@ function LandingLangs({ lang }: { lang: Locale }) {
   );
 }
 
-// The public landing page in eight sections: hero, the patient agent, four roles, the product, integrations and individual setup, pricing,
-// trust and questions, the closing call. What is standard, what depends on a channel, plan or activation, and what is individual work is said beside
-// each claim (the rules are at the top of lib/landing-text.ts).
+const Sparkle = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg>
+);
+
+// The hero's Instagram conversation answered by the AI (a drawing with made-up data)
+function InstagramChat({ L }: { L: LandingText }) {
+  const c = L.hero.chat;
+  return (
+    <div className="lp-ig" aria-label={`Instagram · ${L.ui.example}`} role="img">
+      <div className="lp-ig-head">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+        <span className="lp-ig-ring"><span>ОК</span></span>
+        <div className="lp-ig-who"><b>{c.handle}</b><small>{c.status}</small></div>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m23 7-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" /></svg>
+      </div>
+      <div className="lp-ig-body">
+        <div className="lp-ig-time">{c.time}</div>
+        <div className="lp-ig-in lp-in" style={{ animationDelay: '1.2s' }}><span className="lp-ig-ava" /><span>{c.in1}</span></div>
+        <div className="lp-ig-out lp-in" style={{ animationDelay: '2s' }}>{c.out1}</div>
+        <div className="lp-ig-in lp-in" style={{ animationDelay: '2.8s' }}><span className="lp-ig-ava" /><span>{c.in2}</span></div>
+        <div className="lp-ig-out lp-in" style={{ animationDelay: '3.5s' }}>{c.out2}</div>
+        <div className="lp-ig-slots lp-in" style={{ animationDelay: '3.8s' }}>{c.slots.map((s) => <span key={s}>{s}</span>)}</div>
+        <div className="lp-ig-ai lp-in" style={{ animationDelay: '4s' }}><Sparkle size={12} />{c.ai}</div>
+        <div className="lp-ig-in lp-in" style={{ animationDelay: '4.4s' }}><span className="lp-ig-ava" /><span className="lp-typing"><i /><i /><i /></span></div>
+      </div>
+      <div className="lp-ig-input"><span className="lp-ig-cam" /><span>{c.input}</span></div>
+    </div>
+  );
+}
+
+// The public landing page: hero with the app preview, where patients get lost, all channels in one place, the AI sales funnel, the team and the
+// owner's Telegram, the launch, pricing (monthly or yearly), security, questions and the closing form. Claims follow lib/landing-text.ts.
 export default function Landing({ lang }: { lang: Locale }) {
   const { setLocale } = useI18n();
   const router = useRouter();
@@ -252,260 +163,390 @@ export default function Landing({ lang }: { lang: Locale }) {
     api('/auth/me').then(() => router.replace('/dashboard')).catch(() => undefined);
   }, [router]);
   const L = LANDING[lang];
+  const H = L.hero;
+  const P = L.pricing;
   const [menu, setMenu] = useState(false);
-  const [role, setRole] = useState(L.roles.items[0].key);
-  const [view, setView] = useState<LandingText['product']['tabs'][number]['key']>('reports');
-  const [zoom, setZoom] = useState<Zoom>(null);
   const [contact, setContact] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const d = dialog.current;
-    if (!d) return;
-    if (zoom && !d.open) d.showModal();
-    if (!zoom && d.open) d.close();
-  }, [zoom]);
-  const R = L.roles.items.find((x) => x.key === role) ?? L.roles.items[0];
-  const P = L.product.tabs.find((x) => x.key === view) ?? L.product.tabs[0];
-  const nav: [string, string][] = [['#agent', L.nav.agent], ['#roles', L.nav.roles], ['#product', L.nav.product], ['#connect', L.nav.connect], ['#pricing', L.nav.pricing], ['#faq', L.nav.faq]];
+  const [yearly, setYearly] = useState(false);
+  const nav: [string, string][] = [['#product', L.nav.product], ['#ai', L.nav.ai], ['#launch', L.nav.launch], ['#pricing', L.nav.pricing], ['#faq', L.nav.faq]];
+  const strip = [...L.strip.items, ...L.strip.items];
+  const starColor = ['#8B7BFF', '#2DE0A7', '#FF8A5B'];
+  const cell = (v: string, strong?: boolean) => (v === '✓' ? <span className="lp-yes">✓</span> : v === '—' ? <span className="lp-no">—</span> : <span className={strong ? 'lp-strong' : undefined}>{v}</span>);
 
   return (
-    <div className="lp">
-      <header className="lp-head">
-        <Link href={LANDING_PATH[lang]} className="brand lp-brand"><Brand /></Link>
-        <nav className={`lp-nav${menu ? ' open' : ''}`} id="lp-nav" aria-label={L.nav.menu}>
-          {nav.map(([href, t]) => <a key={href} href={href} onClick={() => setMenu(false)}>{t}</a>)}
-        </nav>
-        <div className="lp-head-right">
-          <LandingLangs lang={lang} />
-          <Link href="/login" className="btn btn-sm lp-login">{L.nav.login}</Link>
-          <button type="button" className="lp-burger" aria-expanded={menu} aria-controls="lp-nav" aria-label={L.nav.menu} onClick={() => setMenu(!menu)}>
-            <Icon name={menu ? 'close' : 'menu'} size={22} />
-          </button>
+    <div className={`lp ${display.variable} ${text.variable}`}>
+      {/* ---------- hero ---------- */}
+      <section className="lp-hero">
+        <div className="lp-glow" style={{ width: 620, height: 620, background: '#2DE0A7', opacity: 0.2, top: 120, left: -160 }} />
+        <div className="lp-glow" style={{ width: 560, height: 560, background: '#8B7BFF', opacity: 0.3, top: 40, right: -120, animationDelay: '-6s' }} />
+        <div className="lp-glow" style={{ width: 360, height: 360, background: '#FF8A5B', opacity: 0.16, top: 520, left: '45%', animationDelay: '-11s' }} />
+        <div className="lp-dots" />
+        <div className="lp-wrap lp-rel">
+          <header className="lp-head">
+            <Link href={LANDING_PATH[lang]} className="lp-home" aria-label="LANKA"><Logo /></Link>
+            <nav className={`lp-nav${menu ? ' open' : ''}`} id="lp-nav" aria-label={L.nav.menu}>
+              {nav.map(([href, t]) => <a key={href} href={href} onClick={() => setMenu(false)}>{t}</a>)}
+            </nav>
+            <div className="lp-head-right">
+              <LandingLangs lang={lang} />
+              <Link href="/login" className="lp-login">{L.nav.login}</Link>
+              <Link href="/demo" className="lp-btn lp-btn-mint lp-btn-sm lp-shine lp-head-demo">{L.nav.demo}</Link>
+              <button type="button" className="lp-burger" aria-expanded={menu} aria-controls="lp-nav" aria-label={L.nav.menu} onClick={() => setMenu(!menu)}>
+                <Icon name={menu ? 'close' : 'menu'} size={22} />
+              </button>
+            </div>
+          </header>
+
+          <div className="lp-hero-text">
+            <p className="lp-pill lp-in"><span>{H.badgeNew}</span>{H.badge}</p>
+            <h1 className="lp-in" style={{ animationDelay: '.1s' }}>{H.title1}<br /><span className="lp-grad">{H.title2}</span></h1>
+            <p className="lp-hero-sub lp-in" style={{ animationDelay: '.25s' }}>{H.sub}</p>
+            <div className="lp-cta lp-in" style={{ animationDelay: '.4s' }}>
+              <Link href="/demo" className="lp-btn lp-btn-mint lp-btn-lg lp-shine">{H.demo}</Link>
+              <button type="button" className="lp-btn lp-btn-ghost lp-btn-lg" onClick={() => setContact(true)}>{H.discuss}</button>
+            </div>
+          </div>
+
+          {/* the app preview (made-up demo data): the dashboard and an Instagram conversation answered by the AI */}
+          <div className="lp-preview lp-in" style={{ animationDelay: '.6s' }}>
+            <div className="lp-browser">
+              <div className="lp-browser-bar" aria-hidden="true"><i /><i /><i /><span>{H.appUrl}</span></div>
+              <div className="lp-app">
+                <div className="lp-app-main">
+                  <div className="lp-stats">
+                    {H.stats.map((s) => (
+                      <div key={s.label} className="lp-stat"><small>{s.label}</small><b className={s.tone === 'warn' ? 'warn' : undefined}>{s.value}</b><span className={s.tone}>{s.delta}</span></div>
+                    ))}
+                  </div>
+                  <div className="lp-now">
+                    <div className="lp-now-head"><b>{H.nowTitle}</b><small>{H.nowUpdated}</small></div>
+                    {H.now.map((n, i) => (
+                      <div key={n.text} className={`lp-now-row${i === 0 ? ' lp-loop' : ''}`}><i className={`dot-${n.tone}`} /><span>{n.text}</span><em className={`tag-${n.tone}`}>{n.tag}</em></div>
+                    ))}
+                  </div>
+                </div>
+                <InstagramChat L={L} />
+              </div>
+            </div>
+            <div className="lp-float lp-float-req" aria-hidden="true">
+              <span className="lp-float-icon"><Icon name="calendar" size={20} /></span>
+              <div><b>{H.floatReq.t}</b><small>{H.floatReq.d}</small></div>
+            </div>
+            <div className="lp-float lp-float-signal" aria-hidden="true">{H.floatSignal}</div>
+          </div>
         </div>
-      </header>
+      </section>
 
       <main>
-        {/* 1. Hero: the business value and the workspace itself */}
-        <section className="lp-hero">
-          <div className="lp-wrap lp-hero-grid">
-            <div className="lp-hero-text">
-              <p className="lp-eyebrow">{L.hero.eyebrow}</p>
-              <h1>{L.hero.title1}<span>{L.hero.title2}</span></h1>
-              <p className="lp-lead">{L.hero.sub}</p>
-              <div className="lp-cta">
-                <Link href="/demo" className="btn btn-primary btn-lg">{L.hero.demo}</Link>
-                <button type="button" className="btn btn-lg lp-btn-ghost" onClick={() => setContact(true)}>{L.hero.discuss}</button>
-              </div>
-              <p className="lp-integration"><ChannelIcon name="cliniccards" size={22} />{L.hero.integration}</p>
-              <p className="lp-small">{L.hero.note}</p>
-            </div>
-            <div className="lp-hero-art">
-              <Screen lang={lang} shot="workspace" alt={L.hero.shotAlt} label={L.ui.demoData} enlarge={L.ui.enlarge} onZoom={setZoom} className="lp-hero-shot" />
-              <div className="lp-hero-chat" aria-hidden="true">
-                <div className="lp-hero-chat-head"><ChannelIcon name="instagram" size={20} /><span className="lp-badge">{L.ui.example}</span></div>
-                <div className="lp-bubble in">{L.hero.chat.in}</div>
-                <div className="lp-bubble out">{L.hero.chat.out}<span className="lp-slots">{L.hero.chat.slots.map((s, j) => <span key={s} className={`lp-slot${j === 0 ? ' picked' : ''}`}>{s}</span>)}</span></div>
-                <div className="lp-hero-req"><Icon name="calendar" size={16} />{L.hero.chat.request}</div>
+        {/* ---------- channels strip ---------- */}
+        <section className="lp-strip">
+          <div className="lp-wrap lp-strip-in">
+            <span>{L.strip.label}</span>
+            <div className="lp-marquee-box">
+              <div className="lp-marquee">
+                {strip.map((x, i) => (
+                  <span key={i} aria-hidden={i >= L.strip.items.length || undefined}>{x}<em style={{ color: starColor[i % 3] }}>✦</em></span>
+                ))}
               </div>
             </div>
           </div>
         </section>
 
-        {/* 2. The patient agent */}
-        <section id="agent" className="lp-section lp-dark">
+        {/* ---------- 01 where patients get lost ---------- */}
+        <section className="lp-section">
           <div className="lp-wrap">
-            <p className="lp-eyebrow">{L.agent.eyebrow}</p>
-            <h2>{L.agent.title}</h2>
-            <p className="lp-lead">{L.agent.value}</p>
-            <AgentDemo L={L} />
-            <p className="lp-adaptive"><Icon name="sparkles" size={18} />{L.agent.adaptive}</p>
-            <div className="lp-facts">
-              {L.agent.facts.map((f) => <div key={f.t}><b>{f.t}</b><p>{f.d}</p></div>)}
-            </div>
-          </div>
-        </section>
-
-        {/* 3. One product, four roles */}
-        <section id="roles" className="lp-section">
-          <div className="lp-wrap">
-            <p className="lp-eyebrow">{L.roles.eyebrow}</p>
-            <h2>{L.roles.title}</h2>
-            <p className="lp-lead">{L.roles.lead}</p>
-            <Tabs id="role" label={L.roles.title} items={L.roles.items} active={role} onPick={setRole} />
-            <div className="lp-panel" role="tabpanel" id="role-panel" aria-labelledby={`role-tab-${R.key}`}>
-              <div className="lp-panel-text">
-                <p className="lp-question">{R.q}</p>
-                <ul className="lp-checks">{R.points.map((p) => <li key={p}><Icon name="check" size={18} />{p}</li>)}</ul>
-                {R.extra && <div className="lp-callout"><b><ChannelIcon name="telegram" size={20} />{R.extra.t}</b><p>{R.extra.d}</p></div>}
-                {R.telegram && <p className="lp-hint">{L.roles.telegram.hint}</p>}
-                {R.note && <p className="lp-small">{R.note}</p>}
-              </div>
-              {R.telegram ? <TelegramExample L={L} /> : R.shot ? <Screen lang={lang} shot={R.shot} alt={R.alt} label={L.ui.demoData} enlarge={L.ui.enlarge} onZoom={setZoom} /> : <SourcesExample L={L} />}
-            </div>
-            <p className="lp-small lp-access">{L.roles.access}</p>
-          </div>
-        </section>
-
-        {/* 4. Product showcase */}
-        <section id="product" className="lp-section lp-warm">
-          <div className="lp-wrap">
-            <p className="lp-eyebrow">{L.product.eyebrow}</p>
-            <h2>{L.product.title}</h2>
-            <Tabs id="view" label={L.product.title} items={L.product.tabs} active={view} onPick={setView} />
-            <div className="lp-panel lp-panel-wide" role="tabpanel" id="view-panel" aria-labelledby={`view-tab-${P.key}`}>
-              <div className="lp-panel-text">
-                <h3>{P.title}</h3>
-                <ul className="lp-checks">{P.points.map((p) => <li key={p}><Icon name="check" size={18} />{p}</li>)}</ul>
-                <p className="lp-next"><b>{L.ui.next}:</b> {P.next}</p>
-                {P.channels && (
-                  <div className="lp-channels">
-                    <span className="lp-channel-icons">{P.channels.map((c) => <ChannelIcon key={c} name={c} size={26} />)}</span>
-                    {P.channelNote && <span className="lp-small">{P.channelNote}</span>}
-                  </div>
-                )}
-              </div>
-              {P.shot ? <Screen lang={lang} shot={P.shot} alt={P.alt} label={L.ui.demoData} enlarge={L.ui.enlarge} onZoom={setZoom} /> : P.key === 'assistant' ? <AskExample L={L} /> : <RuleExample L={L} />}
-            </div>
-          </div>
-        </section>
-
-        {/* 5. Integrations and individual setup */}
-        <section id="connect" className="lp-section lp-dark">
-          <div className="lp-wrap">
-            <p className="lp-eyebrow">{L.connect.eyebrow}</p>
-            <h2>{L.connect.title}</h2>
-            <div className="lp-connect">
+            <div className="lp-sec-head lp-reveal">
               <div>
-                <h3>{L.connect.readyTitle}</h3>
-                <ul className="lp-ready">
-                  {L.connect.ready.map((c) => (
-                    <li key={c.name}>
-                      <span className="lp-channel-icons">{c.icons.map((k) => <ChannelIcon key={k} name={k} size={34} />)}</span>
-                      <div><b>{c.name}</b><p>{c.what}</p>{c.note && <p className="lp-note">{c.note}</p>}</div>
-                    </li>
-                  ))}
-                </ul>
-                <div className="lp-onboarding">
-                  <h3>{L.connect.onboarding.title}</h3>
-                  <ul className="lp-checks">{L.connect.onboarding.items.map((x) => <li key={x}><Icon name="check" size={18} />{x}</li>)}</ul>
-                  <p className="lp-note">{L.connect.onboarding.note}</p>
-                </div>
-                <div className="lp-support">
-                  <b>{L.connect.support.t}</b>
-                  <p>{L.connect.support.d}</p>
-                  <div className="lp-support-actions">
-                    <a href={`mailto:${EMAIL}`} className="lp-link-light"><Icon name="message" size={16} />{EMAIL}</a>
-                    <button type="button" className="lp-link-light" onClick={() => setContact(true)}><Icon name="phone" size={16} />{L.connect.support.call}</button>
-                  </div>
-                </div>
+                <p className="lp-eyebrow coral">{L.problem.eyebrow}</p>
+                <h2>{L.problem.title1} <span className="coral">{L.problem.title2}</span></h2>
               </div>
-              <div className="lp-custom">
-                <h3>{L.connect.customTitle}</h3>
-                <p className="lp-small">{L.connect.journeyLabel}</p>
-                <ol className="lp-journey">{L.connect.journey.map((j) => <li key={j}>{j}</li>)}</ol>
-                <ul className="lp-custom-list">{L.connect.custom.map((c) => <li key={c.t}><b>{c.t}</b><span>{c.d}</span></li>)}</ul>
-                <p className="lp-note">{L.connect.scope}</p>
-                <button type="button" className="btn btn-lg lp-btn-light" onClick={() => setContact(true)}>{L.connect.discuss}</button>
-              </div>
+              <p className="lp-sec-lead">{L.problem.lead}</p>
             </div>
-          </div>
-        </section>
-
-        {/* 6. Pricing */}
-        <section id="pricing" className="lp-section">
-          <div className="lp-wrap">
-            <h2>{L.pricing.title}</h2>
-            <p className="lp-lead">{L.pricing.sub}</p>
-            <div className="lp-plans">
-              {L.pricing.plans.map((p) => (
-                <div key={p.name} className={`lp-plan${p.note ? ' lp-plan-custom' : ''}`}>
-                  <h3>{p.name}</h3>
-                  <p className="lp-plan-lead">{p.lead}</p>
-                  <div className="lp-price">{p.from && <small>{p.from} </small>}{p.price} <span>{L.pricing.perMonth}</span></div>
-                  {p.extra && <p className="lp-plan-extra">{p.extra}</p>}
-                  {p.launch && <p className="lp-plan-extra">{p.launch}</p>}
-                  {p.annual && <p className="lp-plan-annual">{p.annual}</p>}
-                  <ul className="lp-checks">{p.lines.map((l) => <li key={l}><Icon name="check" size={18} />{l}</li>)}</ul>
-                  {p.limits && <ul className="lp-plan-limits">{p.limits.map((l) => <li key={l}>{l}</li>)}</ul>}
-                  {p.note && <p className="lp-plan-note">{p.note}</p>}
-                  {/* billing is not changed yet: every offer leads to the request form, not to a payment */}
-                  <button type="button" className={`btn${p.note ? '' : ' btn-primary'}`} onClick={() => setContact(true)}>{p.cta ?? L.pricing.cta}</button>
+            <div className="lp-pairs">
+              {L.problem.rows.map((r) => (
+                <div key={r.when} className="lp-pair lp-reveal">
+                  <div className="lp-loss"><b className="lp-when">{r.when}</b><div><b>{r.loss}</b><span className="lp-strike">{r.lossD}</span></div></div>
+                  <div className="lp-fix">
+                    <span className={`lp-fix-icon ${r.icon}`}>{r.icon === 'ai' ? <Sparkle size={22} color="#fff" /> : r.icon === 'back' ? <Icon name="refresh" size={22} /> : <Icon name="alert" size={22} />}</span>
+                    <div><b>{r.fixT}</b><span>{r.fixD}</span></div>
+                  </div>
                 </div>
               ))}
             </div>
-            <div className="lp-setup">
-              <div className="lp-setup-main">
-                <b>{L.pricing.setup.t}</b>
-                <div className="lp-setup-price">{L.pricing.setup.price} <span>{L.pricing.setup.label}</span></div>
-                <p>{L.pricing.setup.next}</p>
-              </div>
-              <div>
-                <ul className="lp-checks">{L.pricing.setup.lines.map((l) => <li key={l}><Icon name="check" size={18} />{l}</li>)}</ul>
-                <b className="lp-setup-sub">{L.pricing.setup.proT}</b>
-                <ul className="lp-checks">{L.pricing.setup.pro.map((l) => <li key={l}><Icon name="check" size={18} />{l}</li>)}</ul>
-                <p className="lp-small">{L.pricing.setup.other}</p>
-              </div>
-            </div>
-            <div className="lp-extras lp-extras-two">
-              {[L.pricing.pack, L.pricing.custom].map((x) => <div key={x.t}><b>{x.t}</b><p>{x.d}</p></div>)}
-            </div>
-            <details className="lp-details">
-              <summary>{L.pricing.details.summary}</summary>
-              {L.pricing.details.items.map((x) => <p key={x}>{x}</p>)}
-            </details>
-            <p className="lp-small">{L.pricing.noTrial}</p>
           </div>
         </section>
 
-        {/* 7. Trust and questions */}
-        <section id="faq" className="lp-section lp-warm">
-          <div className="lp-wrap lp-trust-grid">
-            <div>
-              <h2>{L.trust.title}</h2>
-              <ul className="lp-trust">
-                {L.trust.items.map((x) => <li key={x.t}><span className="lp-trust-icon"><Icon name={x.icon} size={20} /></span><div><b>{x.t}</b><p>{x.d}</p></div></li>)}
-              </ul>
-            </div>
-            <div>
-              <h2>{L.faq.title}</h2>
-              <div className="lp-faq">
-                {L.faq.items.map((f) => <details key={f.q}><summary>{f.q}</summary><p>{f.a}</p></details>)}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* 8. Closing call */}
-        <section className="lp-section lp-final">
+        {/* ---------- 02 all channels in one place ---------- */}
+        <section id="product" className="lp-section lp-section-top0">
           <div className="lp-wrap">
-            <h2>{L.final.title}</h2>
-            <p className="lp-lead">{L.final.text}</p>
-            <div className="lp-cta">
-              <Link href="/demo" className="btn btn-primary btn-lg">{L.hero.demo}</Link>
-              <button type="button" className="btn btn-lg lp-btn-light" onClick={() => setContact(true)}>{L.hero.discuss}</button>
+            <div className="lp-sec-head stack lp-reveal">
+              <p className="lp-eyebrow">{L.product.eyebrow}</p>
+              <h2>{L.product.title1} <span className="green">{L.product.title2}</span></h2>
+              <p className="lp-sec-lead wide">{L.product.lead}</p>
             </div>
-            <p className="lp-final-support"><Icon name="users" size={16} />{L.final.support} <a href={`mailto:${EMAIL}`}>{EMAIL}</a></p>
+            <div className="lp-hub lp-dark-card lp-reveal">
+              <div className="lp-glow" style={{ width: 420, height: 420, background: '#8B7BFF', opacity: 0.25, top: -160, left: '38%' }} />
+              <div className="lp-hub-row">
+                <div className="lp-hub-sources">
+                  {L.product.hub.sources.map((s, i) => (
+                    <div key={s.key} className="lp-hub-src">
+                      <span className="lp-hub-chip">{s.key === 'web' ? <span className="lp-web-ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20" /></svg></span> : <ChannelIcon name={s.key} size={26} />}{s.name}</span>
+                      <span className="lp-flow" style={{ animationDelay: `${-i * 0.5}s` }} />
+                    </div>
+                  ))}
+                </div>
+                <div className="lp-hub-core"><span className="lp-hub-mark lp-pulse">L</span><small>{L.product.hub.center}</small></div>
+                <span className="lp-flow lp-hub-out" />
+                <div className="lp-feed">
+                  <div className="lp-feed-head"><b>{L.product.hub.feedTitle}</b><small>{L.ui.demoData}</small></div>
+                  {L.product.hub.feed.map((f, i) => <div key={f.text} className={`lp-feed-row${i === 0 ? ' lp-loop' : ''}`}><span>{f.text}</span><em className={`tag-${f.tone}`}>{f.ch}</em></div>)}
+                </div>
+              </div>
+              <ul className="lp-hub-points">{L.product.hub.points.map((p) => <li key={p}>✓ {p}</li>)}</ul>
+            </div>
+
+            <div className="lp-bento">
+              <article className="lp-card lp-soft lp-span lp-reveal">
+                <div className="lp-card-text"><h3>{L.product.inbox.t}</h3><p>{L.product.inbox.d}</p></div>
+                <div className="lp-inbox">
+                  {L.product.inbox.rows.map((r, i) => (
+                    <div key={r.name} className={`lp-inbox-row${i === 0 ? ' lp-loop' : ''}`}><span className={`lp-ava tag-${r.tone}`}>{r.ini}</span><div><b>{r.name}</b><small>{r.text}</small></div><em className={`tag-${r.tone}`}>{r.tag}</em></div>
+                  ))}
+                </div>
+              </article>
+              <article className="lp-card lp-dark-card lp-reveal">
+                <div className="lp-glow" style={{ width: 260, height: 260, background: '#8B7BFF', opacity: 0.35, top: -80, right: -60 }} />
+                <div className="lp-rel">
+                  <h3>{L.product.assistant.t}</h3>
+                  <div className="lp-ask"><span className="lp-typer">{L.product.assistant.q}</span></div>
+                  <div className="lp-bars">
+                    {L.product.assistant.rows.map(([n, v], i) => (
+                      <div key={n}><span>{n}</span><i style={{ maxWidth: v * 30, animationDelay: `${3.2 + i * 0.2}s` }} /><b>{v}</b></div>
+                    ))}
+                  </div>
+                  <small className="lp-muted-dark">{L.product.assistant.note}</small>
+                </div>
+              </article>
+              <article className="lp-card lp-line-card lp-reveal">
+                <h3>{L.product.report.t}</h3>
+                <p>{L.product.report.d}</p>
+                <div className="lp-mini-table" role="table">
+                  <div role="row" className="head"><span role="columnheader">{L.product.report.cols[0]}</span><span role="columnheader">{L.product.report.cols[1]}</span></div>
+                  {L.product.report.rows.map(([a, b]) => <div role="row" key={a}><span role="cell">{a}</span><span role="cell">{b}</span></div>)}
+                </div>
+                <span className="lp-chip-dark">{L.product.report.btn}</span>
+              </article>
+              <article className="lp-card lp-soft lp-reveal">
+                <h3>{L.product.remind.t}</h3>
+                <p>{L.product.remind.d}</p>
+                <div className="lp-rules">
+                  {L.product.remind.rules.map((r, i) => <div key={r}><b>{r}</b><span className={`lp-toggle${i === 0 ? ' anim' : ''}`}><i /></span></div>)}
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        {/* ---------- 03 the AI sales funnel ---------- */}
+        <section id="ai" className="lp-band-wrap">
+          <div className="lp-band lp-reveal">
+            <div className="lp-glow" style={{ width: 520, height: 520, background: '#8B7BFF', opacity: 0.32, top: -180, left: -120 }} />
+            <div className="lp-glow" style={{ width: 380, height: 380, background: '#2DE0A7', opacity: 0.16, bottom: -140, right: 80, animationDelay: '-8s' }} />
+            <div className="lp-rel">
+              <p className="lp-eyebrow violet">{L.ai.eyebrow}</p>
+              <h2>{L.ai.title1} <span className="lp-grad">{L.ai.title2}</span></h2>
+              <p className="lp-band-lead">{L.ai.lead}</p>
+              <div className="lp-funnel">
+                <ol>
+                  {L.ai.stages.map((s, i) => (
+                    <li key={s.t}>
+                      <div className="lp-chev-box"><div className={`lp-chev c${i}`}>{String(i + 1).padStart(2, '0')}</div></div>
+                      <b>{s.t}</b><span>{s.d}</span>
+                    </li>
+                  ))}
+                </ol>
+                <span className="lp-runner" aria-hidden="true" />
+              </div>
+              <ul className="lp-notes">{L.ai.notes.map((n) => <li key={n}>✦ {n}</li>)}</ul>
+              <div className="lp-modes">
+                {L.ai.modes.map((m) => <div key={m.t} className={`lp-mode${m.accent ? ' accent' : ''}`}><small>{m.k}</small><b>{m.t}</b><span>{m.d}</span></div>)}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ---------- demo call ---------- */}
+        <section className="lp-section lp-mid-wrap">
+          <div className="lp-wrap">
+            <div className="lp-mid lp-reveal">
+              <h2>{L.mid.title1} <span className="green">{L.mid.title2}</span></h2>
+              <Link href="/demo" className="lp-btn lp-btn-ink lp-btn-lg lp-shine">{L.mid.cta}</Link>
+            </div>
+          </div>
+        </section>
+
+        {/* ---------- 04 team and the owner's Telegram ---------- */}
+        <section id="team" className="lp-section lp-section-top0">
+          <div className="lp-wrap">
+            <div className="lp-sec-head stack lp-reveal">
+              <p className="lp-eyebrow">{L.team.eyebrow}</p>
+              <h2>{L.team.title}</h2>
+            </div>
+            <div className="lp-roles">
+              {L.team.roles.map((r) => <article key={r.t} className="lp-card lp-line-card lp-reveal"><h3>{r.t}</h3><p className="green strong">{r.q}</p><p>{r.d}</p></article>)}
+            </div>
+            <div className="lp-owner lp-reveal">
+              <div className="lp-owner-text">
+                <p className="lp-eyebrow coral">{L.team.owner.eyebrow}</p>
+                <h3>{L.team.owner.title}</h3>
+                <p>{L.team.owner.text}</p>
+                <div className="lp-chips">{L.team.owner.chips.map((c) => <span key={c}>{c}</span>)}</div>
+              </div>
+              <div className="lp-owner-art">
+                <div className="lp-tg lp-floaty" role="img" aria-label={`Telegram · ${L.ui.example}`}>
+                  <div className="lp-tg-head"><ChannelIcon name="telegram" size={38} /><div><b>{L.team.owner.chat}</b><small>{L.team.owner.chatSub}</small></div><span className="lp-badge">{L.ui.example}</span></div>
+                  <div className="lp-tg-msg lp-in" style={{ animationDelay: '.3s' }}><b>{L.team.owner.digestT}</b>{L.team.owner.digest.map((d) => <span key={d}>{d}</span>)}<span className="green strong">{L.team.owner.aiLine}</span></div>
+                  <div className="lp-tg-msg signal lp-in" style={{ animationDelay: '1.1s' }}><b><i className="lp-pulse-coral" />{L.team.owner.signalT}</b><span>{L.team.owner.signal}</span><span className="strong">{L.team.owner.open}</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ---------- 05 launch ---------- */}
+        <section id="launch" className="lp-section lp-section-top0">
+          <div className="lp-wrap">
+            <div className="lp-sec-head lp-reveal">
+              <div>
+                <p className="lp-eyebrow">{L.launch.eyebrow}</p>
+                <h2>{L.launch.title1} <span className="green">{L.launch.title2}</span></h2>
+              </div>
+              <p className="lp-sec-lead">{L.launch.lead}</p>
+            </div>
+            <div className="lp-steps">
+              <span className="lp-flow lp-steps-line" />
+              <ol>
+                {L.launch.steps.map((s, i) => <li key={s.t} className="lp-reveal"><span className={`lp-step-n s${i}`}>{i + 1}</span><b>{s.t}</b><span>{s.d}</span></li>)}
+              </ol>
+            </div>
+          </div>
+        </section>
+
+        {/* ---------- 06 pricing ---------- */}
+        <section id="pricing" className="lp-section lp-section-top0">
+          <div className="lp-wrap">
+            <div className="lp-sec-head lp-reveal">
+              <div>
+                <p className="lp-eyebrow">{P.eyebrow}</p>
+                <h2>{P.title}</h2>
+                <p className="lp-sec-lead wide">{P.sub}</p>
+              </div>
+              <div className="lp-term">
+                <div className="lp-seg" role="group" aria-label={`${P.monthly} / ${P.yearly}`}>
+                  <button type="button" aria-pressed={!yearly} className={!yearly ? 'on' : undefined} onClick={() => setYearly(false)}>{P.monthly}</button>
+                  <button type="button" aria-pressed={yearly} className={yearly ? 'on' : undefined} onClick={() => setYearly(true)}>{P.yearly} <em>{P.yearBadge}</em></button>
+                </div>
+                <span>{P.yearNote}</span>
+              </div>
+            </div>
+            <div className="lp-plans">
+              {P.plans.map((p, i) => {
+                const pro = i === 1;
+                return (
+                  <article key={p.name} className={`lp-plan lp-reveal${pro ? ' pro' : ''}`}>
+                    {pro && <span className="lp-plan-best">{P.best}</span>}
+                    <h3>{p.name}</h3>
+                    <p className="lp-plan-lead">{p.lead}</p>
+                    {yearly ? (
+                      <>
+                        <div className="lp-price"><b>{p.year}</b><span>{P.perYear}</span></div>
+                        <p className="lp-price-note"><s>{p.full}</s><em className="lp-save">{fill(P.save, { save: p.save })}</em><span>{fill(P.approx, { sum: p.perMonthYear })}</span></p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="lp-price"><b>{p.price}</b><span>{P.perMonth}</span></div>
+                        <p className="lp-price-note">{fill(P.orYear, { sum: p.year })} <strong>{fill(P.save, { save: p.save })}</strong></p>
+                      </>
+                    )}
+                    <div className="lp-plan-ai">
+                      <div><b><Sparkle size={15} /> {p.aiT}</b><em>{p.aiTag}</em></div>
+                      <p>{p.aiD}</p>
+                      <small>{p.aiMeta}</small>
+                    </div>
+                    <p className="lp-plan-also">{p.alsoT}</p>
+                    <ul>{p.lines.slice(1).map((l) => <li key={l}><span>✓</span>{l}</li>)}</ul>
+                    <button type="button" className={`lp-btn ${pro ? 'lp-btn-mint lp-shine' : 'lp-btn-outline'}`} onClick={() => setContact(true)}>{p.cta}</button>
+                  </article>
+                );
+              })}
+            </div>
+            <div className="lp-compare lp-reveal">
+              <table>
+                <caption>{P.compareT}</caption>
+                <thead><tr><th scope="col">{P.compareCols[0]}</th><th scope="col">{P.compareCols[1]}</th><th scope="col" className="pro">{P.compareCols[2]}</th></tr></thead>
+                <tbody>{P.compare.map((r) => <tr key={r.label}><th scope="row">{r.label}</th><td>{cell(r.start)}</td><td>{cell(r.pro, r.strong)}</td></tr>)}</tbody>
+              </table>
+              <p>{P.pack}</p>
+            </div>
+            <div className="lp-launch-note lp-reveal"><b>{P.launchT}</b><span>{P.launchD}</span></div>
+            <div className="lp-network lp-reveal"><span><b>{P.network.name}</b> {P.network.d}</span><button type="button" className="lp-link" onClick={() => setContact(true)}>{P.network.cta}</button></div>
+          </div>
+        </section>
+
+        {/* ---------- 07 security ---------- */}
+        <section className="lp-section lp-section-top0">
+          <div className="lp-wrap lp-split">
+            <div className="lp-reveal">
+              <p className="lp-eyebrow">{L.trust.eyebrow}</p>
+              <h2 className="lp-h2-sm">{L.trust.title}</h2>
+            </div>
+            <div className="lp-trust">{L.trust.items.map((x) => <div key={x.t} className="lp-reveal"><b>{x.t}</b><span>{x.d}</span></div>)}</div>
+          </div>
+        </section>
+
+        {/* ---------- 08 questions ---------- */}
+        <section id="faq" className="lp-section lp-section-top0">
+          <div className="lp-wrap lp-split">
+            <div className="lp-reveal">
+              <p className="lp-eyebrow">{L.faq.eyebrow}</p>
+              <h2 className="lp-h2-sm">{L.faq.title}</h2>
+              <p className="lp-muted">{L.faq.more} <button type="button" className="lp-link" onClick={() => setContact(true)}>{L.faq.moreLink}</button></p>
+            </div>
+            <div className="lp-faq">{L.faq.items.map((f, i) => <details key={f.q} open={i === 0}><summary>{f.q}</summary><p>{f.a}</p></details>)}</div>
+          </div>
+        </section>
+
+        {/* ---------- closing ---------- */}
+        <section id="contact" className="lp-band-wrap lp-final-wrap">
+          <div className="lp-band lp-final lp-reveal">
+            <div className="lp-glow" style={{ width: 460, height: 460, background: '#FF8A5B', opacity: 0.22, top: -160, right: 120 }} />
+            <div className="lp-glow" style={{ width: 460, height: 460, background: '#8B7BFF', opacity: 0.28, bottom: -200, left: -60, animationDelay: '-7s' }} />
+            <div className="lp-dots" />
+            <div className="lp-final-row">
+              <div>
+                <h2>{L.final.title1} <span className="lp-grad">{L.final.title2}</span></h2>
+                <p className="lp-band-lead">{L.final.text}</p>
+                <Link href="/demo" className="lp-btn lp-btn-mint lp-btn-lg lp-shine">{L.final.demo}</Link>
+              </div>
+              <ContactForm lang={lang} L={L} dark title={L.final.formT} />
+            </div>
           </div>
         </section>
       </main>
 
-      <footer className="lp-foot">
-        <span>{L.footer}</span>
-        <a href={`mailto:${EMAIL}`}>{EMAIL}</a>
-        <Link href="/terms">{L.nav.terms}</Link>
-        <Link href="/privacy">{L.nav.privacy}</Link>
+      <footer className="lp-foot lp-wrap">
+        <div className="lp-foot-brand">
+          <Link href={LANDING_PATH[lang]} className="lp-home dark" aria-label="LANKA"><Logo /></Link>
+          <p>{L.footer.tagline}</p>
+        </div>
+        <nav aria-label={L.footer.product}><b>{L.footer.product}</b><a href="#product">{L.footer.features}</a><a href="#ai">{L.nav.ai}</a><a href="#pricing">{L.nav.pricing}</a><a href="#launch">{L.nav.launch}</a></nav>
+        <nav aria-label={L.footer.clients}><b>{L.footer.clients}</b><Link href="/login">{L.nav.login}</Link><Link href="/demo">{L.contact.demo}</Link><a href="#faq">{L.nav.faq}</a><a href={`mailto:${EMAIL}`}>{L.footer.contact}</a></nav>
+        <nav aria-label={L.footer.docs}><b>{L.footer.docs}</b><Link href="/terms">{L.nav.terms}</Link><Link href="/privacy">{L.nav.privacy}</Link></nav>
+        <OwnerDetails lang={lang} className="lp-legal" />
+        <div className="lp-foot-bottom"><span>{L.footer.copyright}</span><a href={`mailto:${EMAIL}`}>{EMAIL}</a><LandingLangs lang={lang} /></div>
       </footer>
 
       <ContactDialog lang={lang} L={L} open={contact} onClose={() => setContact(false)} />
-
-      <dialog ref={dialog} className="lp-lightbox" aria-label={zoom?.alt} onClose={() => setZoom(null)} onClick={(e) => { if (e.target === e.currentTarget) setZoom(null); }}>
-        {zoom && (
-          <>
-            <button type="button" className="lp-lightbox-close" onClick={() => setZoom(null)} aria-label={L.ui.close}><Icon name="close" size={22} /></button>
-            <img src={zoom.src} alt={zoom.alt} />
-          </>
-        )}
-      </dialog>
     </div>
   );
 }

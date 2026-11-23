@@ -8,6 +8,7 @@ import { OutboxService } from './outbox.service';
 import { AgentApprovalService } from './agent-approval.service';
 import { AgentAutoService } from './agent-auto.service';
 import { PlannerService } from './planner.service';
+import { FollowUpService } from './follow-up.service';
 
 // Once a minute sends approved messages, once in five minutes fills the queue for the scenarios that are on.
 // AUTOMATIONS_TICK_SECONDS=0 turns it off (in tests).
@@ -28,6 +29,7 @@ export class AutomationScheduler implements OnApplicationBootstrap, OnModuleDest
     private custom: CustomAutomationsService,
     private drafts: AgentApprovalService,
     private auto: AgentAutoService,
+    private followUps: FollowUpService,
   ) {}
 
   onApplicationBootstrap() {
@@ -57,6 +59,7 @@ export class AutomationScheduler implements OnApplicationBootstrap, OnModuleDest
       if (this.n % 60 === 1) await this.drafts.purge().catch((e) => this.log.warn(`Agent drafts purge: ${(e as Error).message}`));
       await this.outbox.process();
       await this.digest.tick().catch((e) => this.log.warn(`Дайджест: ${(e as Error).message}`));
+      if (this.n % 5 === 2) await this.followUps.tick().catch((e) => this.log.warn(`Follow-ups: ${(e as Error).message}`));
     } finally {
       this.busy = false;
     }

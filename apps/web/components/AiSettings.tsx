@@ -21,6 +21,8 @@ interface AiStatus {
   autoBooking: boolean;
   assistant: boolean;
   autoBookingSupported: boolean;
+  // the AI's own booking and rescheduling in Cliniccards is a Pro feature (auto_booking)
+  autoBookingInPlan?: boolean;
   autoBookingTest?: { restricted: boolean; dialogs: number };
   // the new agent (the service owner's switches, read-only here)
   agentMode: boolean;
@@ -184,11 +186,11 @@ export function AiSettings({ onOpenGeneral, onOpenBilling, isOwner = false }: { 
           <b>{t('aiset.bookingTitle')}</b>
           {agent ? (
             <>
-              <p className="rule" style={{ margin: '4px 0' }}>{clinicWide ? t('aiset.agentBookingClinic') : autoShown ? t('aiset.agentBookingAuto') : t('aiset.agentBookingDrafts')}</p>
+              <p className="rule" style={{ margin: '4px 0' }}>{clinicWide ? (ai.autoBookingInPlan === false ? t('aiset.agentBookingStart') : t('aiset.agentBookingClinic')) : autoShown ? t('aiset.agentBookingAuto') : t('aiset.agentBookingDrafts')}</p>
               {!clinicWide && <p className="muted" style={{ fontSize: 13, margin: 0 }}>{t('aiset.autoBookingAgent')}</p>}
             </>
           ) : (
-            <Switch checked={ai.autoBooking} disabled={busy || !ai.autoBookingSupported} label={t('ai.autoBooking')} hint={ai.autoBookingSupported ? t('ai.autoBookingHint') : t('ai.autoBookingUnsupported')} onChange={(on) => patchAi({ autoBooking: on })} />
+            <Switch checked={ai.autoBooking} disabled={busy || !ai.autoBookingSupported || ai.autoBookingInPlan === false} label={t('ai.autoBooking')} hint={ai.autoBookingInPlan === false ? t('ai.autoBookingPro') : ai.autoBookingSupported ? t('ai.autoBookingHint') : t('ai.autoBookingUnsupported')} onChange={(on) => patchAi({ autoBooking: on })} />
           )}
           {ai.autoBookingTest?.restricted && <Alert tone="warn">{ai.autoBookingTest.dialogs > 0 ? t('ai.testOnly', { n: ai.autoBookingTest.dialogs }) : t('ai.testOnlyNone')}</Alert>}
         </section>

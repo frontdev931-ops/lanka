@@ -110,6 +110,11 @@ model Clinic {
   aiLimitAlertUnknownAt     DateTime?
   // Allow the AI to create an appointment itself. Always off by default; it cannot be turned on until the connector can write to the clinic's system
   aiAutoBooking             Boolean                   @default(false)
+  // Follow-ups to the agent's dialogues that did not reach a booking (2026-11-23): off by default; the days between the two Telegram pings; the clinic's
+  // own texts per reason ({ PRICE, TIME, SILENT, AGAIN } → { uk, ru }), the defaults otherwise
+  followUpEnabled           Boolean                   @default(false)
+  followUpDays              Int                       @default(3)
+  followUpTexts             Json?
   // Foundation of the AI administrator-agent (see .claude/docs/agent-administrator.md). Both are off by default and set only by the service owner.
   // aiAgentMode: turns on the agent's drafts for staff (the code reads it in the draft, approval and autonomy paths; with it off the old bot works as before).
   // funnelEventsEnabled: the only switch of the collection of funnel events and of the dialogue state rows; with it off nothing is written.
@@ -129,6 +134,7 @@ model Clinic {
   conversationStates        ConversationState[]
   funnelEvents              FunnelEvent[]
   agentDrafts               AgentDraft[]
+  followUps                 FollowUp[]
   // The AI replies to patients itself on safe topics (booking, reschedule, cancel, history); anything else it hands to a person. Off by default
   // What patients may be told about the clinic in a chat: set by the clinic itself (Cliniccards does not give them to us)
   // The doctor a new patient without preferences is booked to (the id in Cliniccards, and the name as it was when it was chosen)
@@ -1255,8 +1261,10 @@ model AlertRule {
   threshold       Float
   windowDays      Int       @default(7)
   hours           Int       @default(4)
-  // enabled: the email to the owner; push: Push notifications to the clinic's subscribed devices (split from enabled on 2026-11-19, the
-  // existing value copied); telegram: the staff Telegram chat
+  // active: the master switch of the rule (2026-11-23): off = not measured, not counted in summaries, nothing delivered on any channel;
+  // the channel preferences below are kept while it is off. enabled: the email to the owner; push: Push notifications to the clinic's
+  // subscribed devices (split from enabled on 2026-11-19, the existing value copied); telegram: the staff Telegram chat
+  active          Boolean   @default(true)
   enabled         Boolean   @default(false)
   push            Boolean   @default(false)
   telegram        Boolean   @default(false)
@@ -1566,4 +1574,35 @@ model AdditionalClinicRequest {
 
   @@index([clinicId, createdAt])
   @@index([handledAt, createdAt])
+}
+
+// A follow-up message to an agent dialogue that stopped before a booking (2026-11-23). reason: PRICE (the agent stated a price, nothing chosen), TIME (times were
+// offered, none chosen), SILENT (the patient did not answer the agent's question). step 1 the next day, step 2 (Telegram only) some days later; Instagram and
+// Messenger get only what fits their 24-hour window. basisMessageId: the patient's last message when it was planned; any newer message cancels it.
+// status: PLANNED (waits for its time), PENDING_APPROVAL (a staff member sends it), SENDING (claimed), SENT, CANCELLED, EXPIRED (the time or the window passed),
+// FAILED. The text is a template (no AI, no patient data).
+model FollowUp {
+  id             String    @id @default(cuid())
+  clinicId       String
+  channel        String
+  chatId         String
+  reason         String
+  step           Int
+  lang           String    @default("uk")
+  text           String
+  dueAt          DateTime
+  expiresAt      DateTime?
+  status         String    @default("PLANNED")
+  basisMessageId String
+  approvedById   String?
+  sentAt         DateTime?
+  messageId      String?
+  error          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, channel, chatId, basisMessageId, step])
+  @@index([clinicId, status, dueAt])
+  @@index([status, dueAt])
 }

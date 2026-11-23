@@ -246,20 +246,26 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
 
   async alerts(clinicId: string) {
     for (const kind of ALERT_KINDS) await this.prisma.alertRule.upsert({ where: { clinicId_kind: { clinicId, kind } }, create: { clinicId, kind, ...ALERT_DEFAULTS[kind] }, update: {} });
-    return this.prisma.alertRule.findMany({ where: { clinicId }, orderBy: { kind: 'asc' }, select: { kind: true, threshold: true, windowDays: true, hours: true, enabled: true, push: true, telegram: true, lastFiredAt: true, telegramSentAt: true, lastValue: true } });
+    return this.prisma.alertRule.findMany({ where: { clinicId }, orderBy: { kind: 'asc' }, select: { kind: true, threshold: true, windowDays: true, hours: true, active: true, enabled: true, push: true, telegram: true, lastFiredAt: true, telegramSentAt: true, lastValue: true } });
   }
 
-  // Settings of one rule (owner and manager; the controller checks the role). Saving never sends anything.
-  async updateAlert(clinicId: string, userId: string, kind: string, d: { enabled?: boolean; push?: boolean; telegram?: boolean; threshold?: number; windowDays?: number; hours?: number }) {
+  // Settings of one rule (owner and manager; the controller checks the role). Saving never sends anything. "active" is the master switch:
+  // turning it off keeps the channel preferences (they apply again when it is back on); a channel cannot be changed while the rule is off.
+  async updateAlert(clinicId: string, userId: string, kind: string, d: { active?: boolean; enabled?: boolean; push?: boolean; telegram?: boolean; threshold?: number; windowDays?: number; hours?: number }) {
     if (!ALERT_KINDS.includes(kind as AlertKind)) throw new NotFoundException('alert_not_found');
     const lim = ALERT_LIMITS[kind as AlertKind];
     const { plan } = await this.clinicOk(clinicId);
-    if ((d.enabled || d.push || d.telegram) && !hasFeature(plan, 'advanced_analytics')) throw new BadRequestException('plan_feature');
+    if ((d.active || d.enabled || d.push || d.telegram) && !hasFeature(plan, 'advanced_analytics')) throw new BadRequestException('plan_feature');
     const inRange = (v: number, [lo, hi]: [number, number], int: boolean) => Number.isFinite(v) && v >= lo && v <= hi && (!int || Number.isInteger(v));
     if (d.threshold !== undefined && !inRange(d.threshold, lim.threshold, kind !== 'CANCEL_RATE' && kind !== 'RETURN_DROP' && kind !== 'PAYMENTS_DROP')) throw new BadRequestException('bad_alert');
     if (d.windowDays !== undefined && (!lim.windowDays || !inRange(d.windowDays, lim.windowDays, true))) throw new BadRequestException('bad_alert');
     if (d.hours !== undefined && (!lim.hours || !inRange(d.hours, lim.hours, true))) throw new BadRequestException('bad_alert');
     await this.alerts(clinicId);
+    const channel = d.enabled !== undefined || d.push !== undefined || d.telegram !== undefined;
+    if (channel && d.active !== true) {
+      const cur = await this.prisma.alertRule.findUniqueOrThrow({ where: { clinicId_kind: { clinicId, kind } }, select: { active: true } });
+      if (!cur.active || d.active === false) throw new BadRequestException('alert_inactive');
+    }
     await this.prisma.alertRule.update({ where: { clinicId_kind: { clinicId, kind } }, data: d });
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'alert.changed', details: { kind, ...d } } });
   }
@@ -372,12 +378,13 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
     const [rules, sync, chat] = await Promise.all([this.alerts(clinicId), this.syncState(clinicId, now), this.staff.chat(clinicId)]);
     const signals = [];
     for (const r of rules) {
-      const e = await this.explain(clinicId, r, now, sync);
-      if (!e) continue;
-      const state = e.state === 'measured' ? (e.value >= r.threshold ? 'fired' : 'ok') : e.state;
+      // a rule switched off is not measured: no green or red assessment, only its settings
+      const e: SignalExplained | null = r.active ? await this.explain(clinicId, r, now, sync) : null;
+      if (r.active && !e) continue;
+      const state = !e ? 'off' : e.state === 'measured' ? (e.value >= r.threshold ? 'fired' : 'ok') : e.state;
       const lim = ALERT_LIMITS[r.kind as AlertKind];
       signals.push({
-        ...e, kind: r.kind, state, threshold: r.threshold, windowDays: r.windowDays, hours: r.hours,
+        ...(e ?? {}), kind: r.kind, state, active: r.active, threshold: r.threshold, windowDays: r.windowDays, hours: r.hours,
         // which settings this rule has, with their limits (the screen edits only these)
         limits: lim, telegramOn: r.telegram, emailOn: r.enabled, pushOn: r.push, lastFiredAt: r.lastFiredAt, telegramSentAt: r.telegramSentAt, link: SIGNAL_LINK[r.kind as AlertKind],
       });
@@ -401,11 +408,12 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
     return `Сигнал: ${t}\n\nВідкрити: ${link}`;
   }
 
-  // Checks the rules of one clinic that deliver anything. Email and push (the "enabled" switch) and Telegram (its own switch) are throttled
-  // separately, at most once per 24 hours per rule while it stays triggered. Telegram: the preference is read again right before sending, the
-  // alert is claimed first (two runs never send it twice), and only a delivered message counts as sent. Returns the kinds that delivered.
+  // Checks the rules of one clinic that are switched on (active) and deliver anything. Email and push and Telegram (its own switch) are
+  // throttled separately, at most once per 24 hours per rule while it stays triggered. The master switch and the channel are read again in the
+  // claim right before sending (a rule switched off meanwhile sends nothing); the alert is claimed first (two runs never send it twice), and
+  // only a delivered Telegram message counts as sent. Returns the kinds that delivered.
   async evaluate(clinicId: string, now = new Date()): Promise<string[]> {
-    const rules = await this.prisma.alertRule.findMany({ where: { clinicId, OR: [{ enabled: true }, { push: true }, { telegram: true }] } });
+    const rules = await this.prisma.alertRule.findMany({ where: { clinicId, active: true, OR: [{ enabled: true }, { push: true }, { telegram: true }] } });
     if (!rules.length) return [];
     const sync = await this.syncState(clinicId, now);
     const quiet = new Date(now.getTime() - COOLDOWN_MS);
@@ -418,10 +426,11 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
       if (rule.enabled || rule.push) {
         // marked first, so a failing delivery cannot turn into a message every half hour (the existing rule for email and push); the two
         // switches are read again in the claim and each channel is used only when its own switch is on
-        const claimed = await this.prisma.alertRule.updateMany({ where: { id: rule.id, OR: [{ enabled: true }, { push: true }], AND: [{ OR: [{ lastFiredAt: null }, { lastFiredAt: { lt: quiet } }] }] }, data: { lastFiredAt: now, lastValue: e.value } });
+        const claimed = await this.prisma.alertRule.updateMany({ where: { id: rule.id, active: true, OR: [{ enabled: true }, { push: true }], AND: [{ OR: [{ lastFiredAt: null }, { lastFiredAt: { lt: quiet } }] }] }, data: { lastFiredAt: now, lastValue: e.value } });
         if (claimed.count) {
-          const now2 = await this.prisma.alertRule.findUniqueOrThrow({ where: { id: rule.id }, select: { enabled: true, push: true } });
-          delivered = true;
+          const now2 = await this.prisma.alertRule.findUniqueOrThrow({ where: { id: rule.id }, select: { active: true, enabled: true, push: true } });
+          if (!now2.active) now2.enabled = now2.push = false;
+          delivered = now2.enabled || now2.push;
           // the Push notification carries no numbers or names
           if (now2.push) await this.push.notify(clinicId, { title: 'Сигнал для керівника', body: 'Є відхилення в роботі клініки', url: '/signals', tag: `alert-${rule.kind}` }).catch(() => undefined);
           if (now2.enabled) {
@@ -433,7 +442,7 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
       }
       if (rule.telegram) {
         const claim = await this.prisma.alertRule.updateMany({
-          where: { id: rule.id, telegram: true, OR: [{ telegramSentAt: null }, { telegramSentAt: { lt: quiet } }], AND: [{ OR: [{ telegramClaimAt: null }, { telegramClaimAt: { lt: new Date(now.getTime() - TELEGRAM_CLAIM_MS) } }] }] },
+          where: { id: rule.id, active: true, telegram: true, OR: [{ telegramSentAt: null }, { telegramSentAt: { lt: quiet } }], AND: [{ OR: [{ telegramClaimAt: null }, { telegramClaimAt: { lt: new Date(now.getTime() - TELEGRAM_CLAIM_MS) } }] }] },
           data: { telegramClaimAt: now },
         });
         if (claim.count) {
@@ -455,7 +464,7 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
   }
 
   async evaluateAll(now = new Date()) {
-    const clinics = await this.prisma.alertRule.findMany({ where: { OR: [{ enabled: true }, { push: true }, { telegram: true }] }, distinct: ['clinicId'], select: { clinicId: true } });
+    const clinics = await this.prisma.alertRule.findMany({ where: { active: true, OR: [{ enabled: true }, { push: true }, { telegram: true }] }, distinct: ['clinicId'], select: { clinicId: true } });
     for (const c of clinics) {
       const ok = await this.clinicOk(c.clinicId);
       if (!ok.ok || !hasFeature(ok.plan, 'advanced_analytics')) continue;

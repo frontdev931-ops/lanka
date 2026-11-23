@@ -491,7 +491,7 @@ describe('рекламні форми Meta (Lead Ads)', () => {
     await prisma.clinic.update({ where: { id: none.clinicId }, data: { plan: 'PRO' } });
     expect(await status(none)).toMatchObject({ state: 'not_connected', page: null, verified: false });
     await prisma.clinic.update({ where: { id: none.clinicId }, data: { plan: 'START' } });
-    expect((await status(none)).state).toBe('plan');
+    expect((await status(none)).state).toBe('not_connected'); // Start includes the Meta channels since 2026-11-23
     const manual = await withPage();
     expect(await status(manual)).toMatchObject({ state: 'unknown', permission: null, page: { id: manual.pageId, name: 'Сторінка клініки' } });
     const c = await withPage(true);

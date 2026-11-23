@@ -1008,7 +1008,7 @@ describe('агент: самостійне ввімкнення власнико
     expect(transport.sent.length).toBeGreaterThan(0);
   });
 
-  it('вимкнення й втрата тарифу зупиняють агента; старий автовідповідач при цьому не вмикається', async () => {
+  it('перехід на «Старт» агента не зупиняє (розподіл 2026-11-23); вимкнення власником зупиняє; старий автовідповідач при цьому не вмикається', async () => {
     const c = await readyClinic();
     await http().put('/ai/agent/services').set(auth(c.token)).send({ ids: [c.consult.id] }).expect(200);
     await http().post('/ai/agent/activate').set(auth(c.token)).expect(200);
@@ -1016,14 +1016,10 @@ describe('агент: самостійне ввімкнення власнико
     const sent = transport.sent.length;
     expect(sent).toBeGreaterThan(0);
 
-    // the plan is gone: the next message gets no automatic answer, and the gate names the reason
+    // Start includes the agent since 2026-11-23: moving there keeps it answering in every channel
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'START', aiAutoReply: true } });
-    const second = { ...c, chat: `ig${rnd()}` };
-    await ask(second);
-    expect(transport.sent).toHaveLength(sent);
-    expect(await app.get(AgentAutoGate).denied(c.clinicId, 'INSTAGRAM', second.chat)).toBe('plan_without_agent');
-    expect((await agent(c).expect(200)).body).toMatchObject({ inPlan: false, active: true, paused: true });
-    await http().post('/ai/agent/activate').set(auth(c.token)).expect(400);
+    expect(await app.get(AgentAutoGate).denied(c.clinicId, 'INSTAGRAM', `ig${rnd()}`)).toBeNull();
+    expect((await agent(c).expect(200)).body).toMatchObject({ inPlan: true, active: true });
 
     // back on Pro, then the owner switches the agent off: silent again, the agent mode (drafts) stays, the older auto-reply stays held
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'PRO' } });

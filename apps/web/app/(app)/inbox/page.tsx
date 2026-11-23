@@ -114,9 +114,13 @@ export default function InboxPage() {
   const [tab, setTab] = useState<'chats' | 'requests'>('chats');
   // the channel filter of the list of dialogues ('' = all); offered only when the clinic has dialogues in more than one channel
   const [chFilter, setChFilter] = useState('');
-  // the home page's "new requests" card opens the requests tab (/inbox?tab=requests)
+  // the home page's "new requests" card opens the requests tab (/inbox?tab=requests); a follow-up opens its dialogue (/inbox?channel=…&chat=…)
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('tab') === 'requests') setTab('requests');
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('tab') === 'requests') setTab('requests');
+    const channel = q.get('channel');
+    const chat = q.get('chat');
+    if (channel && chat) setOpen({ channel, chatId: chat });
   }, []);
   const [reqStatus, setReqStatus] = useState<'NEW' | 'DONE'>('NEW');
   const [reqs, setReqs] = useState<{ newCount: number; rows: Req[] } | null>(null);

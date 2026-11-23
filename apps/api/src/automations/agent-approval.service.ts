@@ -412,9 +412,10 @@ export class AgentApprovalService {
     return conversationVisits(this.prisma, clinicId, channel, chatId);
   }
 
-  // The same keys as a booking write: the clinic's flag, the server's write switches, and the live-test restriction of dialogs
+  // The same keys as a booking write: the clinic's flag, the server's write switches, and the live-test restriction of dialogs; moving and cancelling
+  // a visit by the AI is part of auto_booking (Pro): elsewhere the patient's wish goes to the administrator as a request
   async cancelWritable(clinicId: string, channel: string, chatId: string): Promise<boolean> {
-    return (await this.booking.status(clinicId)).enabled && this.autoBooking.allowed(clinicId, { channel, chatId });
+    return (await this.booking.status(clinicId)).enabled && this.autoBooking.allowed(clinicId, { channel, chatId }) && (await this.booking.aiWriteInPlan(clinicId));
   }
 
   // The question "cancel this visit?" with its own two buttons (never the buttons of the booking); the buttons carry the question's id, so an answer is tied to

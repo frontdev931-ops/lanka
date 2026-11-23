@@ -2,13 +2,14 @@
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { useT } from '../lib/i18n';
+import { useI18n } from '../lib/i18n';
 import LanguageSwitcher from './LanguageSwitcher';
+import { OwnerDetails } from './OwnerDetails';
 import { Brand } from './Brand';
 
 // A plain public page (terms, privacy, data deletion status): the brand, the language and readable text
 export function PublicPage({ title, children }: { title: string; children: ReactNode }) {
-  const t = useT();
+  const { t, locale } = useI18n();
   return (
     <div className="land">
       <header className="land-head">
@@ -23,6 +24,7 @@ export function PublicPage({ title, children }: { title: string; children: React
         <div className="public-text">{children}</div>
       </main>
       <footer className="land-foot">
+        <OwnerDetails lang={locale} className="public-owner" />
         <Link href="/terms">{t('public.terms')}</Link> · <Link href="/privacy">{t('public.privacy')}</Link> · <a href="mailto:hello@lankaclinic.app">hello@lankaclinic.app</a>
       </footer>
     </div>

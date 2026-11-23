@@ -39,7 +39,7 @@ const LEAD = ['OWNER', 'MANAGER'];
 const SECTIONS: { label: Key; tabs: SectionTab[] }[] = [
   { label: 'nav.patients', tabs: [{ href: '/patients', label: 'sec.cards' }, { href: '/inquiries', label: 'nav.inquiries' }, { href: '/waitlist', label: 'nav.waitlist' }] },
   { label: 'nav.reportsAll', tabs: [{ href: '/reports', label: 'nav.reports' }, { href: '/quality', label: 'nav.quality' }, { href: '/signals', label: 'sec.signals', only: LEAD }, { href: '/payback', label: 'sec.payback', only: LEAD }, { href: '/insights', label: 'sec.scheduled', only: LEAD }, { href: '/network', label: 'sec.network', needs: 'network' }] },
-  { label: 'nav.aiAdmin', tabs: [{ href: '/knowledge', label: 'nav.knowledge' }, { href: '/ai-admin', label: 'sec.mode', only: LEAD }, { href: '/ai-admin/booking', label: 'sec.booking', only: LEAD }] },
+  { label: 'nav.aiAdmin', tabs: [{ href: '/knowledge', label: 'nav.knowledge' }, { href: '/ai-admin', label: 'sec.mode', only: LEAD }, { href: '/ai-admin/booking', label: 'sec.booking', only: LEAD }, { href: '/ai-admin/follow-ups', label: 'sec.followups', only: ['OWNER', 'MANAGER', 'ADMIN'] }] },
 ];
 
 // Only for the owner of the service (see PLATFORM_ADMIN_EMAILS)

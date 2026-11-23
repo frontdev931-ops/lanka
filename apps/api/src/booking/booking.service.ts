@@ -12,6 +12,7 @@ import { VISIT_STATUS } from '../integrations/cliniccards.connector';
 import { SyncService } from '../integrations/sync.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { cancelStaleReminders } from '../automations/visit-reminders';
+import { hasFeature } from '../service/plans';
 
 const MIN = 60_000;
 // A visit in these statuses does not occupy its place
@@ -88,11 +89,18 @@ export class BookingService {
     return { enabled: c.bookingWriteEnabled && !!connector?.createVisit && process.env.CLINICCARDS_WRITE_ENABLED === 'true' && liveWriteAllowed() };
   }
 
+  // May the AI itself (no staff member) write visits of this clinic to Cliniccards: a Pro feature (auto_booking). Staff actions are not affected.
+  async aiWriteInPlan(clinicId: string): Promise<boolean> {
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } });
+    return hasFeature(c.plan, 'auto_booking');
+  }
+
   // Will THIS dialogue be booked by the bot itself? All the keys at once: the clinic's setting aiAutoBooking, the server and clinic write flags
   // (status), and the live-test restriction of dialogues. The same answer decides the text the patient reads before choosing a time.
   async autoModeFor(clinicId: string, chat: DialogOrigin): Promise<boolean> {
-    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiAutoBooking: true } });
+    const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { aiAutoBooking: true, plan: true } });
     if (!c.aiAutoBooking || process.env.CLINICCARDS_WRITE_ENABLED !== 'true') return false;
+    if (!hasFeature(c.plan, 'auto_booking')) return false;
     if (!this.gate.allowed(clinicId, chat)) return false;
     return (await this.status(clinicId)).enabled;
   }

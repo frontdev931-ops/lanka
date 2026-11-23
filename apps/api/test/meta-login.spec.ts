@@ -110,7 +110,8 @@ describe('вхід через Facebook Login for Business', () => {
     const doctor = (await http().post(`/invites/${(inv.body.link as string).split('/invite/')[1]}/accept`).send({ name: 'Лікар', password: PASSWORD }).expect(201)).body.accessToken as string;
     await http().get('/automations/meta/oauth').set(auth(doctor)).expect(403);
     const start = await clinic('START');
-    expect((await http().get('/automations/meta/oauth').set(auth(start.token)).expect(302)).headers.location).toContain('meta=plan');
+    // Start includes Instagram and Messenger since 2026-11-23
+    expect((await http().get('/automations/meta/oauth').set(auth(start.token)).expect(302)).headers.location).toContain('facebook.com');
     const demo = await clinic();
     await prisma.clinic.update({ where: { id: demo.clinicId }, data: { isDemo: true } });
     expect((await http().get('/automations/meta/oauth').set(auth(demo.token)).expect(302)).headers.location).toContain('meta=demo');

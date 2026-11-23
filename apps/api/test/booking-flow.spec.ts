@@ -81,7 +81,7 @@ async function synced(opts: { auto: boolean; write?: boolean }) {
   await http().get('/integrations/cliniccards').set(auth(c.token)).expect(200);
   await http().put('/integrations/cliniccards/key').set(auth(c.token)).send({ apiKey: MOCK_KEY }).expect(200);
   await http().post('/integrations/cliniccards/sync').set(auth(c.token)).expect(201);
-  await prisma.clinic.update({ where: { id: c.clinicId }, data: { bookingWriteEnabled: opts.write ?? true, aiAutoBooking: opts.auto } });
+  await prisma.clinic.update({ where: { id: c.clinicId }, data: { bookingWriteEnabled: opts.write ?? true, aiAutoBooking: opts.auto, ...(opts.auto ? { plan: 'PRO' } : {}) } }); // the bot's own booking is a Pro feature (2026-11-23)
   // the length of a visit comes from the approved reference; it is never guessed
   await prisma.kbItem.create({ data: { clinicId: c.clinicId, kind: 'SERVICE', title: 'Консультація', durationMin: 45, active: true, approvedAt: new Date() } });
   const patients = await prisma.patient.findMany({ where: { clinicId: c.clinicId, removedAt: null, NOT: { phoneNorm: null } }, orderBy: { externalId: 'asc' }, take: 2 });

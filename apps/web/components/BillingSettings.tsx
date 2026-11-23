@@ -42,7 +42,7 @@ const COMPARE: { group: string; rows: { key: string; gate: string | null; note?:
       { key: 'campaigns', gate: null }, { key: 'rules', gate: null }, { key: 'meta', gate: 'multi_channel', note: true }, { key: 'leadads', gate: 'multi_channel', note: true },
     ],
   },
-  { group: 'ai', rows: [{ key: 'drafts', gate: null }, { key: 'agent', gate: 'patient_agent', note: true }, { key: 'assistant', gate: 'ai_assistant' }] },
+  { group: 'ai', rows: [{ key: 'drafts', gate: null }, { key: 'agent', gate: 'patient_agent', note: true }, { key: 'autobook', gate: 'auto_booking', note: true }, { key: 'assistant', gate: 'ai_assistant' }] },
   { group: 'management', rows: [{ key: 'weekly', gate: null }, { key: 'daily', gate: 'daily_digest' }, { key: 'signals', gate: 'advanced_analytics' }] },
 ];
 // rows of one column of the full comparison: the header, each group heading and feature (the columns share them through a subgrid)

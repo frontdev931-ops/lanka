@@ -1027,6 +1027,8 @@ export class BookingFlowService {
     if (!r.consentAt || r.consentKey !== key) return { kind: 'REFUSED', code: r.consentKey && r.consentKey !== key ? 'consent_changed' : 'consent_missing' };
     if (key !== expectedKey) return { kind: 'REFUSED', code: 'consent_changed' };
     if (!(await this.booking.status(clinicId)).enabled) return { kind: 'REFUSED', code: 'write_disabled' };
+    // the AI's own write (no staff member, userId null) is a Pro feature; a staff member's approval works on every plan
+    if (userId === null && !(await this.booking.aiWriteInPlan(clinicId))) return { kind: 'REFUSED', code: 'write_disabled' };
     const claim = await this.prisma.bookingRequest.updateMany({ where: { id: requestId, clinicId, confirmedAt: null, OR: [{ autoState: null }, { autoState: { in: ['FAILED', 'UNKNOWN'] } }] }, data: { autoState: 'RUNNING' } });
     if (!claim.count) {
       const now = await this.prisma.bookingRequest.findUnique({ where: { id: requestId } });

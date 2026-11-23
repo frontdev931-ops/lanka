@@ -151,7 +151,7 @@ describe('Facebook Messenger', () => {
     await http().post('/automations/messenger').set(auth(other.token)).send({ token: 'FBdup_0123456789abcdefghij' }).expect(400);
     const start = await clinic('START');
     fb.pages['FBstart_0123456789abcdefgh'] = { id: `p${rnd()}`, name: 'x' };
-    await http().post('/automations/messenger').set(auth(start.token)).send({ token: 'FBstart_0123456789abcdefgh' }).expect(400);
+    await http().post('/automations/messenger').set(auth(start.token)).send({ token: 'FBstart_0123456789abcdefgh' }).expect(200); // Start includes Messenger since 2026-11-23
     const admin = await member(c.token, 'ADMIN');
     await http().post('/automations/messenger').set(auth(admin)).send({ token: c.token }).expect(403);
   });
@@ -272,7 +272,7 @@ describe('чат на сайті клініки', () => {
 
   it('налаштування: вмикає лише власник і керуючий, лише в «Про»; адреси перевіряються; ключ видно у вставці', async () => {
     const start = await enabled('START');
-    expect(start.s.status).toBe(400);
+    expect(start.s.status).toBe(200); // every plan since 2026-11-23
     const c = await enabled();
     expect(c.s.status).toBe(200);
     expect(c.s.body).toMatchObject({ enabled: true, origins: [SITE] });
@@ -394,7 +394,7 @@ describe('чат на сайті клініки', () => {
     await say(c.key, token, 'Перевірка').expect(200);
     expect((await http().get('/automations/webchat').set(auth(c.token)).expect(200)).body.verifiedAt).toBeTruthy();
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'START' } });
-    await visit(c.key, 'config').expect(403);
+    await visit(c.key, 'config').expect(200);
   });
 
   it('чат сайту, навіть прив’язаний співробітником до картки, не бачить інших записів пацієнта', async () => {
@@ -450,7 +450,7 @@ describe('Instagram: вхід через OAuth', () => {
     const doctor = await member(c.token, 'DOCTOR');
     await http().get('/automations/instagram/oauth').set(auth(doctor)).expect(403);
     const start = await clinic('START');
-    expect((await http().get('/automations/instagram/oauth').set(auth(start.token)).expect(302)).headers.location).toContain('ig=plan');
+    expect((await http().get('/automations/instagram/oauth').set(auth(start.token)).expect(302)).headers.location).toContain('instagram.com'); // Start includes Instagram since 2026-11-23
     const demo = await clinic();
     await prisma.clinic.update({ where: { id: demo.clinicId }, data: { isDemo: true } });
     expect((await http().get('/automations/instagram/oauth').set(auth(demo.token)).expect(302)).headers.location).toContain('ig=demo');

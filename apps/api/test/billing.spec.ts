@@ -293,10 +293,12 @@ describe('відповіді ШІ: включені, куплені, ліміт'
 });
 
 describe('функції за тарифом', () => {
-  it('самостійні відповіді ШІ, другий канал і щоденна сводка — тільки в «Про»', async () => {
+  it('самостійні відповіді ШІ й канали Meta — уже на «Старті»; щоденна сводка — тільки в «Про» (розподіл 2026-11-23)', async () => {
     const c = await clinic();
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiEnabled: true } });
-    await http().patch('/ai').set(auth(c.token)).send({ autoReply: true }).expect(400);
+    await http().patch('/ai').set(auth(c.token)).send({ autoReply: true }).expect(200);
+    const start = (await http().get('/service/usage').set(auth(c.token))).body;
+    expect(start.features).toEqual(expect.arrayContaining(['ai_autoreply', 'multi_channel', 'patient_agent']));
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'DAILY' }).expect(400);
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY' }).expect(200);
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'PRO' } });
@@ -306,7 +308,7 @@ describe('функції за тарифом', () => {
     expect(usage.features).toContain('ai_autoreply');
   });
 
-  it('помічник керівника й автономний агент — лише «Про», також при прямому зверненні до API; чернетки для пацієнтів лишаються на «Старті»', async () => {
+  it('помічник керівника й запис ШІ в Cliniccards — лише «Про», також при прямому зверненні до API; агент і чернетки — на «Старті»', async () => {
     const c = await clinic();
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiEnabled: true } });
     const st = (await http().get('/ai').set(auth(c.token)).expect(200)).body;
@@ -320,9 +322,28 @@ describe('функції за тарифом', () => {
     await expect(ai.complete(c.clinicId, 'chat_draft', 's', [{ role: 'user', content: 'x' }], 50, 'chat')).resolves.toMatchObject({ text: 'ok' });
     const usage = (await http().get('/service/usage').set(auth(c.token))).body;
     expect(usage.features).not.toContain('ai_assistant');
-    expect(usage.features).not.toContain('patient_agent');
-    expect((await http().get('/ai/agent').set(auth(c.token)).expect(200)).body).toMatchObject({ inPlan: false, active: false });
-    expect((await http().post('/ai/agent/activate').set(auth(c.token)).expect(400)).body.message).toMatch(/тариф/i);
+    expect(usage.features).not.toContain('auto_booking');
+    expect(usage.features).toContain('patient_agent');
+    expect((await http().get('/ai/agent').set(auth(c.token)).expect(200)).body).toMatchObject({ inPlan: true, active: false });
+    // the AI's own writes to Cliniccards: refused on Start even where the server allows writing; the booking service says the same
+    const { BookingService } = await import('../src/booking/booking.service');
+    const booking = app.get(BookingService);
+    const was = process.env.CLINICCARDS_WRITE_ENABLED;
+    process.env.CLINICCARDS_WRITE_ENABLED = 'true';
+    try {
+      expect((await http().get('/ai').set(auth(c.token)).expect(200)).body).toMatchObject({ autoBookingInPlan: false });
+      expect((await http().patch('/ai').set(auth(c.token)).send({ autoBooking: true }).expect(400)).body.message).toMatch(/тариф/i);
+      expect(await booking.aiWriteInPlan(c.clinicId)).toBe(false);
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { aiAutoBooking: true } });
+      expect(await booking.autoModeFor(c.clinicId, { channel: 'TELEGRAM', chatId: 'x' })).toBe(false);
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'PRO', aiAutoBooking: false } });
+      expect(await booking.aiWriteInPlan(c.clinicId)).toBe(true);
+      await http().patch('/ai').set(auth(c.token)).send({ autoBooking: true }).expect(200);
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'START', aiAutoBooking: false } });
+    } finally {
+      if (was === undefined) delete process.env.CLINICCARDS_WRITE_ENABLED;
+      else process.env.CLINICCARDS_WRITE_ENABLED = was;
+    }
 
     await prisma.clinic.update({ where: { id: c.clinicId }, data: { plan: 'PRO' } });
     // Pro alone switches nothing on

@@ -8,15 +8,18 @@ export interface Limits {
 // Things a plan may or may not include. The server checks them where the feature is used.
 // ai_assistant: the manager's assistant (questions about the clinic's data, AI-built report specs). patient_agent: the right to turn on the autonomous
 // patient agent (the clinic's owner still has to set it up and switch it on; the plan alone turns nothing on).
-export type Feature = 'ai_autoreply' | 'multi_channel' | 'advanced_analytics' | 'daily_digest' | 'ai_assistant' | 'patient_agent';
+// The plan split of 2026-11-23: Start has the AI administrator replying on its own in every channel (ai_autoreply, multi_channel, patient_agent);
+// Pro adds the AI's own writes to Cliniccards (auto_booking: booking, rescheduling and cancelling without a staff member), the manager's assistant,
+// signals and the daily digest. A staff member's one-click booking from a request is not an AI write and stays on every plan.
+export type Feature = 'ai_autoreply' | 'multi_channel' | 'advanced_analytics' | 'daily_digest' | 'ai_assistant' | 'patient_agent' | 'auto_booking';
 
 export const PLANS: Record<string, { label: string; limits: Limits; priceUah: number; features: Feature[] }> = {
-  START: { label: 'Start', limits: { users: 5, messagesPerMonth: 2000, aiRepliesPerMonth: 500 }, priceUah: 1990, features: [] },
-  PRO: { label: 'Pro', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 4990, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent'] },
+  START: { label: 'Start', limits: { users: 5, messagesPerMonth: 2000, aiRepliesPerMonth: 500 }, priceUah: 1990, features: ['ai_autoreply', 'multi_channel', 'patient_agent'] },
+  PRO: { label: 'Pro', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 4990, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent', 'auto_booking'] },
   // A branch of a paid network: the Pro capabilities and Pro allowances, per branch (no shared pool); paid by the network (NETWORK_PRICE below)
-  NETWORK: { label: 'Network', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 0, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent'] },
+  NETWORK: { label: 'Network', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 0, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent', 'auto_booking'] },
   // Individual terms: only the overrides apply (a missing one falls back to the Pro level); everything is included
-  CUSTOM: { label: 'Custom', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 0, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent'] },
+  CUSTOM: { label: 'Custom', limits: { users: 30, messagesPerMonth: 10_000, aiRepliesPerMonth: 3000 }, priceUah: 0, features: ['ai_autoreply', 'multi_channel', 'advanced_analytics', 'daily_digest', 'ai_assistant', 'patient_agent', 'auto_booking'] },
 };
 
 export const PLAN_KEYS = Object.keys(PLANS);
