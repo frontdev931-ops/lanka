@@ -260,6 +260,7 @@ model Clinic {
   savedReports              SavedReport[]
   digestRecipients          DigestRecipient[]
   leaderTelegrams           LeaderTelegram[]
+  adAccount                 AdAccountLink?
   reviews                   Review[]
   pushSubscriptions         PushSubscription[]
   chatBotResumes            ChatBotResume[]
@@ -1642,4 +1643,82 @@ model FollowUp {
   @@unique([clinicId, channel, chatId, basisMessageId, step])
   @@index([clinicId, status, dueAt])
   @@index([status, dueAt])
+}
+
+// Meta ad account analytics, stage 1 (2026-11-24): read only, ads_read through a SEPARATE Facebook Login for Business configuration
+// (META_ADS_CONFIG_ID), so the Instagram/Messenger login and its App Review are untouched. One ad account per clinic, connected by the owner.
+// The token is stored encrypted and never leaves the server. Amounts stay in the ad account's currency; dates are the ad account's days.
+model AdAccountLink {
+  id             String    @id @default(cuid())
+  clinicId       String    @unique
+  // the ad account id without the "act_" prefix
+  accountId      String
+  name           String
+  currency       String
+  timezoneName   String
+  tokenEnc       String
+  tokenExpiresAt DateTime?
+  connectedById  String
+  connectedAt    DateTime  @default(now())
+  // ACTIVE, EXPIRED (Meta refused the token), NO_PERMISSION (ads_read missing or the account no longer shared)
+  status         String    @default("ACTIVE")
+  // the last refresh attempt and its error (rate_limited, meta_error, ...); the last good data stays until a refresh succeeds
+  lastAttemptAt  DateTime?
+  lastSuccessAt  DateTime?
+  lastError      String?
+  // a short claim so two refreshes of one clinic never run together
+  refreshClaimAt DateTime?
+  clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+}
+
+// The ad accounts offered after the login, kept until the owner picks one (15 minutes; the token encrypted)
+model AdConnectSession {
+  id        String   @id @default(cuid())
+  clinicId  String
+  userId    String
+  tokenEnc  String
+  tokenExpiresAt DateTime?
+  accounts  Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([clinicId])
+}
+
+// One campaign on one day of the ad account (its own time zone) as Meta reported it. Additive figures only: spend, impressions, link clicks
+// and the result counts by kind (null = Meta reported no such action). Reach is NOT here: it is not additive (AdPeriodReach).
+// A refresh replaces the rows of the days it re-read, so a recount by Meta and a repeated load never leave duplicates.
+model AdInsightDay {
+  id           String   @id @default(cuid())
+  clinicId     String
+  accountId    String
+  campaignId   String
+  campaignName String
+  // YYYY-MM-DD in the ad account's time zone
+  day          String
+  spend        Decimal  @db.Decimal(14, 2)
+  impressions  Int
+  linkClicks   Int?
+  leadForm     Int?
+  messaging    Int?
+  website      Int?
+  fetchedAt    DateTime @default(now())
+
+  @@unique([clinicId, accountId, campaignId, day])
+  @@index([clinicId, accountId, day])
+}
+
+// Reach of a whole period, as Meta counts it for that period (unique people): for the account and per campaign. Never summed from days or campaigns.
+model AdPeriodReach {
+  id         String   @id @default(cuid())
+  clinicId   String
+  accountId  String
+  since      String
+  until      String
+  // "" for the whole account, else the campaign id
+  campaignId String   @default("")
+  reach      Int
+  fetchedAt  DateTime @default(now())
+
+  @@unique([clinicId, accountId, since, until, campaignId])
 }

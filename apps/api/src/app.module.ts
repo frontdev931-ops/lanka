@@ -20,6 +20,7 @@ import { PushModule } from './push/push.module';
 import { BillingModule } from './billing/billing.module';
 import { BookingModule } from './booking/booking.module';
 import { InsightsModule } from './insights/insights.module';
+import { AdsModule } from './ads/ads.module';
 import { KbModule } from './kb/kb.module';
 import { DemoModule } from './demo/demo.module';
 import { ServiceModule } from './service/service.module';
@@ -49,6 +50,7 @@ import { AutomationsModule } from './automations/automations.module';
     BookingModule,
     KbModule,
     InsightsModule,
+    AdsModule,
     PushModule,
     ReportBuilderModule,
   ],

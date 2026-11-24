@@ -1455,3 +1455,27 @@ html[data-theme="dark"] .sig-fired .sig-link { background: var(--mint); color: #
   .pc-name { font-size: 22px; }
   .pc-who .avatar.lg { width: 44px; height: 44px; font-size: 16px; }
 }
+
+/* ---------- Reports → Advertising (Meta), 2026-11-24 ---------- */
+.ads-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+.ads-account { font-family: var(--lp-display), sans-serif; font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+.ads-period { margin-bottom: 14px; align-items: center; }
+.ads-period .inline-label .input { width: auto; min-width: 150px; }
+.ads-updated { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+.ads-stale { color: var(--amber-text); font-weight: 600; }
+.ads-kpis, .ads-results { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.ads-kpi, .ads-result { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ads-kpi span, .ads-result .l { font-size: 13px; color: var(--muted); }
+.ads-kpi b, .ads-result b { font-family: var(--lp-display), sans-serif; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.ads-kpi .h, .ads-result .c { font-size: 12.5px; color: var(--muted); }
+.ads-result .v { font-size: 12px; color: var(--amber-text); }
+.ads-result.lanka { background: var(--primary-soft); border-color: var(--active-ring); }
+@media (max-width: 900px) {
+  .ads-kpis, .ads-results { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .ads-period .seg { flex: 1 1 100%; }
+  .ads-period .inline-label { flex: 1 1 100%; justify-content: space-between; }
+  .ads-period .inline-label .input { flex: 1; }
+  .ads-kpi b, .ads-result b { font-size: 22px; }
+}
