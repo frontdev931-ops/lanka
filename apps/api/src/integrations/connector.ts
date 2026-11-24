@@ -10,6 +10,13 @@ export interface ExternalPatient {
   birthday?: Date;
   balanceIssued?: number;
   balancePaid?: number;
+  // more of the card (2026-11-24); notes, stages and files are deliberately not read (medical records)
+  phone2?: string;
+  email?: string;
+  gender?: string;
+  tags?: string[];
+  subclinic?: string;
+  curator?: string;
 }
 
 export interface ExternalVisit {

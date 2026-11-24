@@ -46,7 +46,25 @@ interface RawPatient {
   date_created?: string | null;
   balance_issued?: string | number | null;
   balance_paid?: string | number | null;
+  phone2?: string | null;
+  email?: string | null;
+  gender?: string | null;
+  // the documentation lists these without their exact shape: read defensively (a name, an object with a name, or a status id)
+  statuses?: unknown;
+  curator?: unknown;
+  subclinic?: unknown;
 }
+
+// A label of the card: a plain string, or an object carrying a name (status_name / name / title); anything else is not shown
+const labelOf = (v: unknown): string | undefined => {
+  if (typeof v === 'string') return decodeEntities(v).trim() || undefined;
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    const n = o.name ?? o.status_name ?? o.title ?? [o.lastname, o.firstname].filter(Boolean).join(' ');
+    return typeof n === 'string' && n.trim() ? decodeEntities(n).trim() : undefined;
+  }
+  return undefined;
+};
 
 // Statuses used when writing. NOT VERIFIED on a live clinic: the documentation lists the status names but not which one a new visit takes.
 export const VISIT_STATUS = { created: 'PLANNED', confirmed: 'CONFIRMED', cancelled: 'CANCELLED' } as const;
@@ -366,6 +384,19 @@ export class CliniccardsConnector implements ClinicConnector {
 
   async fetchPatients(): Promise<ExternalPatient[]> {
     const out: ExternalPatient[] = [];
+    // patient statuses may arrive as ids: the clinic's list of statuses (GET /patientStatuses, read once per load and only when needed)
+    let statusNames: Map<string, string> | null = null;
+    const statusName = async (v: unknown): Promise<string | undefined> => {
+      const direct = typeof v === 'number' || (typeof v === 'string' && /^\d+$/.test(v)) ? undefined : labelOf(v);
+      if (direct) return direct;
+      const id = typeof v === 'object' && v ? (v as { status_id?: Id; id?: Id }).status_id ?? (v as { id?: Id }).id : (v as Id);
+      if (id === undefined || id === null) return undefined;
+      if (!statusNames) {
+        const rows = await this.client.get<{ status_id: Id; name?: string }[]>('/patientStatuses').catch(() => []);
+        statusNames = new Map(rows.map((r) => [String(r.status_id), decodeEntities(r.name ?? '').trim()]));
+      }
+      return statusNames.get(String(id)) || undefined;
+    };
     // We read until an empty page and move the start by the number of rows that really arrived: if the server ever
     // returns a page smaller than requested (its own ceiling), no patients are lost
     for (let offset = 0; ; ) {
@@ -385,6 +416,12 @@ export class CliniccardsConnector implements ClinicConnector {
           birthday: toBirthday(p.birthday),
           balanceIssued: num(p.balance_issued),
           balancePaid: num(p.balance_paid),
+          phone2: p.phone2 || undefined,
+          email: p.email?.trim() || undefined,
+          gender: p.gender?.trim() || undefined,
+          tags: Array.isArray(p.statuses) ? ((await Promise.all(p.statuses.map(statusName))).filter(Boolean) as string[]) : [],
+          subclinic: labelOf(p.subclinic),
+          curator: labelOf(p.curator),
         });
       }
     }

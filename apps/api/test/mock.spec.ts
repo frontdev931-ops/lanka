@@ -541,7 +541,8 @@ describe('синхронизация и отчёты на данных имит�
 
   it('CSV новых отчётов подписан на языке запроса', async () => {
     const en = await http().get('/reports/debtors/csv').set(auth(owner)).set('Accept-Language', 'en').expect(200);
-    expect(en.text.split('\r\n')[0]).toContain('"Patient";"Phone";"Billed (currency not confirmed)";"Paid (currency not confirmed)";"Debt (currency not confirmed)"');
+    // amounts loaded by a clinic in the default currency (UAH since 2026-11-19) carry the unit in the column labels
+    expect(en.text.split('\r\n')[0]).toContain('"Patient";"Phone";"Billed, UAH";"Paid, UAH";"Debt, UAH"');
     const uk = await http().get('/reports/free-slots/csv').set(auth(owner)).expect(200);
     expect(uk.text.split('\r\n')[0]).toContain('"Дата";"Лікар";"Кабінет"');
   });

@@ -21,7 +21,10 @@ const ALLOWED_GET = new Set([
   '/reminders',
   '/waitings',
   '/prices',
+  // the clinic's own list of patient status labels (names only, no patient data): read when a card's statuses arrive as ids
+  '/patientStatuses',
 ]);
+// Medical records are never read (the privacy policy): /stages (treatment notes, E025 diagnoses) and /files stay off this list.
 
 // Writing is allowed only for these paths. Payments, invoices, deposits, spendings, stock and any DELETE must never be added here.
 // Two keys protect a real clinic: the server setting CLINICCARDS_WRITE_ENABLED=true (and the clinic's own flag, checked by the caller),

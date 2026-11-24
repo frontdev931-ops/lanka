@@ -1426,3 +1426,32 @@ html[data-theme="dark"] .sig-fired .sig-link { background: var(--mint); color: #
   .signal-list { grid-template-columns: 1fr; gap: 12px; }
   .sig-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 }
+
+/* ---------- the patient card, 2026-11-24 ---------- */
+.pc-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 16px 24px; align-items: start; }
+.pc-who { display: flex; gap: 16px; align-items: flex-start; min-width: 0; }
+.pc-name { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; margin: 0; overflow-wrap: anywhere; }
+.pc-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); font-size: 14px; margin-top: 4px; }
+.pc-contacts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 15px; }
+.pc-contacts a { font-weight: 600; overflow-wrap: anywhere; }
+.pc-next { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 14px; background: var(--primary-soft); border: 1px solid var(--active-ring); }
+.pc-next.none { background: var(--bg); border-color: var(--border); }
+.pc-next-label { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.pc-next b { font-family: var(--lp-display), sans-serif; font-size: 20px; font-weight: 800; }
+.pc-next span { font-size: 14px; }
+.pc-sync { grid-column: 1 / -1; margin: 0; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pc-src { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; }
+.pc-src-cc { background: var(--blue-soft); color: var(--blue-text); }
+.pc-src-lanka { background: var(--primary-soft); color: var(--primary-dark); }
+.pc-count { margin-left: 6px; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--gray-soft); color: var(--muted); font-size: 12px; font-weight: 700; line-height: 20px; display: inline-block; text-align: center; }
+.pc-sub { font-size: 15px; margin: 14px 0 6px; }
+.pc-sub:first-child { margin-top: 0; }
+.pc-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 14px; background: var(--bg); }
+.pc-stat span { font-size: 13px; color: var(--muted); }
+.pc-stat b { font-family: var(--lp-display), sans-serif; font-size: 22px; font-weight: 800; }
+.pc-stat.warn { background: var(--amber-soft); }
+@media (max-width: 760px) {
+  .pc-head { grid-template-columns: 1fr; }
+  .pc-name { font-size: 22px; }
+  .pc-who .avatar.lg { width: 44px; height: 44px; font-size: 16px; }
+}

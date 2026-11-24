@@ -735,8 +735,17 @@ model Patient {
   // When the card was created in Cliniccards and when the first visit was: the entry and stages of the patient funnel
   createdAtExt     DateTime?
   firstVisitAt     DateTime?
-  // Date of birth from Cliniccards (only for the greeting)
+  // Date of birth from Cliniccards (the greeting, the age on the card)
   birthDate        DateTime?
+  // More of the Cliniccards card (GET /patients, 2026-11-24): the second phone, email, gender (as Cliniccards sends it), the patient statuses
+  // as names (the clinic's own labels, e.g. "VIP"), the branch and the curator. Overwritten by every load like the fields above. The card's
+  // free-text notes (note, important_note), treatment stages and files are NOT read: the privacy policy says medical records are not read.
+  phone2           String?
+  email            String?
+  gender           String?
+  tags             String[]          @default([])
+  subclinic        String?
+  curator          String?
   // A phone of digits only in one form (380...): import rows are matched by it
   phoneNorm        String?
   // Data that Cliniccards does not have. Sync does not touch these fields.

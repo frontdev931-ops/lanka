@@ -216,14 +216,15 @@ export function buildData(opts: MockOptions = {}): MockData {
       firstname: `Пацієнт${i + 1}`,
       source: sources[i % sources.length],
       phone: i % 50 === 0 ? '' : `38050${String(1000000 + i)}`,
-      phone2: '',
-      email: '',
+      phone2: i % 7 === 0 ? `38067${String(2000000 + i)}` : '',
+      email: i % 5 === 0 ? `patient${i + 1}@example.com` : '',
       gender: i % 2 ? 'F' : 'M',
       birthday: i % 11 === 0 ? null : '1985-05-05',
       curator_id: null,
       date_created: '2024-01-15',
       preferred_contact: i % 3 === 0 ? 'PHONE' : null,
-      statuses: [],
+      statuses: i % 9 === 0 ? [{ status_id: '1', name: 'VIP' }] : i % 13 === 0 ? ['2'] : [],
+      subclinic: { id: '1', name: 'Центр' },
       balance_paid: String(paid),
       balance_issued: String(issued),
       first_visit_date: lastVisit ? day(lastVisit) : null,
@@ -455,6 +456,8 @@ export async function startMock(opts: MockOptions = {}, port = 0): Promise<MockH
     if (path === '/reminders') return ok(res, range(data.reminders, 'date').filter((r) => !q.patient_id || String(r.patient_id) === q.patient_id));
     if (path === '/prices') return ok(res, data.prices);
     if (path === '/schedule-settings') return data.scheduleSettings ? ok(res, data.scheduleSettings) : fail(res, 404, 'Unknown method /schedule-settings');
+    // the clinic's patient statuses (the mock's patients carry status 2 as an id)
+    if (path === '/patientStatuses') return ok(res, [{ status_id: '1', name: 'VIP', color: '#f5c26b' }, { status_id: '2', name: 'Боржник', color: '#ff9b8f' }]);
     if (path === '/staff') return ok(res, data.staff);
     if (path === '/cabinets') return ok(res, data.cabinets);
     if (path === '/sub-clinics') return ok(res, []);

@@ -103,6 +103,7 @@ The connector reads: `/patients` (paged), `/visits`, `/planItems`, `/payments`, 
 - Dates without a time zone are read as clinic time (Europe/Kyiv, `apps/api/src/common/clinic-time.ts`).
 - Load speed (verified on a live clinic, 2026-10-28): a 3-year period and `limit=5000` for patients are accepted in one request (25 thousand plan items in 1.9 s), so the connector reads yearly chunks and pages of 1000 (about 20 requests per load instead of 120). If a large period fails with a request error, it falls back to 31-day chunks and reads pages until an empty one. Loading 3,500 patients takes about 30 seconds.
 - Birth dates (`birthday`) are synced into `Patient.birthDate` for the birthday scenario.
+- Patient card (2026-11-24): also `phone2`, `email`, `gender`, `statuses` (stored as names in `Patient.tags`; ids resolved through GET `/patientStatuses`, read once per load only when needed), `subclinic`, `curator` (read defensively: the documentation shows these without an exact shape). NOT read, by the privacy policy ("medical records, diagnoses and files are not read"): `note`, `important_note`, GET `/stages` (treatment notes, E025 diagnoses) and `/files`; they are not on the client's allowed list. Also not used: `insurance_policies`, `family`, `deposits-list`, `receipts`, invoice lines.
 - Checked only against the mock (`apps/api/mock`), which was written from this documentation: other fields and the exact shape of real responses.
 
 Assumptions not covered by the documentation:

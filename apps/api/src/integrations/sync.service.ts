@@ -235,6 +235,12 @@ export class SyncService implements OnApplicationBootstrap {
           birthDate: p.birthday ?? null,
           balanceIssued: p.balanceIssued,
           balancePaid: p.balancePaid,
+          phone2: p.phone2 ?? null,
+          email: p.email ?? null,
+          gender: p.gender ?? null,
+          tags: p.tags ?? [],
+          subclinic: p.subclinic ?? null,
+          curator: p.curator ?? null,
         };
         const row = await this.prisma.patient.upsert({
           where: { clinicId_externalId: { clinicId, externalId: p.externalId } },

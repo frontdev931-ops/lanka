@@ -265,11 +265,12 @@ describe('логика отчётов', () => {
     expect(ru.text.split('\r\n')[0]).toContain('"Пациент";"Телефон"');
     const en = await http().get('/reports/no-next-visit/csv').set(auth(a.token)).set('Accept-Language', 'en').expect(200);
     expect(en.text.split('\r\n')[0]).toContain('"Patient";"Phone"');
-    // the clinic has not stated the currency of its Cliniccards amounts: they are marked as such (never assumed hryvnias, money.spec.ts);
-    // the revenue by source is a sum of service prices, so it carries no currency at all
+    // since 2026-11-19 a new clinic counts its Cliniccards amounts in hryvnias by default (Clinic.sourceCurrency = UAH): the money columns carry
+    // the unit; amounts without a stamp are still "currency not confirmed" (money.spec.ts). The revenue by source is a sum of service prices,
+    // so it carries no currency at all
     const debt = (await http().get('/reports/debtors/csv').set(auth(a.token)).expect(200)).text.split('\r\n')[0];
-    expect(debt).toContain('"Борг (валюта не підтверджена)"');
-    expect(debt).not.toMatch(/грн|UAH/);
+    expect(debt).toContain('"Виставлено, грн";"Сплачено, грн";"Борг, грн"');
+    expect(debt).not.toContain('валюта не підтверджена');
     expect((await http().get('/reports/sources/csv').set(auth(a.token)).expect(200)).text.split('\r\n')[0]).not.toMatch(/грн|UAH/);
   });
 
