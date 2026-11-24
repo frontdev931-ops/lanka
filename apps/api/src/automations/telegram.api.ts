@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 export interface TgUpdate {
   update_id: number;
-  callback_query?: { id: string; from: { id: number; username?: string }; message?: { chat: { id: number } }; data?: string };
+  callback_query?: { id: string; from: { id: number; username?: string; first_name?: string; last_name?: string; language_code?: string }; message?: { chat: { id: number } }; data?: string };
   message?: {
     chat: { id: number; type?: string; title?: string };
     from?: { id: number; username?: string; first_name?: string; last_name?: string; language_code?: string };

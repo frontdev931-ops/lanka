@@ -259,6 +259,7 @@ model Clinic {
   campaigns                 Campaign[]
   savedReports              SavedReport[]
   digestRecipients          DigestRecipient[]
+  leaderTelegrams           LeaderTelegram[]
   reviews                   Review[]
   pushSubscriptions         PushSubscription[]
   chatBotResumes            ChatBotResume[]
@@ -484,7 +485,7 @@ model PatientChannel {
 model ChannelLink {
   id          String    @id @default(cuid())
   clinicId    String
-  // PATIENT (linking a patient) or DIGEST (linking a digest recipient: the owner opens the link and the bot remembers their chat)
+  // PATIENT (linking a patient), DIGEST (the legacy digest link of the clinic bot) or LEADER (a manager's own Telegram through the LANKA service bot)
   purpose     String    @default("PATIENT")
   createdById String?
   patientId   String?
@@ -616,6 +617,7 @@ model User {
   assignedTasks      Task[]          @relation("TaskAssignee")
   createdTasks       Task[]          @relation("TaskCreator")
   contactLogs        ContactLog[]
+  leaderTelegrams    LeaderTelegram[]
 }
 
 // One-time links from emails: password reset and email confirmation. Only the token's hash is in the database.
@@ -998,6 +1000,29 @@ model SavedReport {
 }
 
 // A digest recipient: the manager's chat in Telegram. Linked by a link from the settings, not by phone number.
+// A manager's own Telegram for reports and signals, through the shared LANKA service bot (LANKA_TG_BOT_TOKEN), independent of the clinic's
+// patient bot. Linked only by the person: a one-time link from their own session, confirmed with a button in a private chat. The personal
+// switches start off: connecting sends nothing by itself. Before every message the person's current role in the clinic is checked again.
+model LeaderTelegram {
+  id             String    @id @default(cuid())
+  clinicId       String
+  userId         String
+  // the private chat with the service bot (= the person's Telegram id)
+  chatId         String
+  tgName         String
+  lang           String    @default("uk")
+  digest         Boolean   @default(false)
+  signals        Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  // the bot was blocked or the chat is gone: nothing is sent until the person connects again
+  blockedAt      DateTime?
+  clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, userId])
+  @@unique([clinicId, chatId])
+}
+
 model DigestRecipient {
   id        String   @id @default(cuid())
   clinicId  String
@@ -1005,6 +1030,9 @@ model DigestRecipient {
   name      String
   lang      String   @default("uk")
   createdAt DateTime @default(now())
+  // The legacy route (the clinic's patient bot). Set when the same person confirmed the LANKA service bot for this clinic (a private chat id is
+  // the person's Telegram id in every bot): the row is kept, but the digest goes only the new way, never twice.
+  migratedAt DateTime?
   clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@unique([clinicId, chatId])

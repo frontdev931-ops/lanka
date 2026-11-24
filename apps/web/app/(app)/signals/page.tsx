@@ -47,8 +47,9 @@ interface View {
   inPlan: boolean;
   checkedAt: string;
   sync: { lastSyncAt: string | null; fresh: boolean; connected: boolean } | null;
-  // the clinic's staff Telegram chat (null: not connected)
-  telegram: { title: string } | null;
+  // who a rule's Telegram switch reaches: managers through the LANKA service bot (each by their own choice) and the legacy staff group of the
+  // clinic's patient bot; me: the signed-in person's own connection (null: not connected)
+  telegram: { serviceBot: boolean; people: string[]; group: string | null; me: { signals: boolean; blocked: boolean } | null };
   signals: Signal[];
 }
 
@@ -113,6 +114,8 @@ export default function SignalsPage() {
     );
 
   const rank = (k: Kind) => (order ?? []).indexOf(k);
+  // how many receive a rule's Telegram message now: the managers who chose signals, plus the legacy group
+  const reach = v.telegram.people.length + (v.telegram.group ? 1 : 0);
   const list = [...v.signals].sort((a, b) => rank(a.kind) - rank(b.kind));
   // the summary counts only the signals that are switched on
   const on = list.filter((s) => s.active);
@@ -139,8 +142,11 @@ export default function SignalsPage() {
         </div>
         <p className="sig-dest">
           <span className="sig-dest-icon" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z" /></svg></span>
-          <span className="t">{v.telegram ? t('sig.dest', { title: v.telegram.title }) : t('sig.destNone')}</span>
-          <Link href="/settings?tab=channels">{v.telegram ? t('sig.destChange') : t('sig.destConnect')}</Link>
+          <span className="t">
+            {reach ? t('sig.destTo', { list: [v.telegram.people.length ? t('sig.destPeople', { names: v.telegram.people.join(', ') }) : '', v.telegram.group ? t('sig.destGroup', { title: v.telegram.group }) : ''].filter(Boolean).join('; ') }) : t('sig.destNobody')}{' '}
+            {v.telegram.me ? (v.telegram.me.signals ? t('sig.meOn') : t('sig.meOff')) : t('sig.meNone')}
+          </span>
+          <Link href="/settings#leader-telegram">{v.telegram.me ? t('sig.mySettings') : t('ltg.connect')}</Link>
         </p>
       </section>
       {device.state === 'ask' && (
@@ -151,14 +157,14 @@ export default function SignalsPage() {
       {device.state === 'denied' && <Alert tone="warn">{t('sig.pushDenied')}</Alert>}
       {device.error && <Alert tone="error">{device.error}</Alert>}
       <div className="signal-list">
-        {list.map((s) => <SignalCard key={s.kind} s={s} chat={v.telegram?.title ?? null} pushHere={device.state === 'active'} onSaved={load} />)}
+        {list.map((s) => <SignalCard key={s.kind} s={s} reach={reach} pushHere={device.state === 'active'} onSaved={load} />)}
       </div>
       <p className="sig-foot">{t('sig.checkedAt', { date: fmtDateTime(v.checkedAt) })}</p>
     </>
   );
 }
 
-function SignalCard({ s, chat, pushHere, onSaved }: { s: Signal; chat: string | null; pushHere: boolean; onSaved: () => Promise<unknown> }) {
+function SignalCard({ s, reach, pushHere, onSaved }: { s: Signal; reach: number; pushHere: boolean; onSaved: () => Promise<unknown> }) {
   const { t } = useI18n();
   const [threshold, setThreshold] = useState(String(s.threshold));
   const [days, setDays] = useState(String(s.windowDays));
@@ -289,7 +295,7 @@ function SignalCard({ s, chat, pushHere, onSaved }: { s: Signal; chat: string | 
         )}
       </div>
       <div className="sig-actions">
-        {toggle(tg, busy || !on || (!chat && !s.telegramOn), () => { setTg(!tg); void save({ telegram: !tg }); }, t('sig.telegram'), !on ? t('sig.enableFirst') : chat ? t('sig.telegramTo', { title: chat }) : t('sig.noChatShort'))}
+        {toggle(tg, busy || !on, () => { setTg(!tg); void save({ telegram: !tg }); }, t('sig.telegram'), !on ? t('sig.enableFirst') : reach ? t('sig.tgReach', { n: reach }) : t('sig.tgNobody'))}
         <span className="grow" />
         {s.link && s.active && (
           <Link className="sig-link" href={s.link}>

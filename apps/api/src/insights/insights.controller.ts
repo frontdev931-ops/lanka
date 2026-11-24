@@ -74,7 +74,7 @@ export class InsightsController {
   // The "Signals" section: the clinic's rules measured now (read only; the clinic comes from the session)
   @Get('signals')
   signals(@CurrentUser() u: AuthUser) {
-    return this.insights.signals(u.clinicId);
+    return this.insights.signals(u.clinicId, undefined, u.userId);
   }
 
   // The menu badge: the number of switched-on signals with a deviation now (cached for a few minutes, see InsightsService.signalsSummary)

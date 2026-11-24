@@ -4,8 +4,8 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { useI18n } from '../lib/i18n';
 import LanguageSwitcher from './LanguageSwitcher';
-import { OwnerDetails } from './OwnerDetails';
 import { Brand } from './Brand';
+import { OwnerDetails } from './OwnerDetails';
 
 // A plain public page (terms, privacy, data deletion status): the brand, the language and readable text
 export function PublicPage({ title, children }: { title: string; children: ReactNode }) {

@@ -8,6 +8,7 @@ import { fmtDateTime } from '../../../lib/ui';
 import { SecurityCard } from '../../../components/SecurityCard';
 import { TeamAccess } from '../../../components/TeamAccess';
 import { IntegrationCard } from '../../../components/IntegrationCard';
+import { LeaderTelegramCard } from '../../../components/LeaderTelegramCard';
 import { LineTabs } from '../../../components/LineTabs';
 import { Alert, Card, Empty, Icon, PageHeader } from '../../../components/ui';
 import { WorkHours } from '../../../components/WorkHours';
@@ -122,6 +123,8 @@ export default function SettingsPage() {
       {me && (!isOwner || me.twoFactorRequired) && <SecurityCard />}
       <IntegrationCard />
       {canAudit && <SendingSettings />}
+      {/* the manager's own Telegram for reports and signals (the LANKA service bot, not the clinic's patient bot) */}
+      {canAudit && <LeaderTelegramCard />}
       {/* the clinic's own AI allowance field: only for a clinic without the Payment tab (the demo) */}
       {canAudit && !canPay && <AiLimitCard />}
       {canAudit && <AiGeneralSettings />}

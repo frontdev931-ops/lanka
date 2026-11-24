@@ -8,8 +8,8 @@ import { LOCALES, Locale, useI18n } from '../lib/i18n';
 import { LANDING, LandingText } from '../lib/landing-text';
 import { LANDING_PATH } from '../lib/site';
 import { ChannelIcon } from './ChannelIcon';
-import { display, text } from '../lib/fonts';
 import { OwnerDetails } from './OwnerDetails';
+import { display, text } from '../lib/fonts';
 import { Icon } from './ui';
 
 

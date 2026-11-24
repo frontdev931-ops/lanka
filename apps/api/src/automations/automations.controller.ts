@@ -387,11 +387,6 @@ export class DigestController {
     return this.digest.update(u.clinicId, dto);
   }
 
-  @Post('link')
-  link(@CurrentUser() u: AuthUser) {
-    return this.digest.link(u.clinicId, u.userId);
-  }
-
   @Post('test')
   @HttpCode(200)
   async test(@CurrentUser() u: AuthUser) {

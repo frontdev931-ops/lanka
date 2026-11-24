@@ -13,6 +13,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { InstagramAdapter } from '../src/automations/instagram.adapter';
 import { SendError } from '../src/automations/channels';
 import { encrypt } from '../src/common/crypto';
+import { hashToken, newToken } from '../src/auth/tokens';
 
 jest.setTimeout(60_000);
 
@@ -768,16 +769,23 @@ describe('дайджест руководителю в Telegram', () => {
     await http().post('/automations/telegram').set(auth(c.token)).send({ token: TOKEN }).expect(201);
     return c;
   }
-  async function bind(token: string, clinicId: string, chat = 9001) {
-    const { url } = (await http().post('/digest/link').set(auth(token)).expect(201)).body;
-    await telegram.handleUpdate(clinicId, TOKEN, upd(chat, `/start owner_${url.split('owner_')[1]}`));
-    return url as string;
+  // a legacy "owner_…" link of the clinic's patient bot, issued before 2026-11-23 (new ones are not issued any more): it keeps working until it expires
+  async function legacyLink(clinicId: string) {
+    const raw = newToken();
+    await prisma.channelLink.create({ data: { clinicId, purpose: 'DIGEST', tokenHash: hashToken(raw), expiresAt: new Date(Date.now() + 3_600_000) } });
+    return `owner_${raw}`;
+  }
+  async function bind(_token: string, clinicId: string, chat = 9001) {
+    const url = await legacyLink(clinicId);
+    await telegram.handleUpdate(clinicId, TOKEN, upd(chat, `/start ${url}`));
+    return url;
   }
 
   it('руководитель привязывает чат ссылкой (не телефоном); ссылка одноразовая; чужая и просроченная не работают; права только у владельца и управляющего', async () => {
     const c = await ready();
     const url = await bind(c.token, c.clinicId);
-    expect(url).toMatch(/^https:\/\/t\.me\/clinic_test_bot\?start=owner_/);
+    // the clinic's patient bot issues no new digest links (the LANKA service bot does that: leader-telegram.spec.ts)
+    await http().post('/digest/link').set(auth(c.token)).expect(404);
     expect(tg.sent.at(-1)!.text).toContain('Дайджест підключено');
     const s = (await http().get('/digest').set(auth(c.token)).expect(200)).body;
     expect(s.recipients).toEqual([expect.objectContaining({ name: 'Ольга', lang: 'uk' })]);
@@ -790,13 +798,13 @@ describe('дайджест руководителю в Telegram', () => {
     expect((await http().get('/digest').set(auth(c.token))).body.recipients).toHaveLength(1);
     // a link of another clinic will not work in this one
     const b = await ready();
-    const urlB = (await http().post('/digest/link').set(auth(b.token)).expect(201)).body.url as string;
+    const urlB = await legacyLink(b.clinicId);
     await telegram.handleUpdate(c.clinicId, TOKEN, upd(9003, `/start owner_${urlB.split('owner_')[1]}`));
     expect((await http().get('/digest').set(auth(c.token))).body.recipients).toHaveLength(1);
 
     const admin = await member(c.token, 'ADMIN');
     await http().get('/digest').set(auth(admin)).expect(403);
-    await http().post('/digest/link').set(auth(admin)).expect(403);
+    await http().post('/leader-telegram/link').set(auth(admin)).expect(403);
     await http().patch('/digest').set(auth(admin)).send({ frequency: 'DAILY' }).expect(403);
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'MONTHLY' }).expect(400);
     await http().patch('/digest').set(auth(c.token)).send({ hour: 25 }).expect(400);

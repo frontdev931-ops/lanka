@@ -110,6 +110,7 @@ export function ChannelSettings() {
       {ch === 'telegram' && (
       <div role="tabpanel" id="chan-panel-telegram" aria-labelledby="chan-tab-telegram">
       <Card title={t('au.tgTitle')} actions={<Badge tone={tg.connected ? 'green' : tgWasConnected ? 'amber' : 'gray'}>{tg.connected ? t('au.tgConnected') : tgWasConnected ? t('chs.tgDisconnected') : t('chs.notConnected')}</Badge>}>
+        <p className="rule" style={{ marginTop: 0 }}>{t('chs.tgPatientsOnly')}</p>
         {tg.connected ? (
           <>
             <p className="rule">@{tg.username} · {t('au.tgLinked', { n: tg.linkedPatients })}</p>
@@ -177,7 +178,7 @@ export function ChannelSettings() {
         )}
       </Card>
 
-      <p className="rule">{t('chs.digestMoved')} <a href="/insights">{t('chs.digestLink')}</a></p>
+      <p className="rule">{t('chs.digestMoved')} <a href="/settings#leader-telegram">{t('chs.digestLink')}</a></p>
       </div>
       )}
 

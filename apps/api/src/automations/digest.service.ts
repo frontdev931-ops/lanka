@@ -4,14 +4,14 @@ import { Provider } from '@prisma/client';
 import { lankaMoves } from '../reports/lanka-moves';
 import { clinicDate, clinicHm, startOfClinicDay } from '../common/clinic-time';
 import { decrypt } from '../common/crypto';
-import { hashToken, newToken } from '../auth/tokens';
+import { hashToken } from '../auth/tokens';
 import { Lang } from '../common/i18n';
 import { PrismaService } from '../prisma/prisma.service';
 import { hasFeature } from '../service/plans';
 import { TelegramApi } from './telegram.api';
+import { LeaderTelegramService } from './leader-telegram.service';
 
 const DAY = 86_400_000;
-const LINK_TTL = 60 * 60_000;
 const ACTIVE = ['PLANNED', 'CONFIRMED', 'NOT_CONFIRMED'];
 
 export interface DigestNumbers {
@@ -56,6 +56,7 @@ export class DigestService {
   constructor(
     private prisma: PrismaService,
     private api: TelegramApi,
+    private leaders: LeaderTelegramService,
   ) {}
 
   private async bot(clinicId: string) {
@@ -66,10 +67,12 @@ export class DigestService {
   async settings(clinicId: string) {
     const [c, recipients, st] = await Promise.all([
       this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { digestFrequency: true, digestHour: true, digestWeekday: true } }),
-      this.prisma.digestRecipient.findMany({ where: { clinicId }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true, lang: true } }),
+      this.prisma.digestRecipient.findMany({ where: { clinicId, migratedAt: null }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true, lang: true } }),
       this.bot(clinicId),
     ]);
-    return { frequency: c.digestFrequency, hour: c.digestHour, weekday: c.digestWeekday, recipients, botConnected: st.connected };
+    // recipients: the LEGACY chats of the clinic's patient bot that nobody reconnected yet; the people receiving it through the LANKA service bot
+    // are in GET /leader-telegram (digestTo)
+    return { frequency: c.digestFrequency, hour: c.digestHour, weekday: c.digestWeekday, recipients, botConnected: st.connected, serviceBot: this.leaders.available };
   }
 
   async update(clinicId: string, patch: { frequency?: string; hour?: number; weekday?: number }) {
@@ -81,19 +84,15 @@ export class DigestService {
     return this.settings(clinicId);
   }
 
-  // Linking link: the manager opens it in Telegram, the bot remembers their chat
-  async link(clinicId: string, userId: string) {
-    const st = await this.bot(clinicId);
-    if (!st.connected) throw new BadRequestException('bot_not_connected');
-    const token = newToken();
-    await this.prisma.channelLink.create({ data: { clinicId, purpose: 'DIGEST', createdById: userId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + LINK_TTL) } });
-    return { url: `https://t.me/${st.username}?start=owner_${token}`, expiresAt: new Date(Date.now() + LINK_TTL) };
-  }
+  // New recipients connect their own Telegram through the LANKA service bot (LeaderTelegramService); the clinic's patient bot issues no new
+  // digest links (2026-11-23). Links issued before still work until they expire (bind below).
 
   // Called by the bot from the "owner_…" link
   async bind(clinicId: string, payload: string, chat: { id: string; name: string; lang: string }): Promise<boolean> {
     const link = await this.prisma.channelLink.findUnique({ where: { tokenHash: hashToken(payload) } });
     if (!link || link.clinicId !== clinicId || link.purpose !== 'DIGEST' || link.usedAt || link.expiresAt < new Date()) return false;
+    // this Telegram already receives the digest through the service bot: no second route
+    if (await this.prisma.leaderTelegram.count({ where: { clinicId, chatId: chat.id } })) return false;
     if ((await this.prisma.digestRecipient.count({ where: { clinicId } })) >= 5) return false;
     await this.prisma.channelLink.update({ where: { id: link.id }, data: { usedAt: new Date() } });
     await this.prisma.digestRecipient.upsert({ where: { clinicId_chatId: { clinicId, chatId: chat.id } }, create: { clinicId, chatId: chat.id, name: chat.name, lang: chat.lang }, update: { name: chat.name, lang: chat.lang } });
@@ -101,7 +100,7 @@ export class DigestService {
   }
 
   async isRecipient(clinicId: string, chatId: string) {
-    return !!(await this.prisma.digestRecipient.findUnique({ where: { clinicId_chatId: { clinicId, chatId } }, select: { id: true } }));
+    return !!(await this.prisma.digestRecipient.findFirst({ where: { clinicId, chatId, migratedAt: null }, select: { id: true } }));
   }
 
   async remove(clinicId: string, id: string) {
@@ -194,23 +193,27 @@ export class DigestService {
     return i?.apiKeyEnc ? decrypt(i.apiKeyEnc) : null;
   }
 
-  // Sends the digest to all recipients of the clinic. Returns the number delivered.
+  // Sends the digest: to the managers who switched it on in their LANKA service bot connection (their role is checked again right before), and
+  // to the legacy chats of the clinic's patient bot nobody reconnected yet. A chat that has a service bot connection never gets the legacy copy,
+  // so one person never receives it twice. only: the chat ids of a manual request (the /digest command). Returns the number delivered.
   async send(clinicId: string, kind: 'DAILY' | 'WEEKLY', only?: string[]): Promise<number> {
-    const token = await this.token(clinicId);
-    if (!token) return 0;
-    const [clinic, recipients, numbers] = await Promise.all([
+    const [clinic, numbers] = await Promise.all([
       this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { name: true } }),
-      this.prisma.digestRecipient.findMany({ where: { clinicId, ...(only ? { chatId: { in: only } } : {}) } }),
       this.numbers(clinicId, kind),
     ]);
     const link = `${(process.env.WEB_ORIGIN ?? '').replace(/\/$/, '')}/analytics`;
-    let ok = 0;
-    for (const r of recipients) {
+    let ok = await this.leaders.send(clinicId, 'digest', (lang) => this.format(numbers, clinic.name, kind, lang, link), only);
+    const token = await this.token(clinicId);
+    if (!token) return ok;
+    const viaService = new Set((await this.prisma.leaderTelegram.findMany({ where: { clinicId }, select: { chatId: true } })).map((x) => x.chatId));
+    const legacy = await this.prisma.digestRecipient.findMany({ where: { clinicId, migratedAt: null, ...(only ? { chatId: { in: only } } : {}) } });
+    for (const r of legacy) {
+      if (viaService.has(r.chatId)) continue;
       try {
         await this.api.sendMessage(token, r.chatId, this.format(numbers, clinic.name, kind, (r.lang as Lang) ?? 'uk', link));
         ok++;
       } catch (e) {
-        this.log.warn(`Дайджест не доставлен: ${(e as Error).message}`);
+        this.log.warn(`Дайджест не доставлено: ${(e as Error).message}`);
       }
     }
     return ok;

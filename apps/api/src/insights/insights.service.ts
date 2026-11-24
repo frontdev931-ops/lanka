@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException, OnApplicati
 import { Provider, Role } from '@prisma/client';
 import { MailService } from '../auth/mail.service';
 import { StaffNotifierService } from '../automations/staff-notifier.service';
+import { LeaderTelegramService } from '../automations/leader-telegram.service';
 import { startOfClinicDay } from '../common/clinic-time';
 import { clinicMoneyCurrency, effectiveCurrency } from '../common/money';
 import { Lang } from '../common/i18n';
@@ -112,6 +113,7 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
     private builder: ReportBuilderService,
     private mail: MailService,
     private staff: StaffNotifierService,
+    private leaders: LeaderTelegramService,
     private reports: ReportsService,
     private push: PushService,
   ) {}
@@ -380,10 +382,10 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
 
   // The "Signals" section: every rule of this clinic, measured now from its own data, with its settings and the Telegram destination. Read
   // only: opening it never sends anything. A plan without the signals gets no numbers.
-  async signals(clinicId: string, now = new Date()) {
+  async signals(clinicId: string, now = new Date(), userId?: string) {
     const c = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } });
     if (!hasFeature(c.plan, 'advanced_analytics')) return { inPlan: false, checkedAt: now, sync: null, telegram: null, signals: [] };
-    const [rules, sync, chat] = await Promise.all([this.alerts(clinicId), this.syncState(clinicId, now), this.staff.chat(clinicId)]);
+    const [rules, sync, chat, people, mine] = await Promise.all([this.alerts(clinicId), this.syncState(clinicId, now), this.staff.chat(clinicId), this.leaders.recipients(clinicId, 'signals'), userId ? this.prisma.leaderTelegram.findUnique({ where: { clinicId_userId: { clinicId, userId } }, select: { signals: true, blockedAt: true } }) : null]);
     const signals = [];
     for (const r of rules) {
       // a rule switched off is not measured: no green or red assessment, only its settings
@@ -399,7 +401,10 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
     }
     // the section has just measured everything: the menu badge takes this number instead of measuring again
     this.summaryCache.set(clinicId, { at: now.getTime(), sync: sync.lastSyncAt?.getTime() ?? 0, fired: firedCount(signals.map((x) => ({ active: x.active, state: x.state }))) });
-    return { inPlan: true, checkedAt: now, sync: { lastSyncAt: sync.lastSyncAt, fresh: sync.fresh, connected: sync.connected }, telegram: chat ? { title: chat.title } : null, signals };
+    return { inPlan: true, checkedAt: now, sync: { lastSyncAt: sync.lastSyncAt, fresh: sync.fresh, connected: sync.connected }, // who a rule's Telegram switch reaches (the switch is the clinic's, the recipients are each person's own choice): managers through the LANKA
+      // service bot (names only) and the legacy staff group of the clinic's patient bot, if one was linked before
+      telegram: { serviceBot: this.leaders.available, people: people.map((p) => p.name), group: chat?.title ?? null, me: mine ? { signals: mine.signals && !mine.blockedAt, blocked: !!mine.blockedAt } : null },
+      signals };
   }
 
   // The menu badge: how many switched-on rules show a deviation now (rules, not patients or alerts). The states come from signals() above, so
@@ -469,7 +474,11 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
           data: { telegramClaimAt: now },
         });
         if (claim.count) {
-          const outcome = await this.staff.deliver(clinicId, text).catch(() => 'failed' as const);
+          // two routes: each manager who chose signals in their LANKA service bot (role checked again inside), and the legacy staff group of the
+          // clinic's patient bot; delivered when either one confirmed. A rule with no recipient at all sends nothing and is tried again later.
+          const personal = await this.leaders.send(clinicId, 'signals', () => text).catch(() => 0);
+          const group = await this.staff.deliver(clinicId, text).catch(() => 'failed' as const);
+          const outcome = personal > 0 || group === 'sent' ? 'sent' : group;
           if (outcome === 'sent') {
             await this.prisma.alertRule.update({ where: { id: rule.id }, data: { telegramSentAt: now, telegramClaimAt: null, lastValue: e.value } });
             await this.prisma.auditLog.create({ data: { clinicId, action: 'alert.telegram', details: { kind: rule.kind, value: e.value } } });
