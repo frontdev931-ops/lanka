@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
-import { Provider, Role } from '@prisma/client';
+import { Prisma, Provider, Role } from '@prisma/client';
 import { MailService } from '../auth/mail.service';
 import { StaffNotifierService } from '../automations/staff-notifier.service';
 import { LeaderTelegramService } from '../automations/leader-telegram.service';
@@ -15,13 +15,28 @@ import { toPdf, toXlsx } from '../reports/report-export';
 import { accessBlocked, billingEnforced, hasFeature } from '../service/plans';
 import { Frequency, nextRun } from './schedule';
 import { KNOWN_RESULT_STATUSES, MISSED_STATUSES } from '../reports/visit-outcome';
-import { eventText, overviewText, pushTitle, SignalFacts, SignalLang, SignalSettings, signalUrl } from './signal-text';
+import { eventText, overviewText, pushTitle, pushWorse, SignalFacts, SignalLang, SignalSettings, signalUrl } from './signal-text';
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 const MAX_SCHEDULES = 20;
 const MAX_RECIPIENTS = 5;
 const COOLDOWN_MS = 24 * HOUR;
+// A "worse" notice of a lasting deviation: at most once in this time after the rule's last event (new deviation or worse); SYNC_OVERDUE's one
+// extra notice at twice its threshold is not limited by it
+const WORSE_GAP_MS = 7 * 24 * HOUR;
+// Counted rules (people, requests, tasks) and rules in percent (a share, or the size of a drop)
+export const COUNT_KINDS = ['NO_REBOOK', 'UNFINISHED_NO_NEXT', 'STALE_REQUESTS', 'OVERDUE_TASKS'];
+export const PERCENT_KINDS = ['CANCEL_RATE', 'RETURN_DROP', 'PAYMENTS_DROP'];
+// Significantly worse than the base: a count up by at least 50% AND by at least the rule's threshold; a percentage (the share of cancellations,
+// the size of a drop) up by at least 10 percentage points. Compared with the base of the episode, never with the previous half-hour check.
+export function worseEnough(kind: string, base: number, value: number, threshold: number): boolean {
+  if (COUNT_KINDS.includes(kind)) return value >= base * 1.5 && value - base >= threshold;
+  if (PERCENT_KINDS.includes(kind)) return value - base >= 10 - 1e-9;
+  return false;
+}
+// The periods a measurement covered (rolling: the base and a later measurement do not cover the same visits or payments)
+const periodsOf = (e: Extract<SignalExplained, { state: 'measured' }>) => JSON.parse(JSON.stringify({ from: e.from ?? null, to: e.to ?? null, prevFrom: e.prevFrom ?? null, prevTo: e.prevTo ?? null, lastSyncAt: e.lastSyncAt ?? null }));
 // The menu badge reuses a measurement this long (see signalsSummary)
 const SUMMARY_TTL_MS = 5 * 60_000;
 // Fired = a switched-on rule whose measured value reached its threshold; off, too little data, needs a load and errors are not counted
@@ -289,7 +304,7 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
     // A changed condition, the rule switched on again or a channel switched on starts from a new baseline: the next check only records the
     // state, so nothing that had accumulated is sent because of the change (switching channels off keeps the state)
     const fresh = d.threshold !== undefined || d.windowDays !== undefined || d.hours !== undefined || d.active === true || d.enabled === true || d.push === true || d.telegram === true;
-    await this.prisma.alertRule.update({ where: { clinicId_kind: { clinicId, kind } }, data: { ...d, ...(fresh ? { evalState: null, evalValue: null, evalAt: null } : {}) } });
+    await this.prisma.alertRule.update({ where: { clinicId_kind: { clinicId, kind } }, data: { ...d, ...(fresh ? { evalState: null, evalValue: null, evalAt: null, baseValue: null, baseAt: null, baseFacts: Prisma.DbNull, syncEscalatedAt: null } : {}) } });
     this.summaryCache.delete(clinicId);
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'alert.changed', details: { kind, ...d } } });
   }
@@ -483,18 +498,56 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
         }
         if (e?.state !== 'measured') continue;
         const fired = e.value >= rule.threshold;
-        const next = fired ? 'FIRED' : 'OK';
         // the state this run read: the update applies only if nobody changed it meanwhile (another run, a settings change)
         const cas = { id: rule.id, active: true, evalState: rule.evalState, evalAt: rule.evalAt };
-        if (rule.evalState !== 'OK' || !fired) {
-          // baseline, a deviation that stays, normal that stays, or a recovery: the state only
-          await this.prisma.alertRule.updateMany({ where: cas, data: { evalState: next, evalValue: e.value, evalAt: now } });
+        // the comparison base of a deviation episode: this measurement (its value, time and periods)
+        const base = { baseValue: e.value, baseAt: now, baseFacts: periodsOf(e) };
+        // SYNC_OVERDUE already at twice its threshold when its base is set: counted as escalated (nothing accumulated is sent)
+        const escalatedNow = rule.kind === 'SYNC_OVERDUE' && e.value >= 2 * rule.threshold ? { syncEscalatedAt: now } : {};
+        if (!fired) {
+          // normal (stays, or a confirmed recovery): a recovery ends the episode, its base and its escalation
+          await this.prisma.alertRule.updateMany({ where: cas, data: { evalState: 'OK', evalValue: e.value, evalAt: now, ...(rule.evalState === 'FIRED' ? { baseValue: null, baseAt: null, baseFacts: Prisma.DbNull, syncEscalatedAt: null } : {}) } });
           continue;
         }
-        // normal → deviation; within a day of the previous event it is recorded but not sent again
+        if (rule.evalState === null) {
+          // the baseline (first measurement under the current settings) already deviating: the state and the base only, no message
+          await this.prisma.alertRule.updateMany({ where: cas, data: { evalState: 'FIRED', evalValue: e.value, evalAt: now, ...base, ...escalatedNow } });
+          continue;
+        }
+        if (rule.evalState === 'FIRED') {
+          // a deviation that lasts: compared with the base of the episode (the last event, or the first measurement with nothing to compare)
+          if (rule.baseValue === null) {
+            await this.prisma.alertRule.updateMany({ where: cas, data: { evalValue: e.value, evalAt: now, ...base, ...escalatedNow } });
+            continue;
+          }
+          const lastEvent = Math.max(rule.lastFiredAt?.getTime() ?? 0, rule.lastWorseAt?.getTime() ?? 0);
+          const worse = rule.kind === 'SYNC_OVERDUE' ? !rule.syncEscalatedAt && e.value >= 2 * rule.threshold : worseEnough(rule.kind, rule.baseValue, e.value, rule.threshold) && now.getTime() - lastEvent >= WORSE_GAP_MS;
+          if (!worse) {
+            // not (yet) worse enough, or within the 7 days: the base stays; the current value is checked again at the next run
+            await this.prisma.alertRule.updateMany({ where: cas, data: { evalValue: e.value, evalAt: now } });
+            continue;
+          }
+          const ev = await this.prisma.$transaction(async (tx) => {
+            // one worsening = one event, also with several runs at once: the base is compared-and-set; several levels at once = one event
+            const won = await tx.alertRule.updateMany({ where: { ...cas, baseValue: rule.baseValue }, data: { evalValue: e.value, evalAt: now, ...base, lastWorseAt: now, ...(rule.kind === 'SYNC_OVERDUE' ? { syncEscalatedAt: now } : {}) } });
+            if (!won.count) return null;
+            const created = await tx.signalEvent.create({
+              data: { clinicId, kind: rule.kind, type: 'WORSE', value: e.value, prevValue: rule.baseValue, prevAt: rule.baseAt, facts: JSON.parse(JSON.stringify({ ...e, base: rule.baseFacts ?? null })), settings: { threshold: rule.threshold, windowDays: rule.windowDays, hours: rule.hours } },
+            });
+            const targets = await this.recipientsOf(clinicId, rule);
+            if (targets.length) await tx.signalDelivery.createMany({ data: targets.map((t) => ({ eventId: created.id, clinicId, ...t })), skipDuplicates: true });
+            return created;
+          });
+          if (ev) {
+            created.push(rule.kind);
+            await this.prisma.auditLog.create({ data: { clinicId, action: 'alert.worse', details: { kind: rule.kind, value: e.value, base: rule.baseValue, event: ev.id } } });
+          }
+          continue;
+        }
+        // normal → deviation; within a day of the previous event it is recorded but not sent again. Either way the episode's base is set.
         const recent = !!rule.lastFiredAt && now.getTime() - rule.lastFiredAt.getTime() < COOLDOWN_MS;
         const event = await this.prisma.$transaction(async (tx) => {
-          const won = await tx.alertRule.updateMany({ where: cas, data: { evalState: 'FIRED', evalValue: e.value, evalAt: now, ...(recent ? {} : { lastFiredAt: now, lastValue: e.value }) } });
+          const won = await tx.alertRule.updateMany({ where: cas, data: { evalState: 'FIRED', evalValue: e.value, evalAt: now, ...base, syncEscalatedAt: null, ...escalatedNow, ...(recent ? {} : { lastFiredAt: now, lastValue: e.value }) } });
           if (!won.count) return 'lost' as const;
           if (recent) return null;
           const ev = await tx.signalEvent.create({
@@ -551,7 +604,7 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
       if (!claim.count) continue;
       const rule = await this.prisma.alertRule.findUnique({ where: { clinicId_kind: { clinicId, kind: d.event.kind } }, select: { active: true, telegram: true, enabled: true, push: true } });
       const on = !!rule?.active && (d.channel === 'EMAIL' ? rule.enabled : d.channel === 'PUSH' ? rule.push : rule.telegram);
-      const text = (lang: SignalLang) => eventText({ clinic: clinic?.name ?? 'LANKA', kind: d.event.kind, facts: d.event.facts as unknown as SignalFacts, settings: d.event.settings as unknown as SignalSettings, prevValue: d.event.prevValue, prevAt: d.event.prevAt, url: signalUrl(d.event.kind, clinicId, d.event.id) }, lang);
+      const text = (lang: SignalLang) => eventText({ clinic: clinic?.name ?? 'LANKA', kind: d.event.kind, type: d.event.type, facts: d.event.facts as unknown as SignalFacts, settings: d.event.settings as unknown as SignalSettings, prevValue: d.event.prevValue, prevAt: d.event.prevAt, url: signalUrl(d.event.kind, clinicId, d.event.id) }, lang);
       let outcome: 'sent' | 'failed' | 'unknown' | 'dropped';
       let error: string | null = null;
       if (!on) outcome = 'dropped';
@@ -566,7 +619,7 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
         if (!user) outcome = 'dropped';
         else {
           try {
-            await this.mail.send({ to: user.user.email, subject: `LANKA: ${pushTitle(d.event.kind)}`, text: text(LANG) });
+            await this.mail.send({ to: user.user.email, subject: `LANKA: ${d.event.type === 'WORSE' ? `${pushWorse(d.event.kind)} (погіршення)` : pushTitle(d.event.kind)}`, text: text(LANG) });
             outcome = 'sent';
           } catch (e) {
             outcome = 'failed';
@@ -576,7 +629,8 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
       } else {
         // the Push notification carries no numbers or names; only the owner's and the managers' devices (the Signals roles), on a plan with
         // signals, and only devices switched on before the event (nothing accumulated); the event's own tag, so a repeat replaces, never adds
-        await this.push.notify(clinicId, signalPush((lang) => pushTitle(d.event.kind, lang)), { url: `/signals/${d.event.kind}?c=${clinicId}&e=${d.event.id}`, tag: `signal-${d.event.id}`, roles: PUSH_ROLES.signals, ttl: 6 * 3600, notBefore: d.event.createdAt, feature: 'advanced_analytics' }).catch(() => undefined);
+        const worse = d.event.type === 'WORSE';
+        await this.push.notify(clinicId, signalPush((lang) => (worse ? pushWorse(d.event.kind, lang) : pushTitle(d.event.kind, lang)), worse), { url: `/signals/${d.event.kind}?c=${clinicId}&e=${d.event.id}`, tag: `signal-${d.event.id}`, roles: PUSH_ROLES.signals, ttl: 6 * 3600, notBefore: d.event.createdAt, feature: 'advanced_analytics' }).catch(() => undefined);
         outcome = 'sent';
       }
       const status = { sent: 'SENT', failed: 'FAILED', unknown: 'UNKNOWN', dropped: 'DROPPED' }[outcome];
@@ -601,7 +655,7 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
     const e = rule.active ? await this.explain(clinicId, rule, now, sync) : null;
     const state = !e ? 'off' : e.state === 'measured' ? (e.value >= rule.threshold ? 'fired' : 'ok') : e.state;
     // the event must be this clinic's and this rule's; anything else is ignored
-    const ev = eventId ? await this.prisma.signalEvent.findFirst({ where: { id: eventId, clinicId, kind }, select: { createdAt: true, value: true } }) : null;
+    const ev = eventId ? await this.prisma.signalEvent.findFirst({ where: { id: eventId, clinicId, kind }, select: { createdAt: true, value: true, type: true, prevValue: true, prevAt: true } }) : null;
     let patients: { id: string; name: string; at: Date | null; days: number | null }[] | undefined;
     let total: number | undefined;
     if (rule.active && e?.state === 'measured' && (kind === 'NO_REBOOK' || kind === 'UNFINISHED_NO_NEXT')) {
@@ -616,7 +670,8 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
     return {
       ...(e ?? {}), inPlan: true as const, kind, clinic: c.name, checkedAt: now, state, active: rule.active, threshold: rule.threshold, windowDays: rule.windowDays, hours: rule.hours,
       sync: { lastSyncAt: sync.lastSyncAt, fresh: sync.fresh }, link: SIGNAL_LINK[kind as AlertKind],
-      event: ev ? { at: ev.createdAt, value: ev.value } : null, patients, total, limit: DETAILS_LIMIT,
+      // the event of the message: why it was sent (a new deviation, or a significant worsening against the base value and its time)
+      event: ev ? { at: ev.createdAt, value: ev.value, type: ev.type, prevValue: ev.prevValue, prevAt: ev.prevAt } : null, patients, total, limit: DETAILS_LIMIT,
     };
   }
 

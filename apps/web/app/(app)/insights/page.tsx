@@ -7,7 +7,6 @@ import { fmtDateTime } from '../../../lib/ui';
 import { useI18n } from '../../../lib/i18n';
 import { Alert, Badge, Card, Empty, Loading, PageHeader } from '../../../components/ui';
 import { DigestCard } from '../../../components/DigestCard';
-import { PeriodReportsCard } from '../../../components/PeriodReportsCard';
 import { useConfirm } from '../../../components/ConfirmDialog';
 
 interface Schedule {
@@ -85,10 +84,9 @@ export default function InsightsPage() {
       {error && <Alert tone="error">{error}</Alert>}
       {info && <Alert tone="success">{info}</Alert>}
 
-      {/* the manager's daily digest in Telegram: one more thing sent on a schedule (it was in the Telegram channel settings) */}
+      {/* the three formats to managers in Telegram: daily digest, weekly report, monthly report (the clinic's schedule; each person subscribes in
+          their own Telegram connection) */}
       <DigestCard />
-      {/* weekly and monthly reports (the clinic's schedule; each person subscribes in their own Telegram connection) */}
-      <PeriodReportsCard />
 
       <Card title={t('ins.reports')}>
         <p className="rule" style={{ marginTop: 0 }}>{t('ins.reportsHint')}</p>

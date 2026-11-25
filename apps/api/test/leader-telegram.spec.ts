@@ -203,29 +203,29 @@ describe('Telegram керівника через службовий бот LANKA
     await connect(m.token, 6302);
     tg.sent.length = 0;
     // connected but not chosen: nothing
-    expect(await digest.send(c.clinicId, 'WEEKLY')).toBe(0);
+    expect(await digest.send(c.clinicId, 'DAILY')).toBe(0);
     await http().patch('/leader-telegram').set(auth(c.token)).send({ digest: true }).expect(200);
     await http().patch('/leader-telegram').set(auth(m.token)).send({ digest: true }).expect(200);
-    expect(await digest.send(c.clinicId, 'WEEKLY')).toBe(2);
+    expect(await digest.send(c.clinicId, 'DAILY')).toBe(2);
     expect(tg.sent.map((x) => [x.token, x.chatId]).sort()).toEqual([[SERVICE, '6301'], [SERVICE, '6302']]);
     expect(tg.sent[0].text).toContain('Дайджест клініки');
     // the manager lost the role: nothing to them (the stored switch stays, the check is at sending)
     await prisma.membership.update({ where: { userId_clinicId: { userId: m.userId, clinicId: c.clinicId } }, data: { role: 'ADMIN' } });
     tg.sent.length = 0;
-    expect(await digest.send(c.clinicId, 'WEEKLY')).toBe(1);
+    expect(await digest.send(c.clinicId, 'DAILY')).toBe(1);
     expect(tg.sent.map((x) => x.chatId)).toEqual(['6301']);
     // removed from the team: nothing either
     await prisma.membership.delete({ where: { userId_clinicId: { userId: m.userId, clinicId: c.clinicId } } });
     expect((await leader.recipients(c.clinicId, 'digest')).map((r) => r.chatId)).toEqual(['6301']);
     // the bot was blocked: marked, skipped afterwards
     tg.blocked.add('6301');
-    expect(await digest.send(c.clinicId, 'WEEKLY')).toBe(0);
+    expect(await digest.send(c.clinicId, 'DAILY')).toBe(0);
     expect((await http().get('/leader-telegram').set(auth(c.token))).body.me).toMatchObject({ blocked: true });
     tg.blocked.clear();
-    expect(await digest.send(c.clinicId, 'WEEKLY')).toBe(0);
+    expect(await digest.send(c.clinicId, 'DAILY')).toBe(0);
     // disconnected: nothing
     await http().delete('/leader-telegram').set(auth(c.token)).expect(200);
-    expect(await digest.send(c.clinicId, 'WEEKLY')).toBe(0);
+    expect(await digest.send(c.clinicId, 'DAILY')).toBe(0);
   });
 
   it('старі отримувачі зберігаються й отримують через бот клініки до переподключення; після нього — лише новим шляхом, без дублів', async () => {
@@ -241,7 +241,7 @@ describe('Telegram керівника через службовий бот LANKA
     expect((await http().get('/digest').set(auth(c.token))).body.recipients).toHaveLength(2);
     const digest = app.get(DigestService);
     tg.sent.length = 0;
-    expect(await digest.send(c.clinicId, 'WEEKLY')).toBe(2);
+    expect(await digest.send(c.clinicId, 'DAILY')).toBe(2);
     expect(tg.sent.every((x) => x.token === CLINIC_BOT)).toBe(true);
     // nothing is moved silently: the leader view shows them as legacy
     expect((await http().get('/leader-telegram').set(auth(c.token))).body.legacy.digest).toHaveLength(2);
@@ -250,7 +250,7 @@ describe('Telegram керівника через службовий бот LANKA
     await connect(c.token, 6401);
     expect((await http().get('/leader-telegram').set(auth(c.token))).body.me).toMatchObject({ digest: true, signals: false });
     tg.sent.length = 0;
-    expect(await digest.send(c.clinicId, 'WEEKLY')).toBe(2);
+    expect(await digest.send(c.clinicId, 'DAILY')).toBe(2);
     expect(tg.sent.filter((x) => x.chatId === '6401')).toEqual([expect.objectContaining({ token: SERVICE })]);
     expect(tg.sent.filter((x) => x.chatId === '6402')).toEqual([expect.objectContaining({ token: CLINIC_BOT })]);
     // the legacy rows are kept, one marked as moved

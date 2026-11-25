@@ -186,6 +186,12 @@ model Clinic {
   digestHour                Int                       @default(9)
   digestWeekday             Int                       @default(1)
   lastDigestAt              DateTime?
+  // The old rolling 7-day weekly digest, kept apart from digestFrequency (2026-11-25) so it runs independently of the daily digest until each
+  // person moves: on, its weekday and hour (Kyiv), its own last sending. It can no longer be switched on.
+  legacyWeeklyOn            Boolean                   @default(false)
+  legacyWeeklyWeekday       Int                       @default(1)
+  legacyWeeklyHour          Int                       @default(9)
+  lastLegacyWeeklyAt        DateTime?
   // Weekly and monthly reports to managers through the LANKA service bot (2026-11-25), separate from the digest above and off by default. The
   // clinic's schedule: weekly on a weekday at an hour (for the completed Monday–Sunday week), monthly on the 1st at an hour (for the previous
   // month), Europe/Kyiv. *Since: when it was switched on; only a sending time after it counts, so switching on never sends an older report.
@@ -1041,6 +1047,10 @@ model LeaderTelegram {
   weeklySince    DateTime?
   monthly        Boolean   @default(false)
   monthlySince   DateTime?
+  // digest: the DAILY digest. legacyWeekly: this person still gets the old rolling 7-day weekly digest (only ever switched off, never on);
+  // legacyWeeklyMovedAt: when they left it (moved to the weekly report or switched it off).
+  legacyWeekly   Boolean   @default(false)
+  legacyWeeklyMovedAt DateTime?
   createdAt      DateTime  @default(now())
   // the bot was blocked or the chat is gone: nothing is sent until the person connects again
   blockedAt      DateTime?
@@ -1061,6 +1071,8 @@ model DigestRecipient {
   // The legacy route (the clinic's patient bot). Set when the same person confirmed the LANKA service bot for this clinic (a private chat id is
   // the person's Telegram id in every bot): the row is kept, but the digest goes only the new way, never twice.
   migratedAt DateTime?
+  // this chat got the old weekly digest (its clinic was on it): it keeps getting that one, never the daily one it did not choose
+  legacyWeekly Boolean  @default(false)
   clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@unique([clinicId, chatId])
@@ -1342,6 +1354,15 @@ model AlertRule {
   evalState       String?
   evalValue       Float?
   evalAt          DateTime?
+  // Worsening of a deviation that lasts (2026-11-25). base*: what the next "worse" is compared with: the value, time and period of the last
+  // event of this deviation episode (or, when there was none to compare with, the first successful measurement in it); cleared on recovery and
+  // on a settings change. lastWorseAt: the last "worse" event (with lastFiredAt, the 7-day limit). syncEscalatedAt: the one extra notice of
+  // SYNC_OVERDUE at twice the threshold in this episode.
+  baseValue       Float?
+  baseAt          DateTime?
+  baseFacts       Json?
+  lastWorseAt     DateTime?
+  syncEscalatedAt DateTime?
   createdAt       DateTime  @default(now())
   clinic          Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
@@ -1354,6 +1375,8 @@ model SignalEvent {
   id         String           @id @default(cuid())
   clinicId   String
   kind       String
+  // FIRED: a new deviation (normal → deviation); WORSE: a significant worsening of a deviation that lasts (prevValue/prevAt = the base)
+  type       String           @default("FIRED")
   value      Float
   // the previous successful measurement under the same settings (the "change" line), if there was one
   prevValue  Float?
@@ -1807,14 +1830,23 @@ model PeriodReportRun {
   scheduledAt DateTime
   state       String
   facts       Json
+  // History (2026-11-25): SCHEDULED (one per clinic, kind and period: dedupeKey "SCHEDULED") or MANUAL ("send to me": dedupeKey "MANUAL:<id>",
+  // createdById = the person; visible only to them). texts: the exact message per language, fixed the first time it is sent in that language
+  // ({} for runs prepared before the history: their text was not kept). Never rewritten after that.
+  source      String                 @default("SCHEDULED")
+  dedupeKey   String                 @default("SCHEDULED")
+  createdById String?
+  texts       Json                   @default("{}")
   createdAt   DateTime               @default(now())
   clinic      Clinic                 @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   deliveries  PeriodReportDelivery[]
 
-  @@unique([clinicId, kind, periodFrom])
+  @@unique([clinicId, kind, periodFrom, dedupeKey])
+  @@index([clinicId, createdAt])
 }
 
-// One recipient of a prepared report, unique per clinic, person, kind and period. status as SignalDelivery: PENDING, SENT, FAILED (a definite
+// One recipient of a prepared report, unique per report and person (a scheduled report is itself unique per clinic, kind and period). lang: the
+// language of the text this person was sent (run.texts[lang]). status as SignalDelivery: PENDING, SENT, FAILED (a definite
 // refusal, retried a few times the same day), UNKNOWN (may have arrived: never repeated), DROPPED (the subscription, the role or the connection
 // is gone). Claimed before sending; one failure never resends to the others.
 model PeriodReportDelivery {
@@ -1829,9 +1861,10 @@ model PeriodReportDelivery {
   claimAt    DateTime?
   sentAt     DateTime?
   lastError  String?
+  lang       String?
   createdAt  DateTime        @default(now())
   run        PeriodReportRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
-  @@unique([clinicId, userId, kind, periodFrom])
+  @@unique([runId, userId])
   @@index([clinicId, status])
 }

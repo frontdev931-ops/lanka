@@ -350,8 +350,10 @@ describe('звіти за тиждень і місяць', () => {
     expect(tg.sent.map((x) => x.chatId)).toEqual(['8401']);
     await http().post('/period-reports/send-to-me').set(auth(c.token)).send({ kind: 'MONTHLY' }).expect(400);
     expect(tg.sent).toHaveLength(1);
-    expect(await prisma.periodReportRun.count({ where: { clinicId: c.clinicId } })).toBe(0);
-    expect(await prisma.periodReportDelivery.count({ where: { clinicId: c.clinicId } })).toBe(0);
+    // saved as the person's own MANUAL report with its one delivery; no scheduled report is created by it
+    expect(await prisma.periodReportRun.count({ where: { clinicId: c.clinicId, source: 'SCHEDULED' } })).toBe(0);
+    expect(await prisma.periodReportRun.count({ where: { clinicId: c.clinicId, source: 'MANUAL', createdById: c.userId } })).toBe(1);
+    expect(await prisma.periodReportDelivery.findMany({ where: { clinicId: c.clinicId }, select: { userId: true, status: true } })).toEqual([{ userId: c.userId, status: 'SENT' }]);
   });
 
   it('знаменник: усі 10 статусів Cliniccards; частка звіту й сигналу «Скасування й неявки» — один розрахунок', async () => {

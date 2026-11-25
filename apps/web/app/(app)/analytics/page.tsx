@@ -96,6 +96,17 @@ export default function AnalyticsPage() {
   const stage = (k: string) => t(`fn.st.${k}` as never);
   const fmt = (n: number) => fmtNumber(n);
   const money = (list: MoneyTotal[]) => fmtTotals(list, t('billing.uah'), t('money.unknown'));
+  // A money tile: the amounts large, an unconfirmed currency as a small note under them (a long phrase in the big font broke the tile on phones)
+  const moneyStat = (list: MoneyTotal[]) => {
+    const unknown = list.some((x) => !x.currency);
+    const big = list.length ? list.map((x) => (x.currency ? fmtTotals([x], t('billing.uah'), t('money.unknown')) : fmtNumber(Math.round(x.amount)))).join('; ') : '0';
+    return (
+      <>
+        {big}
+        {unknown && <span className="stat-note">{t('money.unknown')}</span>}
+      </>
+    );
+  };
 
   const c = data?.counts;
   const pathRows: FunnelRow[] = c ? PATH_STAGES.map((k) => ({ key: k, label: stage(k), value: c[k], hint: t(`fn.hint.${k}` as never) })) : [];
@@ -198,17 +209,17 @@ export default function AnalyticsPage() {
             <div className="stats" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
               <section className="card stat">
                 <div className="stat-top">{t('fn.moneyPaid')}</div>
-                <div className="stat-value">{money(data.money.paid)}</div>
+                <div className="stat-value">{moneyStat(data.money.paid)}</div>
                 <div className="stat-foot">{t('fn.moneyPayers', { n: data.money.payers })}</div>
               </section>
               <section className="card stat">
                 <div className="stat-top">{t('fn.moneyOpenStarted')}</div>
-                <div className="stat-value">{money(data.money.openPlanStarted)}</div>
+                <div className="stat-value">{moneyStat(data.money.openPlanStarted)}</div>
                 <div className="stat-foot">{t('fn.moneyOpenStartedHint')}</div>
               </section>
               <section className="card stat">
                 <div className="stat-top">{t('fn.moneyOpenStuck')}</div>
-                <div className="stat-value">{money(data.money.openPlanNotStarted)}</div>
+                <div className="stat-value">{moneyStat(data.money.openPlanNotStarted)}</div>
                 <div className="stat-foot">{t('fn.moneyOpenStuckHint')}</div>
               </section>
             </div>

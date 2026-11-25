@@ -808,7 +808,11 @@ describe('дайджест руководителю в Telegram', () => {
     await http().patch('/digest').set(auth(admin)).send({ frequency: 'DAILY' }).expect(403);
     await http().patch('/digest').set(auth(c.token)).send({ frequency: 'MONTHLY' }).expect(400);
     await http().patch('/digest').set(auth(c.token)).send({ hour: 25 }).expect(400);
-    expect((await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 8, weekday: 5 }).expect(200)).body).toMatchObject({ frequency: 'WEEKLY', hour: 8, weekday: 5 });
+    // the old rolling weekly digest can no longer be chosen; a clinic still on it (its own schedule) may change its day and hour
+    await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 8, weekday: 5 }).expect(400);
+    await http().patch('/digest').set(auth(c.token)).send({ legacyWeekday: 5, legacyHour: 8 }).expect(400);
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { legacyWeeklyOn: true } });
+    expect((await http().patch('/digest').set(auth(c.token)).send({ legacyWeekday: 5, legacyHour: 8 }).expect(200)).body).toMatchObject({ legacy: { on: true, weekday: 5, hour: 8 } });
     // the recipient's message does not count as a patient's inquiry
     const before = await prisma.chatMessage.count({ where: { clinicId: c.clinicId } });
     await telegram.handleUpdate(c.clinicId, TOKEN, upd(9001, 'привіт'));
@@ -850,6 +854,9 @@ describe('дайджест руководителю в Telegram', () => {
     expect(text).toContain('Є заявки без відповіді: 1');
     expect(digest.format(n, 'Clinic', 'WEEKLY', 'en', 'u')).toContain('Appointments: completed 2 (was 1)');
 
+    // the /digest command answers with the format this chat gets: here a chat still on the old weekly digest
+    await prisma.digestRecipient.updateMany({ where: { clinicId: c.clinicId, chatId: '9001' }, data: { legacyWeekly: true } });
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { legacyWeeklyOn: true } });
     tg.sent.length = 0;
     await telegram.handleUpdate(c.clinicId, TOKEN, upd(9001, '/digest'));
     expect(tg.sent).toHaveLength(1);
@@ -871,11 +878,13 @@ describe('дайджест руководителю в Telegram', () => {
     await digest.tick(at('10:00'), { clinicId: c.clinicId });
     expect(tg.sent).toHaveLength(0);
 
-    await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 9, weekday: weekday === 7 ? 1 : weekday + 1 }).expect(200);
+    // a clinic still on the old rolling weekly digest (it can no longer be chosen; existing ones keep working), its chat on it too
+    await prisma.clinic.update({ where: { id: c.clinicId }, data: { legacyWeeklyOn: true, legacyWeeklyHour: 9, legacyWeeklyWeekday: weekday === 7 ? 1 : weekday + 1 } });
+    await prisma.digestRecipient.updateMany({ where: { clinicId: c.clinicId }, data: { legacyWeekly: true } });
     await digest.tick(at('10:00'), { clinicId: c.clinicId });
     expect(tg.sent).toHaveLength(0); // not the right weekday
 
-    await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 9, weekday }).expect(200);
+    await http().patch('/digest').set(auth(c.token)).send({ legacyHour: 9, legacyWeekday: weekday }).expect(200);
     await digest.tick(at('08:00'), { clinicId: c.clinicId });
     expect(tg.sent).toHaveLength(0); // too early
     await digest.tick(at('10:00'), { clinicId: c.clinicId });
@@ -892,13 +901,15 @@ describe('дайджест руководителю в Telegram', () => {
     const digest = (app as INestApplication).get((await import('../src/automations/digest.service')).DigestService);
     const weekday = new Date(`${clinicDate(new Date())}T00:00:00Z`).getUTCDay() || 7;
     for (const c of [mine, other]) {
-      await http().patch('/digest').set(auth(c.token)).send({ frequency: 'WEEKLY', hour: 9, weekday }).expect(200);
-      await prisma.clinic.update({ where: { id: c.clinicId }, data: { sendingEnabled: false, lastDigestAt: new Date(Date.now() - 8 * 86_400_000) } }); // due again, as every week
+      // clinics still on the old rolling weekly digest (closed to new settings, still sent), their chats on it too
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { legacyWeeklyOn: true, legacyWeeklyHour: 9, legacyWeeklyWeekday: weekday } });
+      await prisma.digestRecipient.updateMany({ where: { clinicId: c.clinicId }, data: { legacyWeekly: true } });
+      await prisma.clinic.update({ where: { id: c.clinicId }, data: { sendingEnabled: false, lastLegacyWeeklyAt: new Date(Date.now() - 8 * 86_400_000) } }); // due again, as every week
     }
     tg.sent.length = 0;
     await digest.tick(localToUtc(`${clinicDate(new Date())} 10:00:00`), { clinicId: mine.clinicId });
     expect(tg.sent).toHaveLength(1);
-    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: other.clinicId } })).lastDigestAt!.getTime()).toBeLessThan(Date.now() - 7 * 86_400_000);
+    expect((await prisma.clinic.findUniqueOrThrow({ where: { id: other.clinicId } })).lastLegacyWeeklyAt!.getTime()).toBeLessThan(Date.now() - 7 * 86_400_000);
   });
 });
 

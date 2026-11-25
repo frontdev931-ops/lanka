@@ -2,7 +2,7 @@ import { MoneyTotal, clinicMoneyCurrency, effectiveCurrency, formatMoney, format
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Provider } from '@prisma/client';
 import { lankaMoves } from '../reports/lanka-moves';
-import { clinicDate, clinicHm, startOfClinicDay } from '../common/clinic-time';
+import { clinicDate, clinicHm, localToUtc, startOfClinicDay } from '../common/clinic-time';
 import { decrypt } from '../common/crypto';
 import { hashToken } from '../auth/tokens';
 import { Lang } from '../common/i18n';
@@ -64,22 +64,61 @@ export class DigestService {
     return { connected: !!i?.apiKeyEnc, username: ((i?.config ?? {}) as { username?: string }).username ?? null };
   }
 
+  // Two independent schedules (2026-11-25): the daily digest (frequency DAILY/OFF, hour) and the old rolling 7-day weekly digest (legacy: kept
+  // where it was on, never switched on again). recipients: the LEGACY chats of the clinic's patient bot nobody reconnected yet (legacyWeekly:
+  // they get the old weekly one); the people of the LANKA service bot are in GET /leader-telegram. nextAt: the next sending (Kyiv time).
   async settings(clinicId: string) {
     const [c, recipients, st] = await Promise.all([
-      this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { digestFrequency: true, digestHour: true, digestWeekday: true } }),
-      this.prisma.digestRecipient.findMany({ where: { clinicId, migratedAt: null }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true, lang: true } }),
+      this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { digestFrequency: true, digestHour: true, digestWeekday: true, lastDigestAt: true, legacyWeeklyOn: true, legacyWeeklyWeekday: true, legacyWeeklyHour: true, lastLegacyWeeklyAt: true } }),
+      this.prisma.digestRecipient.findMany({ where: { clinicId, migratedAt: null }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true, lang: true, legacyWeekly: true } }),
       this.bot(clinicId),
     ]);
-    // recipients: the LEGACY chats of the clinic's patient bot that nobody reconnected yet; the people receiving it through the LANKA service bot
-    // are in GET /leader-telegram (digestTo)
-    return { frequency: c.digestFrequency, hour: c.digestHour, weekday: c.digestWeekday, recipients, botConnected: st.connected, serviceBot: this.leaders.available };
+    const frequency = c.digestFrequency === 'DAILY' ? 'DAILY' : 'OFF';
+    return {
+      frequency,
+      hour: c.digestHour,
+      weekday: c.digestWeekday,
+      nextAt: this.nextAt(frequency, c.digestHour, 1, c.lastDigestAt),
+      legacy: c.legacyWeeklyOn ? { on: true, weekday: c.legacyWeeklyWeekday, hour: c.legacyWeeklyHour, nextAt: this.nextAt('WEEKLY', c.legacyWeeklyHour, c.legacyWeeklyWeekday, c.lastLegacyWeeklyAt) } : null,
+      recipients,
+      botConnected: st.connected,
+      serviceBot: this.leaders.available,
+    };
   }
 
-  async update(clinicId: string, patch: { frequency?: string; hour?: number; weekday?: number }) {
+  // The next moment tick() will send: the first day (today included unless already sent today) at the hour, on the weekday for WEEKLY
+  nextAt(frequency: string, hour: number, weekday: number, lastDigestAt: Date | null, now = new Date()): Date | null {
+    if (frequency !== 'DAILY' && frequency !== 'WEEKLY') return null;
+    const today = clinicDate(now);
+    for (let i = 0; i < 9; i++) {
+      const day = new Date(Date.parse(`${today}T00:00:00Z`) + i * DAY).toISOString().slice(0, 10);
+      if (i === 0 && lastDigestAt && clinicDate(lastDigestAt) === today) continue;
+      if (frequency === 'WEEKLY' && (new Date(`${day}T00:00:00Z`).getUTCDay() || 7) !== weekday) continue;
+      const at = localToUtc(`${day} ${String(hour).padStart(2, '0')}:00:00`);
+      // today after the hour: tick() still sends it at its next run (within a minute)
+      return i === 0 && at < now ? now : at;
+    }
+    return null;
+  }
+
+  // The daily schedule (frequency DAILY/OFF, hour) and, while the old weekly digest is still on, its own day and hour. The daily one never touches
+  // the old weekly one. The old weekly can no longer be chosen (frequency WEEKLY is refused); a clinic still on it keeps it until people move.
+  async update(clinicId: string, patch: { frequency?: string; hour?: number; weekday?: number; legacyWeekday?: number; legacyHour?: number }) {
+    if (patch.frequency === 'WEEKLY') throw new BadRequestException('legacy_weekly_closed');
     if (patch.frequency === 'DAILY' && !hasFeature((await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { plan: true } })).plan, 'daily_digest')) throw new BadRequestException('plan_feature');
+    if (patch.legacyWeekday !== undefined || patch.legacyHour !== undefined) {
+      const cur = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { legacyWeeklyOn: true } });
+      if (!cur.legacyWeeklyOn) throw new BadRequestException('legacy_weekly_none');
+    }
     await this.prisma.clinic.update({
       where: { id: clinicId },
-      data: { ...(patch.frequency ? { digestFrequency: patch.frequency } : {}), ...(patch.hour !== undefined ? { digestHour: patch.hour } : {}), ...(patch.weekday !== undefined ? { digestWeekday: patch.weekday } : {}) },
+      data: {
+        ...(patch.frequency ? { digestFrequency: patch.frequency } : {}),
+        ...(patch.hour !== undefined ? { digestHour: patch.hour } : {}),
+        ...(patch.weekday !== undefined ? { digestWeekday: patch.weekday } : {}),
+        ...(patch.legacyWeekday !== undefined ? { legacyWeeklyWeekday: patch.legacyWeekday } : {}),
+        ...(patch.legacyHour !== undefined ? { legacyWeeklyHour: patch.legacyHour } : {}),
+      },
     });
     return this.settings(clinicId);
   }
@@ -196,17 +235,19 @@ export class DigestService {
   // Sends the digest: to the managers who switched it on in their LANKA service bot connection (their role is checked again right before), and
   // to the legacy chats of the clinic's patient bot nobody reconnected yet. A chat that has a service bot connection never gets the legacy copy,
   // so one person never receives it twice. only: the chat ids of a manual request (the /digest command). Returns the number delivered.
+  // kind DAILY: the daily digest, to the people with "digest" on and the clinic-bot chats that got the daily one; kind WEEKLY: the old rolling
+  // weekly digest, only to the people and chats still on it (legacyWeekly, read now at the sending: a move just before counts). Independent.
   async send(clinicId: string, kind: 'DAILY' | 'WEEKLY', only?: string[]): Promise<number> {
     const [clinic, numbers] = await Promise.all([
       this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { name: true } }),
       this.numbers(clinicId, kind),
     ]);
     const link = `${(process.env.WEB_ORIGIN ?? '').replace(/\/$/, '')}/analytics`;
-    let ok = await this.leaders.send(clinicId, 'digest', (lang) => this.format(numbers, clinic.name, kind, lang, link), only);
+    let ok = await this.leaders.send(clinicId, kind === 'WEEKLY' ? 'legacyWeekly' : 'digest', (lang) => this.format(numbers, clinic.name, kind, lang, link), only);
     const token = await this.token(clinicId);
     if (!token) return ok;
     const viaService = new Set((await this.prisma.leaderTelegram.findMany({ where: { clinicId }, select: { chatId: true } })).map((x) => x.chatId));
-    const legacy = await this.prisma.digestRecipient.findMany({ where: { clinicId, migratedAt: null, ...(only ? { chatId: { in: only } } : {}) } });
+    const legacy = await this.prisma.digestRecipient.findMany({ where: { clinicId, migratedAt: null, legacyWeekly: kind === 'WEEKLY', ...(only ? { chatId: { in: only } } : {}) } });
     for (const r of legacy) {
       if (viaService.has(r.chatId)) continue;
       try {
@@ -221,17 +262,31 @@ export class DigestService {
 
   // Once a minute: if the clinic's digest hour has come and it has not been sent today yet, we send it
   // scope: only one clinic is looked at (the scheduler never passes it; a test uses it so that other clinics of a shared database do not take part)
+  // Two independent schedules: the daily digest and (where still on) the old weekly one, each with its own "already sent today" mark
   async tick(now = new Date(), scope?: { clinicId: string }) {
-    const clinics = await this.prisma.clinic.findMany({ where: { digestFrequency: { in: ['DAILY', 'WEEKLY'] }, suspendedAt: null, ...(scope ? { id: scope.clinicId } : {}) }, select: { id: true, digestFrequency: true, digestHour: true, digestWeekday: true, lastDigestAt: true } });
+    const today = clinicDate(now);
+    const hour = Number(clinicHm(now).slice(0, 2));
+    const weekday = new Date(`${today}T00:00:00Z`).getUTCDay() || 7;
+    const clinics = await this.prisma.clinic.findMany({
+      where: { OR: [{ digestFrequency: 'DAILY' }, { legacyWeeklyOn: true }], suspendedAt: null, ...(scope ? { id: scope.clinicId } : {}) },
+      select: { id: true, digestFrequency: true, digestHour: true, lastDigestAt: true, legacyWeeklyOn: true, legacyWeeklyWeekday: true, legacyWeeklyHour: true, lastLegacyWeeklyAt: true },
+    });
     for (const c of clinics) {
-      const today = clinicDate(now);
-      if (c.lastDigestAt && clinicDate(c.lastDigestAt) === today) continue;
-      if (Number(clinicHm(now).slice(0, 2)) < c.digestHour) continue;
-      const weekday = new Date(`${today}T00:00:00Z`).getUTCDay() || 7;
-      if (c.digestFrequency === 'WEEKLY' && weekday !== c.digestWeekday) continue;
-      // we mark it first, so that a sending failure does not turn into repeated digests every minute
-      await this.prisma.clinic.update({ where: { id: c.id }, data: { lastDigestAt: now } });
-      await this.send(c.id, c.digestFrequency as 'DAILY' | 'WEEKLY').catch((e) => this.log.warn(`Дайджест: ${(e as Error).message}`));
+      // claimed first (the date is written before the sending, only if still not sent today), so a failure or a second server never repeats it
+      if (c.digestFrequency === 'DAILY' && !(c.lastDigestAt && clinicDate(c.lastDigestAt) === today) && hour >= c.digestHour) {
+        const won = await this.prisma.clinic.updateMany({ where: { id: c.id, lastDigestAt: c.lastDigestAt }, data: { lastDigestAt: now } });
+        if (won.count) await this.send(c.id, 'DAILY').catch((e) => this.log.warn(`Дайджест: ${(e as Error).message}`));
+      }
+      if (c.legacyWeeklyOn && weekday === c.legacyWeeklyWeekday && !(c.lastLegacyWeeklyAt && clinicDate(c.lastLegacyWeeklyAt) === today) && hour >= c.legacyWeeklyHour) {
+        const won = await this.prisma.clinic.updateMany({ where: { id: c.id, lastLegacyWeeklyAt: c.lastLegacyWeeklyAt }, data: { lastLegacyWeeklyAt: now } });
+        if (won.count) await this.send(c.id, 'WEEKLY').catch((e) => this.log.warn(`Дайджест: ${(e as Error).message}`));
+      }
     }
+  }
+
+  // The old weekly digest of a clinic-bot chat or the daily one, for the /digest command of that chat
+  async kindOf(clinicId: string, chatId: string): Promise<'DAILY' | 'WEEKLY'> {
+    const r = await this.prisma.digestRecipient.findFirst({ where: { clinicId, chatId, migratedAt: null }, select: { legacyWeekly: true } });
+    return r?.legacyWeekly ? 'WEEKLY' : 'DAILY';
   }
 }

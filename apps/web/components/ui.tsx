@@ -74,8 +74,8 @@ export function Card({ title, actions, children, flush }: { title?: string; acti
 
 export type Tone = 'green' | 'red' | 'amber' | 'blue' | 'teal' | 'gray';
 
-export function Badge({ tone = 'gray', children }: { tone?: Tone; children: ReactNode }) {
-  return <span className={`badge ${tone === 'gray' ? '' : tone}`}>{children}</span>;
+export function Badge({ tone = 'gray', children, className }: { tone?: Tone; children: ReactNode; className?: string }) {
+  return <span className={`badge ${tone === 'gray' ? '' : tone}${className ? ` ${className}` : ''}`}>{children}</span>;
 }
 
 // Badge colour by the appointment status in Cliniccards

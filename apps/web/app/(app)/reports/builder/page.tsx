@@ -213,7 +213,7 @@ export default function ReportBuilderPage() {
           <fieldset className="rb-fields">
             <legend>{t('rb.columns')}</legend>
             {ds?.fields.map((f) => (
-              <label key={f.key} className="check-row" style={{ margin: 0, minHeight: 36 }}>
+              <label key={f.key} className="check-row" style={{ margin: 0, minHeight: 44 }}>
                 <input type="checkbox" checked={columns.includes(f.key)} onChange={(e) => setColumns((c) => (e.target.checked ? [...c, f.key] : c.filter((x) => x !== f.key)))} />
                 <span>{f.label}{f.money ? ` · ${t('money.mark')}` : ''}</span>
               </label>

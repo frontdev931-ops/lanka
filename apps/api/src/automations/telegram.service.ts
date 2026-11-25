@@ -222,7 +222,7 @@ export class TelegramService implements OnApplicationBootstrap, OnModuleDestroy 
       return void (await say(ok ? 'Дайджест підключено. Команда /digest надішле свіже зведення.' : 'Це посилання недійсне або застаріло. Створіть нове в налаштуваннях сервісу.'));
     }
     if (await this.digest.isRecipient(clinicId, chatId)) {
-      if (/^\/digest\b/i.test(text)) await this.digest.send(clinicId, 'WEEKLY', [chatId]);
+      if (/^\/digest\b/i.test(text)) await this.digest.send(clinicId, await this.digest.kindOf(clinicId, chatId), [chatId]);
       return;
     }
 

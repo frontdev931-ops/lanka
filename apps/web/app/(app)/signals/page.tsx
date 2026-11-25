@@ -251,6 +251,8 @@ function SignalCard({ s, reach, pushHere, onSaved }: { s: Signal; reach: number;
           {details().map((d) => <p key={d}>{d}</p>)}
           <p>{t(`sig.${s.kind}.how` as Key)}</p>
           {s.state === 'fired' && <p>{t(`sig.${s.kind}.why` as Key)}</p>}
+          {/* when a lasting deviation is notified again (the same rules as the server: insights.service worseEnough) */}
+          <p>{t(s.kind === 'SYNC_OVERDUE' ? 'sig.repeatSync' : PCT.includes(s.kind) ? 'sig.repeatPct' : 'sig.repeatCount')}</p>
           <p className="sig-sub">{t('sig.channels')}</p>
           {toggle(em, busy || !on, () => { setEm(!em); void save({ enabled: !em }); }, t('sig.email'))}
           {/* Push: only where this device can receive it (the installed app with permission and a subscription) */}

@@ -9,7 +9,8 @@ import { display, text } from '../lib/fonts';
 
 // The workspace theme (light by default, dark on the person's choice, see components/ThemeSwitch.tsx): set before the first paint so a dark page does
 // not flash light. Only the workspace follows it; the landing (/, /ru, /en) and the public pages keep their own look.
-const THEME_BOOT = `try{var p=location.pathname;if(!/^\\/(ru|en)?$/.test(p)&&!/^\\/(terms|privacy|data-deletion)/.test(p)&&localStorage.getItem('lanka_theme')==='dark')document.documentElement.dataset.theme='dark'}catch(e){}`;
+// the legal pages (terms, privacy, data deletion) follow the chosen theme too; only the landing keeps its own look
+const THEME_BOOT = `try{var p=location.pathname;if(!/^\\/(ru|en)?$/.test(p)&&localStorage.getItem('lanka_theme')==='dark')document.documentElement.dataset.theme='dark'}catch(e){}`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

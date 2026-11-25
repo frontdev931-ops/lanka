@@ -104,6 +104,8 @@ export const FACT_CHECKS = 3;
 export interface ReportFacts {
   state: 'READY' | 'STALE';
   preparedAt: string;
+  // the clinic's name at the preparation (absent in reports prepared before the history)
+  clinicName?: string;
   connected: boolean;
   lastSyncAt: string | null;
   cur?: PeriodTotals;

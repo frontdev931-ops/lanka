@@ -6,9 +6,10 @@ import { api } from '../../../lib/api';
 import { useI18n } from '../../../lib/i18n';
 import { Alert, Loading, PageHeader } from '../../../components/ui';
 import { SignalClinic } from '../../../components/SignalClinic';
+import { PeriodFigures, PeriodTotals, day } from '../../../components/PeriodFigures';
 
 type Kind = 'WEEKLY' | 'MONTHLY';
-interface Totals { completed: number; cancelled: number; noShow: number; scheduled: number; unclosed: number; newPatients: number; paid: { currency: string | null; amount: number }[] }
+type Totals = PeriodTotals;
 interface Preview {
   kind: Kind;
   period: { from: string; to: string; days: number };
@@ -18,7 +19,6 @@ interface Preview {
   text: string;
 }
 
-const day = (s: string) => `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}`;
 
 // The weekly or monthly report of a completed period (/period-report?kind=WEEKLY&from=YYYY-MM-DD, ids and dates only; ?c= the clinic of a
 // message): the figures of the period next to the previous one and the exact Telegram text, from the same calculation as the message. Opening it
@@ -34,6 +34,8 @@ export default function PeriodReportPage() {
 function PeriodReport() {
   const { t, locale } = useI18n();
   const [sel, setSel] = useState<{ kind: Kind; from?: string } | null>(null);
+  // opened with a period in the address (a link of an older message, or "see the current data" of a saved report)
+  const [fromLink, setFromLink] = useState(false);
   const [v, setV] = useState<Preview | null>(null);
   const [error, setError] = useState('');
   const [me, setMe] = useState<{ blocked: boolean } | null | undefined>(undefined);
@@ -44,6 +46,7 @@ function PeriodReport() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     setSel({ kind: q.get('kind') === 'MONTHLY' ? 'MONTHLY' : 'WEEKLY', from: q.get('from') ?? undefined });
+    setFromLink(!!q.get('from'));
     api<{ me: { blocked: boolean } | null }>('/leader-telegram').then((r) => setMe(r.me)).catch(() => setMe(null));
   }, []);
   const load = useCallback(() => {
@@ -82,21 +85,10 @@ function PeriodReport() {
     }
   };
 
-  const header = <PageHeader title={t('pr.title')} subtitle={t('pr.subtitle')} />;
+  const header = <PageHeader title={t('pr.title')} subtitle={t('pr.subtitle')} actions={<Link className="btn btn-sm" href="/period-report/history">{t('prh.open')}</Link>} />;
   if (!sel) return <>{header}<Loading /></>;
   const c = v?.facts.cur;
   const p = v?.facts.prev;
-  const share = (x?: Totals) => (x && x.scheduled > 0 ? `${(((x.cancelled + x.noShow) / x.scheduled) * 100).toLocaleString(locale === 'en' ? 'en-GB' : 'uk-UA', { maximumFractionDigits: 1, minimumFractionDigits: 1 })}% (${x.cancelled + x.noShow} / ${x.scheduled})` : '—');
-  const money = (x?: Totals) => (x ? (x.paid.length ? x.paid.map((m) => `${m.amount.toLocaleString('uk-UA')} ${m.currency === 'UAH' ? t('billing.uah') : m.currency ?? ''}`).join('; ') : '0') : '—');
-  const rows: [string, string, string][] = c
-    ? [
-        [t('pr.rowCompleted'), String(c.completed), String(p?.completed ?? '—')],
-        [t('pr.rowNew'), String(c.newPatients), String(p?.newPatients ?? '—')],
-        [t('pr.rowMissed'), share(c), share(p)],
-        [t('pr.rowPaid'), money(c), money(p)],
-        [t('pr.rowUnclosed'), String(c.unclosed), String(p?.unclosed ?? '—')],
-      ]
-    : [];
   return (
     <>
       {header}
@@ -117,6 +109,8 @@ function PeriodReport() {
           </label>
         )}
       </div>
+      {/* a link of an older message (by kind and period) lands here: it is the current calculation, the saved reports are in the history */}
+      {fromLink && <Alert tone="info">{t('prh.liveNote')} <Link href="/period-report/history">{t('prh.open')}</Link></Alert>}
       {error && <Alert tone="error">{error}</Alert>}
       {!v && !error && <Loading />}
       {v && (
@@ -125,25 +119,7 @@ function PeriodReport() {
           {c && (
             <section className="card" aria-labelledby="pr-figures">
               <h2 id="pr-figures" className="sigd-h" style={{ marginTop: 0 }}>{`${day(v.period.from)} — ${day(v.period.to)}`}</h2>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>{t('pr.colMetric')}</th>
-                    <th>{t('pr.colThis')}</th>
-                    <th>{`${t('pr.colPrev')} ${day(v.prevPeriod.from)} — ${day(v.prevPeriod.to)}`}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(([a, b, d]) => (
-                    <tr key={a}>
-                      <td>{a}</td>
-                      <td><b>{b}</b></td>
-                      <td>{d}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="sig-sub-line">{t('pr.definitions')}</p>
+              <PeriodFigures cur={c} prev={p} prevPeriod={v.prevPeriod} />
               <div className="toolbar">
                 <Link className="btn btn-sm" href={`/reports?report=missed-visits&from=${v.period.from}&to=${v.period.to}`}>{t('sig.CANCEL_RATE.open')}</Link>
                 <Link className="btn btn-sm" href={`/reports?report=unclosed-visits&from=${v.period.from}&to=${v.period.to}`}>{t('pr.unclosedReport')}</Link>

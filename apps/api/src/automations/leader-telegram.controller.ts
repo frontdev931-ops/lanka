@@ -10,6 +10,8 @@ class LeaderTelegramDto {
   @IsOptional() @IsBoolean() signals?: boolean;
   @IsOptional() @IsBoolean() weekly?: boolean;
   @IsOptional() @IsBoolean() monthly?: boolean;
+  // the old weekly digest: only false is accepted (switching it off)
+  @IsOptional() @IsBoolean() legacyWeekly?: boolean;
 }
 
 // "Telegram for reports and signals": the signed-in owner or manager connects their OWN Telegram to the shared LANKA service bot for the clinic

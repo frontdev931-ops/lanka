@@ -368,6 +368,9 @@ class DigestDto {
   @IsOptional() @IsIn(['OFF', 'DAILY', 'WEEKLY']) frequency?: string;
   @IsOptional() @IsInt() @Min(0) @Max(23) hour?: number;
   @IsOptional() @IsInt() @Min(1) @Max(7) weekday?: number;
+  // the old weekly digest's own day and hour (only while it is still on)
+  @IsOptional() @IsInt() @Min(1) @Max(7) legacyWeekday?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(23) legacyHour?: number;
 }
 
 // The manager's digest in Telegram: settings, linking recipients by a link, a test send
@@ -391,7 +394,8 @@ export class DigestController {
   @HttpCode(200)
   async test(@CurrentUser() u: AuthUser) {
     const s = await this.digest.settings(u.clinicId);
-    return { sent: await this.digest.send(u.clinicId, s.frequency === 'DAILY' ? 'DAILY' : 'WEEKLY') };
+    // a test of what the clinic sends: the daily digest, or the old weekly one where only that is on
+    return { sent: await this.digest.send(u.clinicId, s.frequency === 'DAILY' || !s.legacy ? 'DAILY' : 'WEEKLY') };
   }
 
   @Delete('recipients/:id')

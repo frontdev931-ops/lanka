@@ -597,6 +597,21 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Недействительная подписка на уведомления.',
     en: 'Invalid notification subscription.',
   },
+  legacy_weekly_closed: {
+    uk: 'Старий тижневий дайджест «за останні 7 днів» більше не можна вибрати. Увімкніть «Звіт за тиждень».',
+    ru: 'Старый недельный дайджест «за последние 7 дней» больше нельзя выбрать. Включите «Отчёт за неделю».',
+    en: 'The old weekly digest “for the last 7 days” can no longer be chosen. Turn on the “Weekly report”.',
+  },
+  legacy_weekly_none: {
+    uk: 'Клініка вже не використовує старий тижневий дайджест.',
+    ru: 'Клиника уже не использует старый недельный дайджест.',
+    en: 'The clinic no longer uses the old weekly digest.',
+  },
+  weekly_schedule_off: {
+    uk: 'Розклад «Звіту за тиждень» у клініці вимкнено. Підтвердьте, що його треба ввімкнути.',
+    ru: 'Расписание «Отчёта за неделю» в клинике выключено. Подтвердите, что его нужно включить.',
+    en: 'The clinic’s “Weekly report” schedule is off. Confirm that it should be switched on.',
+  },
   too_many_saved: {
     uk: 'Забагато збережених звітів (максимум 100)',
     ru: 'Слишком много сохранённых отчётов (максимум 100)',

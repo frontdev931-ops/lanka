@@ -191,13 +191,62 @@ const origin = () => (process.env.WEB_ORIGIN ?? '').replace(/\/$/, '');
 export const signalUrl = (kind: string, clinicId: string, eventId?: string) => `${origin()}/signals/${kind}?c=${encodeURIComponent(clinicId)}${eventId ? `&e=${encodeURIComponent(eventId)}` : ''}`;
 
 // The message of one event
-export function eventText(a: { clinic: string; kind: string; facts: SignalFacts; settings: SignalSettings; prevValue?: number | null; prevAt?: Date | string | null; url: string }, lang: SignalLang): string {
+// What got worse, compared with the base (the value of the last notice of this deviation, as of its time). A count is "more than", never "N new
+// patients": the list itself may have changed.
+const WORSE: Record<string, Record<SignalLang, string>> = {
+  NO_REBOOK: { uk: 'Пацієнтів без повторного запису стало більше: {v} проти {b} станом на {at}.', ru: 'Пациентов без повторной записи стало больше: {v} против {b} на {at}.', en: 'More patients not rebooked: {v} against {b} as of {at}.' },
+  UNFINISHED_NO_NEXT: { uk: 'Пацієнтів із незавершеним лікуванням без запису стало більше: {v} проти {b} станом на {at}.', ru: 'Пациентов с незавершённым лечением без записи стало больше: {v} против {b} на {at}.', en: 'More patients with unfinished treatment and no visit: {v} against {b} as of {at}.' },
+  STALE_REQUESTS: { uk: 'Заявок, що довго чекають, стало більше: {v} проти {b} станом на {at}.', ru: 'Заявок, которые долго ждут, стало больше: {v} против {b} на {at}.', en: 'More requests waiting long: {v} against {b} as of {at}.' },
+  OVERDUE_TASKS: { uk: 'Прострочених завдань стало більше: {v} проти {b} станом на {at}.', ru: 'Просроченных задач стало больше: {v} против {b} на {at}.', en: 'More overdue tasks: {v} against {b} as of {at}.' },
+  CANCEL_RATE: { uk: 'Частка скасувань і неявок зросла: {v}% проти {b}% станом на {at} (+{d} п. п.).', ru: 'Доля отмен и неявок выросла: {v}% против {b}% на {at} (+{d} п. п.).', en: 'The share of cancellations and no-shows rose: {v}% against {b}% as of {at} (+{d} pp).' },
+  RETURN_DROP: { uk: 'Падіння завершених візитів посилилося: на {v}% проти {b}% станом на {at} (+{d} п. п.).', ru: 'Падение завершённых визитов усилилось: на {v}% против {b}% на {at} (+{d} п. п.).', en: 'The drop in completed visits deepened: {v}% against {b}% as of {at} (+{d} pp).' },
+  PAYMENTS_DROP: { uk: 'Падіння отриманих оплат посилилося: на {v}% проти {b}% станом на {at} (+{d} п. п.).', ru: 'Падение полученных оплат усилилось: на {v}% против {b}% на {at} (+{d} п. п.).', en: 'The drop in payments received deepened: {v}% against {b}% as of {at} (+{d} pp).' },
+  SYNC_OVERDUE: { uk: 'Дані з Cliniccards не оновлювалися вже {v} год. — удвічі довше за поріг (сигнал був при {b} год. станом на {at}). Повторних нагадувань до успішного оновлення не буде.', ru: 'Данные из Cliniccards не обновлялись уже {v} ч. — вдвое дольше порога (сигнал был при {b} ч. на {at}). Повторных напоминаний до успешного обновления не будет.', en: 'Cliniccards data has not been updated for {v} h, twice the threshold (the signal was at {b} h as of {at}). No more reminders until a successful update.' },
+};
+const W2 = {
+  uk: { worse: 'Ситуація погіршилася', listNote: 'Склад списку міг змінитися: це не кількість нових випадків.', rolling: 'Періоди ковзні: тоді — {then}, зараз — {now}; це не ті самі візити чи оплати.' },
+  ru: { worse: 'Ситуация ухудшилась', listNote: 'Состав списка мог измениться: это не количество новых случаев.', rolling: 'Периоды скользящие: тогда — {then}, сейчас — {now}; это не те же визиты или оплаты.' },
+  en: { worse: 'Things got worse', listNote: 'The list itself may have changed: this is not a number of new cases.', rolling: 'Rolling periods: then {then}, now {now}; not the same visits or payments.' },
+};
+const pct = (n: number, lang: SignalLang) => new Intl.NumberFormat(lang === 'en' ? 'en-GB' : 'uk-UA', { maximumFractionDigits: 1 }).format(n);
+
+// The "worse" message: the clinic, what got worse against the base and when the base was, the current condition with its period, one action,
+// the link to the details
+function worseText(a: { clinic: string; kind: string; facts: SignalFacts & { base?: { from?: string | null; to?: string | null } | null }; settings: SignalSettings; prevValue?: number | null; prevAt?: Date | string | null; url: string }, lang: SignalLang): string {
+  const t = L[lang];
+  const w = W2[lang];
+  const b = a.prevValue ?? 0;
+  const lines = [`${a.clinic} · ${w.worse}`, '', fill(WORSE[a.kind]?.[lang] ?? '', { v: pct(a.facts.value, lang), b: pct(b, lang), at: dateTime(a.prevAt ?? undefined, lang), d: pct(a.facts.value - b, lang) }), '', condition(a.kind, a.facts, a.settings, lang)];
+  const then = a.facts.base?.from && a.facts.base?.to ? period(a.facts.base.from, a.facts.base.to, lang) : null;
+  const now = a.facts.from && a.facts.to ? period(a.facts.from, a.facts.to, lang) : null;
+  if (then && now && then !== now) lines.push(fill(w.rolling, { then, now }));
+  if (['NO_REBOOK', 'UNFINISHED_NO_NEXT', 'STALE_REQUESTS', 'OVERDUE_TASKS'].includes(a.kind)) lines.push(w.listNote);
+  lines.push('', `${t.todo}: ${signalAction(a.kind, lang)}`, '', `${PATIENT_KINDS.includes(a.kind) ? t.patients : t.details} → ${a.url}`);
+  return lines.join('\n');
+}
+
+export function eventText(a: { clinic: string; kind: string; type?: string; facts: SignalFacts; settings: SignalSettings; prevValue?: number | null; prevAt?: Date | string | null; url: string }, lang: SignalLang): string {
+  if (a.type === 'WORSE') return worseText(a, lang);
   const t = L[lang];
   const lines = [`${a.clinic} · ${t.attention}`, '', headline(a.kind, a.facts, a.settings, lang), '', condition(a.kind, a.facts, a.settings, lang)];
   if (a.prevValue !== null && a.prevValue !== undefined && a.prevAt) lines.push(fill(t.prev, { at: dateTime(a.prevAt, lang), v: valueIn(a.kind, a.prevValue, lang) }));
   const act = signalAction(a.kind, lang);
   lines.push('', `${t.todo}: ${act}`, '', `${PATIENT_KINDS.includes(a.kind) ? t.patients : t.details} → ${a.url}`);
   return lines.join('\n');
+}
+
+// The push of a "worse" event: what got worse, in words only (no numbers, names or amounts)
+export function pushWorse(kind: string, lang: SignalLang = 'uk') {
+  return ({
+    CANCEL_RATE: { uk: 'Більше скасувань і неявок', ru: 'Больше отмен и неявок', en: 'More cancellations and no-shows' },
+    RETURN_DROP: { uk: 'Завершених візитів ще менше', ru: 'Завершённых визитов ещё меньше', en: 'Even fewer completed visits' },
+    PAYMENTS_DROP: { uk: 'Отриманих оплат ще менше', ru: 'Полученных оплат ещё меньше', en: 'Even fewer payments received' },
+    STALE_REQUESTS: { uk: 'Більше заявок чекають на обробку', ru: 'Больше заявок ждут обработки', en: 'More requests waiting' },
+    UNFINISHED_NO_NEXT: { uk: 'Більше незавершеного лікування без запису', ru: 'Больше незавершённого лечения без записи', en: 'More unfinished treatment without a visit' },
+    NO_REBOOK: { uk: 'Більше пацієнтів без повторного запису', ru: 'Больше пациентов без повторной записи', en: 'More patients not rebooked' },
+    OVERDUE_TASKS: { uk: 'Більше прострочених завдань', ru: 'Больше просроченных задач', en: 'More overdue tasks' },
+    SYNC_OVERDUE: { uk: 'Дані Cliniccards застаріли ще більше', ru: 'Данные Cliniccards устарели ещё больше', en: 'Cliniccards data is even older' },
+  } as Record<string, Record<SignalLang, string>>)[kind]?.[lang] ?? 'LANKA';
 }
 
 // The push notification: the rule's name only, no numbers

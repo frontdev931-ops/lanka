@@ -10,9 +10,9 @@ const REQUEST: Record<string, Record<PushLang, string>> = {
   REVIEW: { uk: 'Низька оцінка візиту', ru: 'Низкая оценка визита', en: 'A low visit rating' },
 };
 const W = {
-  uk: { newRequest: 'Нова заявка', updRequest: 'Оновлення заявки', openRequests: 'Відкрийте заявки.', lead: 'Нове звернення', leadBody: 'З сайту або реклами. Відкрийте звернення.', signal: 'Сигнал', signalBody: 'Відкрийте, щоб переглянути подробиці.' },
-  ru: { newRequest: 'Новая заявка', updRequest: 'Обновление заявки', openRequests: 'Откройте заявки.', lead: 'Новое обращение', leadBody: 'С сайта или рекламы. Откройте обращения.', signal: 'Сигнал', signalBody: 'Откройте, чтобы посмотреть подробности.' },
-  en: { newRequest: 'New request', updRequest: 'Request updated', openRequests: 'Open the requests.', lead: 'New inquiry', leadBody: 'From the website or ads. Open the inquiries.', signal: 'Signal', signalBody: 'Open it to see the details.' },
+  uk: { newRequest: 'Нова заявка', updRequest: 'Оновлення заявки', openRequests: 'Відкрийте заявки.', lead: 'Нове звернення', leadBody: 'З сайту або реклами. Відкрийте звернення.', signal: 'Сигнал', signalWorse: 'Сигнал посилився', signalBody: 'Відкрийте, щоб переглянути подробиці.', worseBody: 'Перегляньте подробиці.' },
+  ru: { newRequest: 'Новая заявка', updRequest: 'Обновление заявки', openRequests: 'Откройте заявки.', lead: 'Новое обращение', leadBody: 'С сайта или рекламы. Откройте обращения.', signal: 'Сигнал', signalWorse: 'Сигнал усилился', signalBody: 'Откройте, чтобы посмотреть подробности.', worseBody: 'Посмотрите подробности.' },
+  en: { newRequest: 'New request', updRequest: 'Request updated', openRequests: 'Open the requests.', lead: 'New inquiry', leadBody: 'From the website or ads. Open the inquiries.', signal: 'Signal', signalWorse: 'Signal worsened', signalBody: 'Open it to see the details.', worseBody: 'See the details.' },
 };
 
 export const requestPush = (kind: string, created: boolean) => (lang: PushLang, clinic: string) => ({
@@ -21,4 +21,5 @@ export const requestPush = (kind: string, created: boolean) => (lang: PushLang, 
 });
 export const leadPush = () => (lang: PushLang, clinic: string) => ({ title: `${clinic} · ${W[lang].lead}`, body: W[lang].leadBody });
 // eventName: the signal's name without numbers (signal-text pushTitle)
-export const signalPush = (eventName: (lang: PushLang) => string) => (lang: PushLang, clinic: string) => ({ title: `${clinic} · ${W[lang].signal}`, body: `${eventName(lang)}. ${W[lang].signalBody}` });
+export const signalPush = (eventName: (lang: PushLang) => string, worse = false) => (lang: PushLang, clinic: string) =>
+  worse ? { title: `${clinic} · ${W[lang].signalWorse}`, body: `${eventName(lang)}. ${W[lang].worseBody}` } : { title: `${clinic} · ${W[lang].signal}`, body: `${eventName(lang)}. ${W[lang].signalBody}` };

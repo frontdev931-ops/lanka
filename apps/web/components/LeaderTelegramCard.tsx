@@ -10,7 +10,11 @@ import { useConfirm } from './ConfirmDialog';
 interface View {
   available: boolean;
   bot: string | null;
-  me: { tgName: string; digest: boolean; signals: boolean; weekly: boolean; monthly: boolean; blocked: boolean; connectedAt: string } | null;
+  me: { tgName: string; digest: boolean; signals: boolean; weekly: boolean; monthly: boolean; legacyWeekly?: boolean; blocked: boolean; connectedAt: string } | null;
+  // the clinic's two digest schedules: the daily one, and the old rolling weekly one where it is still on
+  digestFrequency?: 'OFF' | 'DAILY';
+  legacyWeeklyOn?: boolean;
+  legacyWeeklyTo?: string[];
   digestTo: string[];
   signalsTo: string[];
   weeklyTo: string[];
@@ -68,7 +72,12 @@ export function LeaderTelegramCard() {
           <>
             <p style={{ margin: '0 0 6px' }}>{t('ltg.mine', { name: v.me.tgName, bot: v.bot ?? '' })}</p>
             {v.me.blocked && <Alert tone="warn">{t('ltg.blockedText')}</Alert>}
-            <Switch checked={v.me.digest} disabled={busy} onChange={(on) => void patch({ digest: on })} label={t('ltg.digest')} hint={t('ltg.digestHint')} />
+            {/* the same names as Reports → Scheduled; the daily digest and the old weekly one are separate subscriptions */}
+            <Switch checked={v.me.digest} disabled={busy} onChange={(on) => void patch({ digest: on })} label={t('fmt.daily')} hint={t('fmt.dailyPersonalHint')} />
+            {/* the old rolling weekly digest: shown only to a person still on it; it can be switched off or moved from, never on again */}
+            {v.me.legacyWeekly && (
+              <Switch checked disabled={busy} onChange={(on) => !on && void patch({ legacyWeekly: false })} label={t('fmt.legacyPersonal')} hint={<>{t('fmt.legacyPersonalHint')} <a href="/insights">{t('fmt.moveBtn')}</a></>} />
+            )}
             <Switch checked={v.me.signals} disabled={busy} onChange={(on) => void patch({ signals: on })} label={t('ltg.signals')} hint={t('ltg.signalsHint')} />
             {/* only this person's own subscriptions; the clinic's schedule is in Reports → Scheduled */}
             <Switch checked={v.me.weekly} disabled={busy} onChange={(on) => void patch({ weekly: on })} label={t('pr.weekly')} hint={t('pr.mySubHint')} />
@@ -102,7 +111,8 @@ export function LeaderTelegramCard() {
         <div className="rule-card" style={{ marginTop: 14 }}>
           <b style={{ fontSize: 14 }}>{t('ltg.whoTitle')}</b>
           <ul className="rule" style={{ margin: '6px 0 0', paddingLeft: 20 }}>
-            <li>{t('ltg.whoDigest', { names: names(v.digestTo) })}</li>
+            <li>{t('fmt.whoDaily', { names: names(v.digestTo) })}</li>
+            {v.legacyWeeklyOn && <li>{t('fmt.whoLegacy', { names: names(v.legacyWeeklyTo ?? []) })}</li>}
             <li>{t('ltg.whoSignals', { names: names(v.signalsTo) })}</li>
             <li>{t('pr.whoWeekly', { names: names(v.weeklyTo ?? []) })}</li>
             <li>{t('pr.whoMonthly', { names: names(v.monthlyTo ?? []) })}</li>

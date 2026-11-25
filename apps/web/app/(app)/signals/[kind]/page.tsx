@@ -21,7 +21,7 @@ type Details =
       checkedAt: string;
       sync: { lastSyncAt: string | null; fresh: boolean };
       // what the message showed (the link's ?e=); null without one
-      event: { at: string; value: number } | null;
+      event: { at: string; value: number; type?: 'FIRED' | 'WORSE'; prevValue?: number | null; prevAt?: string | null } | null;
       // the patient rules: the very patients the rule counted (at most `limit`), the total always
       patients?: { id: string; name: string; at: string | null; days: number | null }[];
       total?: number;
@@ -77,7 +77,11 @@ function SignalDetails() {
       {header}
       {d.event && (
         <Alert tone="info">
-          {t('sigd.event', { date: fmtDateTime(d.event.at), v: `${d.event.value}${unit}` })} {changed ? t('sigd.changed') : t('sigd.mayChange')}
+          {/* why the message was sent: a new deviation, or a significant worsening against the base of that time */}
+          {d.event.type === 'WORSE' && d.event.prevValue != null && d.event.prevAt
+            ? t('sigd.eventWorse', { date: fmtDateTime(d.event.at), v: `${d.event.value}${unit}`, b: `${d.event.prevValue}${unit}`, at: fmtDateTime(d.event.prevAt) })
+            : t('sigd.eventNew', { date: fmtDateTime(d.event.at), v: `${d.event.value}${unit}` })}{' '}
+          {changed ? t('sigd.changed') : t('sigd.mayChange')}
         </Alert>
       )}
       <section className={`sig-card sig-${d.state}`} aria-label={title}>

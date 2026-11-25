@@ -53,7 +53,7 @@ const T: Record<Lang, Record<string, string>> = {
 const langOf = (code?: string): Lang => (code?.startsWith('ru') ? 'ru' : code?.startsWith('en') ? 'en' : 'uk');
 const fill = (s: string, v: Record<string, string>) => s.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '');
 
-export type LeaderKind = 'digest' | 'signals' | 'weekly' | 'monthly';
+export type LeaderKind = 'digest' | 'signals' | 'weekly' | 'monthly' | 'legacyWeekly';
 
 @Injectable()
 export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDestroy {
@@ -124,12 +124,17 @@ export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDe
       this.prisma.digestRecipient.findMany({ where: { clinicId, migratedAt: null }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } }),
       this.prisma.integration.findUnique({ where: { clinicId_provider: { clinicId, provider: 'TELEGRAM' } }, select: { apiKeyEnc: true, config: true } }),
     ]);
+    const { digestFrequency, legacyWeeklyOn } = await this.prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { digestFrequency: true, legacyWeeklyOn: true } });
     const group = staff?.apiKeyEnc ? ((staff.config ?? {}) as { staffChat?: { title: string } }).staffChat?.title ?? null : null;
     return {
       available: this.available,
       bot: this.available ? this.username : null,
-      me: me ? { tgName: me.tgName, digest: me.digest, signals: me.signals, weekly: me.weekly, monthly: me.monthly, blocked: !!me.blockedAt, connectedAt: me.createdAt } : null,
+      me: me ? { tgName: me.tgName, digest: me.digest, signals: me.signals, weekly: me.weekly, monthly: me.monthly, legacyWeekly: me.legacyWeekly, blocked: !!me.blockedAt, connectedAt: me.createdAt } : null,
+      // the clinic's two digest schedules: the daily one, and the old rolling weekly one where it is still on
+      digestFrequency,
+      legacyWeeklyOn,
       digestTo: people.filter((p) => p.digest).map((p) => p.name),
+      legacyWeeklyTo: people.filter((p) => p.legacyWeekly).map((p) => p.name),
       signalsTo: people.filter((p) => p.signals).map((p) => p.name),
       weeklyTo: people.filter((p) => p.weekly).map((p) => p.name),
       monthlyTo: people.filter((p) => p.monthly).map((p) => p.name),
@@ -148,9 +153,11 @@ export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDe
 
   // Only the signed-in person's own switches (never another manager's). Switching the weekly or monthly report on records the moment, so a report
   // that was due before it is never sent to this person.
-  async update(clinicId: string, userId: string, d: { digest?: boolean; signals?: boolean; weekly?: boolean; monthly?: boolean }) {
-    const cur = await this.prisma.leaderTelegram.findUnique({ where: { clinicId_userId: { clinicId, userId } }, select: { weekly: true, monthly: true } });
+  async update(clinicId: string, userId: string, d: { digest?: boolean; signals?: boolean; weekly?: boolean; monthly?: boolean; legacyWeekly?: boolean }) {
+    const cur = await this.prisma.leaderTelegram.findUnique({ where: { clinicId_userId: { clinicId, userId } }, select: { weekly: true, monthly: true, digest: true } });
     if (!cur) throw new NotFoundException('leader_tg_not_connected');
+    // the old rolling 7-day weekly digest: only ever switched off (no new subscription to it)
+    if (d.legacyWeekly === true) throw new BadRequestException('legacy_weekly_closed');
     const now = new Date();
     await this.prisma.leaderTelegram.update({
       where: { clinicId_userId: { clinicId, userId } },
@@ -159,6 +166,7 @@ export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDe
         ...(d.signals !== undefined ? { signals: d.signals } : {}),
         ...(d.weekly !== undefined ? { weekly: d.weekly, ...(d.weekly && !cur.weekly ? { weeklySince: now } : {}) } : {}),
         ...(d.monthly !== undefined ? { monthly: d.monthly, ...(d.monthly && !cur.monthly ? { monthlySince: now } : {}) } : {}),
+        ...(d.legacyWeekly === false ? { legacyWeekly: false, legacyWeeklyMovedAt: now } : {}),
       },
     });
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'leader_tg.settings', details: d } });
@@ -181,7 +189,7 @@ export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDe
       orderBy: { createdAt: 'asc' },
       include: { user: { select: { name: true } } },
     });
-    return rows.map((r) => ({ id: r.id, userId: r.userId, chatId: r.chatId, lang: r.lang as Lang, name: r.user.name, digest: r.digest, signals: r.signals, weekly: r.weekly, weeklySince: r.weeklySince, monthly: r.monthly, monthlySince: r.monthlySince }));
+    return rows.map((r) => ({ id: r.id, userId: r.userId, chatId: r.chatId, lang: r.lang as Lang, name: r.user.name, digest: r.digest, signals: r.signals, weekly: r.weekly, weeklySince: r.weeklySince, monthly: r.monthly, monthlySince: r.monthlySince, legacyWeekly: r.legacyWeekly }));
   }
 
   // Sends one text to every current recipient of this kind; returns how many Telegram confirmed. A blocked bot marks the connection.
@@ -277,11 +285,13 @@ export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDe
     if (!claimed.count) return t.bad;
     // the same person's legacy digest chat (the clinic's patient bot, the same private chat id): the digest they already had continues here,
     // and the old route stops, so it never arrives twice; nothing else is switched on
-    const legacy = await this.prisma.digestRecipient.findMany({ where: { clinicId: link.clinicId, chatId, migratedAt: null }, select: { id: true } });
+    // the format it got continues: the daily digest, or the old weekly one (carried over as such, never turned into the daily one)
+    const legacy = await this.prisma.digestRecipient.findMany({ where: { clinicId: link.clinicId, chatId, migratedAt: null }, select: { id: true, legacyWeekly: true } });
+    const carry = { ...(legacy.some((x) => !x.legacyWeekly) ? { digest: true } : {}), ...(legacy.some((x) => x.legacyWeekly) ? { legacyWeekly: true } : {}) };
     await this.prisma.leaderTelegram.upsert({
       where: { clinicId_userId: { clinicId: link.clinicId, userId: link.userId } },
-      create: { clinicId: link.clinicId, userId: link.userId, chatId, tgName, lang, digest: legacy.length > 0 },
-      update: { tgName, lang, blockedAt: null, ...(legacy.length ? { digest: true } : {}) },
+      create: { clinicId: link.clinicId, userId: link.userId, chatId, tgName, lang, ...carry },
+      update: { tgName, lang, blockedAt: null, ...carry },
     });
     if (legacy.length) await this.prisma.digestRecipient.updateMany({ where: { id: { in: legacy.map((x) => x.id) } }, data: { migratedAt: new Date() } });
     await this.prisma.auditLog.create({ data: { clinicId: link.clinicId, userId: link.userId, action: 'leader_tg.connected', details: { carriedDigest: legacy.length > 0 } } });

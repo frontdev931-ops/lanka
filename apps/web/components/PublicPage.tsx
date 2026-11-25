@@ -6,16 +6,20 @@ import { useI18n } from '../lib/i18n';
 import LanguageSwitcher from './LanguageSwitcher';
 import { Brand } from './Brand';
 import { OwnerDetails } from './OwnerDetails';
+import { ThemeSwitch, useTheme } from './ThemeSwitch';
 
-// A plain public page (terms, privacy, data deletion status): the brand, the language and readable text
+// A plain public page (terms, privacy, data deletion status): the brand, the language, the theme (the same choice as in the workspace) and
+// readable text
 export function PublicPage({ title, children }: { title: string; children: ReactNode }) {
   const { t, locale } = useI18n();
+  const [theme, setTheme] = useTheme();
   return (
     <div className="land">
       <header className="land-head">
         <Link href="/" className="brand land-brand"><Brand /></Link>
         <div className="land-head-right">
           <LanguageSwitcher compact />
+          <ThemeSwitch compact theme={theme} onChange={setTheme} />
           <Link href="/login" className="btn btn-sm">{t('landing.login')}</Link>
         </div>
       </header>

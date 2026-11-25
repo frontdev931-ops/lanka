@@ -275,6 +275,9 @@ table.heat tr.fresh td.heat-cell { color: var(--muted); font-style: italic; }
 .stat-icon.red { background: var(--red-soft); color: var(--red); }
 .stat-icon.amber { background: var(--amber-soft); color: var(--amber); }
 .stat-value { font-family: var(--lp-display), sans-serif; font-size: 34px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+/* a small note under a big number (for example an unconfirmed currency) */
+.stat-note { display: block; font-family: inherit; font-size: 12px; font-weight: 500; letter-spacing: 0; color: var(--muted); margin-top: 4px; }
+.stat-value { overflow-wrap: anywhere; }
 .stat-foot { font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .stat-foot a { white-space: nowrap; flex: none; }
 .table td:first-child { min-width: 130px; }
@@ -505,7 +508,9 @@ a.line-tab { display: inline-flex; align-items: center; text-decoration: none; }
 @media (max-width: 700px) {
   /* Inputs are at least 16px: otherwise an iPhone zooms the page on focus */
   .input, .select, .field .input { font-size: 16px; min-height: 44px; }
-  .select.sm { font-size: 15px; min-height: 40px; }
+  .select.sm { font-size: 16px; min-height: 44px; }
+  /* a checkbox is tapped through its whole label: the label is the 44px target */
+  .checkbox { min-height: 44px; }
   .btn { min-height: 44px; padding: 10px 16px; }
   .btn-sm { min-height: 44px; padding: 8px 12px; font-size: 14px; }
   .checkbox input { width: 20px; height: 20px; }
@@ -665,8 +670,9 @@ body { -webkit-tap-highlight-color: transparent; }
 
 /* ---------- public landing page ---------- */
 .btn-lg { padding: 13px 22px; font-size: 16px; min-height: 48px; }
-.land { background: var(--surface); color: var(--text); }
-.land-head { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 18px; padding: 10px max(16px, calc((100vw - 1100px) / 2)); background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--border); }
+.land { background: var(--surface); color: var(--text); min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.land > main { flex: 1 0 auto; }
+.land-head { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 18px; padding: 10px max(16px, calc((100vw - 1100px) / 2)); background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--border); }
 .land-brand { color: var(--text); font-weight: 700; display: flex; align-items: center; gap: 8px; }
 .land-nav { display: flex; gap: 16px; margin-left: 8px; }
 .land-nav a { color: var(--muted); font-size: 14px; }
@@ -1212,6 +1218,8 @@ figure.mock { margin: 0; }
 .lp-form.dark .lp-field input { border-color: #3A5664; background: var(--ink); color: #fff; }
 .lp-consent { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; line-height: 1.4; }
 .lp-consent input { width: 20px; height: 20px; flex: none; margin: 0; }
+/* the whole label is the tap target of the consent checkbox: at least 44px on a phone */
+.lp-consent { min-height: 44px; }
 .lp-form.dark .lp-consent { color: var(--light-dark); }
 .lp-form.dark .lp-consent a { color: var(--mint); }
 .lp-form:not(.dark) .lp-btn-white { background: var(--ink); color: #fff; }
@@ -1220,7 +1228,7 @@ figure.mock { margin: 0; }
 .lp-form-ok { display: flex; gap: 8px; align-items: center; font-weight: 600; margin: 0; }
 .lp-form-err { font-size: 14px; color: #C2410C; margin: 0; }
 .lp-form.dark .lp-form-err { color: #FFB599; }
-.lp-trap { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+.lp-trap { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; font-size: 16px; }
 .lp-dialog { border: 0; border-radius: 28px; padding: 32px; width: min(460px, calc(100vw - 32px)); box-sizing: border-box; color: var(--ink); font-family: var(--lp-text), system-ui, sans-serif; }
 .lp-dialog::backdrop { background: rgba(10,26,36,.6); backdrop-filter: blur(4px); }
 .lp-dialog h2 { font-family: var(--lp-display), sans-serif; font-weight: 800; font-size: 28px; letter-spacing: -.03em; line-height: 1.1; margin: 0 40px 8px 0; }
@@ -1307,6 +1315,12 @@ figure.mock { margin: 0; }
   .lp-plan-lead { padding-right: 0; }
   .lp-price b { font-size: 44px; }
   .lp-compare { padding: 4px 16px 8px; border-radius: 22px; }
+  /* three columns fit the phone: no sideways scrolling with the Pro column hidden off-screen; long values wrap */
+  .lp-compare table { min-width: 0; table-layout: fixed; font-size: 14px; }
+  .lp-compare thead th { width: 28%; padding: 10px 4px; font-size: 11px; letter-spacing: .04em; }
+  .lp-compare thead th:first-child { width: 44%; }
+  .lp-compare tbody th { padding: 12px 8px 12px 0; overflow-wrap: anywhere; }
+  .lp-compare td { padding: 12px 4px; font-size: 13px; overflow-wrap: anywhere; hyphens: auto; }
   .lp-launch-note, .lp-network { padding: 18px 20px; }
   .lp-final { padding: 40px 20px; }
   .lp-form.dark { padding: 20px; border-radius: 22px; }
@@ -1489,3 +1503,22 @@ html[data-theme="dark"] .sig-fired .sig-link { background: var(--mint); color: #
 .sigo-text { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 15px; line-height: 1.5; background: var(--surface-2, var(--bg)); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin: 0; max-height: 50vh; overflow-y: auto; }
 .seg { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .seg .btn { min-height: 44px; }
+
+/* The header of the legal pages on a phone: brand, language, theme and "Sign in" fit in one row */
+@media (max-width: 480px) {
+  .land-head { gap: 8px; padding-left: 12px; padding-right: 12px; }
+  .land-head-right { gap: 6px; }
+  .land-head .btn-sm { padding: 8px 10px; }
+}
+
+/* a long status badge (report history, saved report) may wrap instead of pushing the page sideways on a phone */
+.badge.badge-wrap { white-space: normal; text-align: left; line-height: 1.3; }
+
+/* Reports to managers in Telegram: one block per format */
+.fmt-row { border-top: 1px solid var(--border); padding: 14px 0 6px; }
+.fmt-row:first-of-type { border-top: 0; }
+.fmt-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.fmt-head h3 { font-size: 16px; margin: 0; }
+.fmt-line { margin: 6px 0; font-size: 14px; }
+.fmt-need { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
+.fmt-legacy { margin-bottom: 10px; }
