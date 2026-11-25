@@ -1479,3 +1479,13 @@ html[data-theme="dark"] .sig-fired .sig-link { background: var(--mint); color: #
   .ads-period .inline-label .input { flex: 1; }
   .ads-kpi b, .ads-result b { font-size: 22px; }
 }
+
+/* Signal details and the current state (2026-11-25) */
+.sig-back { display: inline-flex; align-items: center; min-height: 44px; font-weight: 600; }
+.sigd-h { font-size: 16px; margin: 16px 0 6px; }
+.sig-sub-line { color: var(--muted); font-size: 14px; margin: 4px 0; }
+.sigd-list { margin-top: 16px; }
+.sigd-list .table td a { font-weight: 600; }
+.sigo-text { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 15px; line-height: 1.5; background: var(--surface-2, var(--bg)); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin: 0; max-height: 50vh; overflow-y: auto; }
+.seg { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.seg .btn { min-height: 44px; }

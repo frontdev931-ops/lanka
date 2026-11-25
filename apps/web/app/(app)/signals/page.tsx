@@ -4,45 +4,13 @@ import Link from 'next/link';
 import { Fragment, ReactNode, useCallback, useEffect, useState } from 'react';
 import { api } from '../../../lib/api';
 import { Key, useI18n } from '../../../lib/i18n';
-import { fmtDate, fmtDateTime } from '../../../lib/ui';
+import { fmtDateTime } from '../../../lib/ui';
 import { Alert, Loading, PageHeader } from '../../../components/ui';
+import { Kind, rich, Signal, signalText, State } from '../../../components/signalText';
 import { ProHint } from '../../../components/ProHint';
 import { usePushDevice } from '../../../components/PushCard';
+import { SignalClinic } from '../../../components/SignalClinic';
 
-type State = 'fired' | 'ok' | 'insufficient' | 'needs_sync' | 'never' | 'not_connected' | 'off';
-type Kind = 'CANCEL_RATE' | 'NO_REBOOK' | 'OVERDUE_TASKS' | 'PAYMENTS_DROP' | 'RETURN_DROP' | 'STALE_REQUESTS' | 'SYNC_OVERDUE' | 'UNFINISHED_NO_NEXT';
-interface Signal {
-  kind: Kind;
-  state: State;
-  // the master switch (off: not measured, nothing delivered on any channel; the channel preferences are kept)
-  active: boolean;
-  threshold: number;
-  windowDays: number;
-  hours: number;
-  limits: { threshold: [number, number]; windowDays: [number, number] | null; hours: [number, number] | null };
-  telegramOn: boolean;
-  emailOn: boolean;
-  pushOn: boolean;
-  lastFiredAt: string | null;
-  telegramSentAt: string | null;
-  // null: the signal shows its own comparison (no report substantiates it)
-  link: string | null;
-  value?: number;
-  count?: number;
-  base?: number;
-  need?: number;
-  reason?: 'currency';
-  from?: string;
-  to?: string;
-  prevFrom?: string;
-  prevTo?: string;
-  amount?: number;
-  prevAmount?: number;
-  currency?: string;
-  oldestDays?: number;
-  lookbackDays?: number;
-  lastSyncAt?: string;
-}
 interface View {
   inPlan: boolean;
   checkedAt: string;
@@ -63,16 +31,23 @@ const COUNTS: { key: 'fired' | 'ok' | 'pending' | 'off'; tone: State; states: St
   { key: 'off', tone: 'off', states: [] },
 ];
 const PCT: Kind[] = ['CANCEL_RATE', 'RETURN_DROP', 'PAYMENTS_DROP'];
-// "**x**" in a translated sentence marks the number that matters
-const rich = (text: string): ReactNode => text.split(/\*\*(.+?)\*\*/g).map((part, i) => (i % 2 ? <b key={i}>{part}</b> : <Fragment key={i}>{part}</Fragment>));
-// a period's end is exclusive (the start of the next day): show the last day it covers
-const lastDay = (iso: string) => fmtDate(new Date(Date.parse(iso) - 1).toISOString());
+// rules whose details list the very patients the rule counted
+const PATIENT_KINDS: Kind[] = ['NO_REBOOK', 'UNFINISHED_NO_NEXT'];
 
 // "Signals" (its own menu item since 2026-11-23): deviations in the clinic's work measured now from its own data (GET /signals), with each signal's settings: the master
 // switch, the condition written as a sentence with its numbers, delivery to the staff Telegram chat and (under the details) email and Push.
 // Saving sends nothing. The order is fixed when the page loads, so a card does not jump while it is being edited.
 export default function SignalsPage() {
+  return (
+    <SignalClinic>
+      <Signals />
+    </SignalClinic>
+  );
+}
+
+function Signals() {
   const { t } = useI18n();
+  const [overview, setOverview] = useState(false);
   const [v, setV] = useState<View | null>(null);
   const [error, setError] = useState('');
   const [order, setOrder] = useState<Kind[] | null>(null);
@@ -93,7 +68,7 @@ export default function SignalsPage() {
     void load();
   }, [load]);
 
-  const header = <PageHeader title={t('sig.title')} subtitle={t('sig.subtitle')} />;
+  const header = <PageHeader title={t('sig.title')} subtitle={t('sig.subtitle')} actions={v?.inPlan ? <button className="btn" onClick={() => setOverview(true)}>{t('sigo.open')}</button> : undefined} />;
   if (error && !v)
     return (
       <>
@@ -160,6 +135,7 @@ export default function SignalsPage() {
         {list.map((s) => <SignalCard key={s.kind} s={s} reach={reach} pushHere={device.state === 'active'} onSaved={load} />)}
       </div>
       <p className="sig-foot">{t('sig.checkedAt', { date: fmtDateTime(v.checkedAt) })}</p>
+      {overview && <OverviewDialog me={v.telegram.me} onClose={() => setOverview(false)} />}
     </>
   );
 }
@@ -206,51 +182,7 @@ function SignalCard({ s, reach, pushHere, onSaved }: { s: Signal; reach: number;
     }
   }
 
-  const unit = (c?: string) => (c === 'UAH' ? t('billing.uah') : c ?? '');
-  const period = (a?: string, b?: string) => (a && b ? `${fmtDate(a)} — ${lastDay(b)}` : '');
-  // the current result in one short sentence (the number that matters in bold); dates and secondary numbers go to the details
-  const what = (): string => {
-    if (s.state === 'needs_sync') return t('sig.needsSync');
-    if (s.state === 'never') return t('sig.SYNC_OVERDUE.never');
-    if (s.state === 'not_connected') return t('sig.SYNC_OVERDUE.notConnected');
-    if (s.state === 'insufficient') {
-      if (s.reason === 'currency') return t('sig.PAYMENTS_DROP.currency');
-      if (s.kind === 'RETURN_DROP' || s.kind === 'PAYMENTS_DROP') return t(`sig.${s.kind}.insufficient` as Key, { n: s.base ?? 0, need: s.need ?? 0, period: period(s.from, s.to) });
-      return t('sig.insufficient', { n: s.base ?? 0, need: s.need ?? 0, period: period(s.from, s.to) });
-    }
-    const v2 = s.value ?? 0;
-    const dir = v2 > 0 ? 'less' : v2 < 0 ? 'more' : 'same';
-    switch (s.kind) {
-      case 'CANCEL_RATE':
-        return t('sig.CANCEL_RATE.what', { v: v2, n: s.count ?? 0, total: s.base ?? 0 });
-      case 'RETURN_DROP':
-        return t(`sig.RETURN_DROP.${dir}` as Key, { cur: s.count ?? 0, prev: s.base ?? 0, v: Math.abs(v2) });
-      case 'PAYMENTS_DROP':
-        return t(`sig.PAYMENTS_DROP.${dir}` as Key, { cur: (s.amount ?? 0).toLocaleString(), prev: (s.prevAmount ?? 0).toLocaleString(), u: unit(s.currency), v: Math.abs(v2) });
-      case 'STALE_REQUESTS':
-        return t('sig.STALE_REQUESTS.what', { n: s.count ?? 0, h: s.hours, total: s.base ?? 0 });
-      case 'UNFINISHED_NO_NEXT':
-        if (!s.count) return t('sig.UNFINISHED_NO_NEXT.none', { d: s.windowDays, total: s.base ?? 0 });
-        return t('sig.UNFINISHED_NO_NEXT.what', { n: s.count ?? 0, d: s.windowDays, total: s.base ?? 0 });
-      case 'NO_REBOOK':
-        return t('sig.NO_REBOOK.what', { n: s.count ?? 0, total: s.base ?? 0 });
-      case 'OVERDUE_TASKS':
-        if (!s.count) return t('sig.OVERDUE_TASKS.none', { total: s.base ?? 0 });
-        return t('sig.OVERDUE_TASKS.what', { n: s.count ?? 0, total: s.base ?? 0 });
-      default:
-        return t('sig.SYNC_OVERDUE.what', { date: s.lastSyncAt ? fmtDateTime(s.lastSyncAt) : '—', h: v2 });
-    }
-  };
-  // the dates and secondary numbers of a measured signal (shown under the details)
-  const details = (): string[] => {
-    if (s.state !== 'fired' && s.state !== 'ok') return [];
-    if (s.kind === 'RETURN_DROP' || s.kind === 'PAYMENTS_DROP') return [t('sig.detail.compare', { period: period(s.from, s.to), prevPeriod: period(s.prevFrom, s.prevTo) })];
-    if (s.kind === 'CANCEL_RATE') return [t('sig.detail.period', { period: period(s.from, s.to) })];
-    if (s.kind === 'NO_REBOOK') return [t('sig.detail.missed', { period: period(s.from, s.to) })];
-    if (s.kind === 'UNFINISHED_NO_NEXT' && s.count) return [t('sig.detail.oldestPatient', { n: s.oldestDays ?? 0 })];
-    if (s.kind === 'OVERDUE_TASKS' && s.count) return [t('sig.detail.oldestTask', { n: s.oldestDays ?? 0 })];
-    return [];
-  };
+  const { what, details } = signalText(s, t);
   const dirty = threshold !== String(s.threshold) || (s.limits.windowDays && days !== String(s.windowDays)) || (s.limits.hours && hours !== String(s.hours));
   const title = t(`ins.alert.${s.kind}` as Key);
   const num = (value: string, set: (v: string) => void, [lo, hi]: [number, number], label: string, decimal = false) => (
@@ -297,7 +229,12 @@ function SignalCard({ s, reach, pushHere, onSaved }: { s: Signal; reach: number;
       <div className="sig-actions">
         {toggle(tg, busy || !on, () => { setTg(!tg); void save({ telegram: !tg }); }, t('sig.telegram'), !on ? t('sig.enableFirst') : reach ? t('sig.tgReach', { n: reach }) : t('sig.tgNobody'))}
         <span className="grow" />
-        {s.link && s.active && (
+        {s.active && (
+          <Link className="sig-link" href={`/signals/${s.kind}`}>
+            {t(PATIENT_KINDS.includes(s.kind) ? 'sigd.patients' : 'sigd.open')}
+          </Link>
+        )}
+        {s.link && s.active && !PATIENT_KINDS.includes(s.kind) && (
           <Link className="sig-link" href={s.link}>
             {t(`sig.${s.kind}.open` as Key)}
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
@@ -343,5 +280,58 @@ const STATE_ICON: Record<State, string> = {
 function StateIcon({ state, size }: { state: State; size: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={STATE_ICON[state]} /></svg>
+  );
+}
+
+// "Current state of signals": a preview of the text (GET /signals/overview, sends nothing); sending it to one's own LANKA service-bot chat is a
+// separate explicit button, only for a connected, not blocked Telegram (the server checks the connection and the role again)
+function OverviewDialog({ me, onClose }: { me: { signals: boolean; blocked: boolean } | null; onClose: () => void }) {
+  const { t, locale } = useI18n();
+  const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    api<{ inPlan: boolean; text?: string }>(`/signals/overview?lang=${locale}`)
+      .then((r) => setText(r.text ?? ''))
+      .catch((e) => setError((e as Error).message));
+  }, [locale]);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, [onClose]);
+  const send = async () => {
+    setBusy(true);
+    setSent(null);
+    try {
+      await api('/signals/overview/send', { method: 'POST', body: JSON.stringify({ lang: locale }) });
+      setSent({ ok: true, text: t('sigo.sent') });
+    } catch (e) {
+      setSent({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const canSend = !!me && !me.blocked;
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="sigo-title" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-head">
+          <h2 id="sigo-title">{t('sigo.title')}</h2>
+          <button type="button" className="btn btn-sm modal-close" aria-label={t('prof.close')} onClick={onClose}>✕</button>
+        </div>
+        <p className="rule">{t('sigo.hint')}</p>
+        {error ? <Alert tone="error">{error}</Alert> : text === null ? <Loading /> : <pre className="sigo-text">{text}</pre>}
+        {sent && <p className={sent.ok ? 'sig-msg ok' : 'sig-msg err'} role="status">{sent.text}</p>}
+        <div className="modal-actions">
+          {canSend ? (
+            <button className="btn btn-primary" disabled={busy || !text} onClick={() => void send()}>{t('sigo.send')}</button>
+          ) : (
+            <Link className="btn" href="/settings#leader-telegram">{me?.blocked ? t('sigo.blocked') : t('sigo.connect')}</Link>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

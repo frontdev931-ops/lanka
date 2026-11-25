@@ -84,6 +84,8 @@ model Clinic {
   slotOffers                SlotOffer[]
   scheduledReports          ScheduledReport[]
   alertRules                AlertRule[]
+  periodReportRuns          PeriodReportRun[]
+  signalEvents              SignalEvent[]
   invoices                  Invoice[]
   shifts                    Shift[]
   blocks                    ReservedBlock[]
@@ -184,6 +186,16 @@ model Clinic {
   digestHour                Int                       @default(9)
   digestWeekday             Int                       @default(1)
   lastDigestAt              DateTime?
+  // Weekly and monthly reports to managers through the LANKA service bot (2026-11-25), separate from the digest above and off by default. The
+  // clinic's schedule: weekly on a weekday at an hour (for the completed Monday–Sunday week), monthly on the 1st at an hour (for the previous
+  // month), Europe/Kyiv. *Since: when it was switched on; only a sending time after it counts, so switching on never sends an older report.
+  weeklyReportOn            Boolean                   @default(false)
+  weeklyReportWeekday       Int                       @default(1)
+  weeklyReportHour          Int                       @default(9)
+  weeklyReportSince         DateTime?
+  monthlyReportOn           Boolean                   @default(false)
+  monthlyReportHour         Int                       @default(9)
+  monthlyReportSince        DateTime?
   // A link where to send satisfied patients to leave a public review (Google and the like)
   reviewUrl                 String?
   // Plan (TRIAL, START, PRO, CUSTOM), individual limits on top of the plan and suspension of the clinic by the service owner
@@ -1023,6 +1035,12 @@ model LeaderTelegram {
   lang           String    @default("uk")
   digest         Boolean   @default(false)
   signals        Boolean   @default(false)
+  // the person's own subscription to the weekly and monthly reports (2026-11-25), off by default; *Since: when switched on (an older report is
+  // never sent to a fresh subscription)
+  weekly         Boolean   @default(false)
+  weeklySince    DateTime?
+  monthly        Boolean   @default(false)
+  monthlySince   DateTime?
   createdAt      DateTime  @default(now())
   // the bot was blocked or the chat is gone: nothing is sent until the person connects again
   blockedAt      DateTime?
@@ -1311,10 +1329,58 @@ model AlertRule {
   telegramClaimAt DateTime?
   lastFiredAt     DateTime?
   lastValue       Float?
+  // The rule's own state between checks (2026-11-25), apart from what deserves a message: null = no successful measurement under the current
+  // settings yet (the first one only records it and never notifies, so switching a channel on or deploying this never sends accumulated
+  // deviations); OK / FIRED = the last successful measurement was below / at the threshold. Too little data, an old load or an error leave it
+  // as it is (they are not a recovery). Only the change OK → FIRED creates a SignalEvent.
+  evalState       String?
+  evalValue       Float?
+  evalAt          DateTime?
   createdAt       DateTime  @default(now())
   clinic          Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@unique([clinicId, kind])
+}
+
+// One notification-worthy event of a signal (the rule went from normal to a deviation), with the aggregate numbers it was measured from (no
+// names or phones) and the settings at that moment, so a retried delivery sends exactly the same text
+model SignalEvent {
+  id         String           @id @default(cuid())
+  clinicId   String
+  kind       String
+  value      Float
+  // the previous successful measurement under the same settings (the "change" line), if there was one
+  prevValue  Float?
+  prevAt     DateTime?
+  facts      Json
+  settings   Json
+  createdAt  DateTime         @default(now())
+  clinic     Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  deliveries SignalDelivery[]
+
+  @@index([clinicId, kind, createdAt])
+}
+
+// Each recipient of an event, fixed when the event is created (a person connected later does not receive it). channel: TG_LEADER (target: the
+// LeaderTelegram id), TG_GROUP (the legacy staff group, target "group"), EMAIL (target: the user id), PUSH (target "clinic"). status: PENDING,
+// SENT, FAILED (a definite refusal; tried again up to a limit), UNKNOWN (may have arrived: never repeated), DROPPED (the channel or the
+// recipient is gone). Each row is claimed before sending, so two runs never send it twice and one failure never resends the others.
+model SignalDelivery {
+  id        String      @id @default(cuid())
+  eventId   String
+  clinicId  String
+  channel   String
+  target    String
+  status    String      @default("PENDING")
+  attempts  Int         @default(0)
+  claimAt   DateTime?
+  sentAt    DateTime?
+  lastError String?
+  createdAt DateTime    @default(now())
+  event     SignalEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, channel, target])
+  @@index([clinicId, status])
 }
 
 // A patient who waits for a suitable time. The code looks for free windows that fit and offers one through the approval queue.
@@ -1721,4 +1787,45 @@ model AdPeriodReach {
   fetchedAt  DateTime @default(now())
 
   @@unique([clinicId, accountId, since, until, campaignId])
+}
+
+// One scheduled weekly or monthly report of a clinic for one period (2026-11-25): created once per clinic, kind and period (unique), so two
+// servers, a restart or a repeated job never prepare it twice. The figures are fixed in `facts` when it is prepared, so every recipient and
+// every retry gets the same numbers. state: READY (the figures) or STALE (the Cliniccards data did not cover the period: a short notice only).
+model PeriodReportRun {
+  id          String                 @id @default(cuid())
+  clinicId    String
+  kind        String
+  periodFrom  String
+  periodTo    String
+  scheduledAt DateTime
+  state       String
+  facts       Json
+  createdAt   DateTime               @default(now())
+  clinic      Clinic                 @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  deliveries  PeriodReportDelivery[]
+
+  @@unique([clinicId, kind, periodFrom])
+}
+
+// One recipient of a prepared report, unique per clinic, person, kind and period. status as SignalDelivery: PENDING, SENT, FAILED (a definite
+// refusal, retried a few times the same day), UNKNOWN (may have arrived: never repeated), DROPPED (the subscription, the role or the connection
+// is gone). Claimed before sending; one failure never resends to the others.
+model PeriodReportDelivery {
+  id         String          @id @default(cuid())
+  runId      String
+  clinicId   String
+  userId     String
+  kind       String
+  periodFrom String
+  status     String          @default("PENDING")
+  attempts   Int             @default(0)
+  claimAt    DateTime?
+  sentAt     DateTime?
+  lastError  String?
+  createdAt  DateTime        @default(now())
+  run        PeriodReportRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, userId, kind, periodFrom])
+  @@index([clinicId, status])
 }

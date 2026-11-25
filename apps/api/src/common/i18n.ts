@@ -567,6 +567,21 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Рассылка не найдена или уже поставлена в очередь',
     en: 'Campaign not found or already queued',
   },
+  leader_tg_not_connected: {
+    uk: 'Ваш Telegram для звітів і сигналів не підключено. Підключіть його в Налаштуваннях → Загальні.',
+    ru: 'Ваш Telegram для отчётов и сигналов не подключён. Подключите его в Настройках → Общие.',
+    en: 'Your Telegram for reports and signals is not connected. Connect it in Settings → General.',
+  },
+  too_often: {
+    uk: 'Щойно надіслано. Спробуйте за хвилину.',
+    ru: 'Только что отправлено. Попробуйте через минуту.',
+    en: 'Just sent. Try again in a minute.',
+  },
+  telegram_failed: {
+    uk: 'Telegram не прийняв повідомлення. Спробуйте пізніше.',
+    ru: 'Telegram не принял сообщение. Попробуйте позже.',
+    en: 'Telegram did not accept the message. Try again later.',
+  },
   too_many_saved: {
     uk: 'Забагато збережених звітів (максимум 100)',
     ru: 'Слишком много сохранённых отчётов (максимум 100)',

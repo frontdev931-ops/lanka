@@ -274,20 +274,26 @@ describe('Telegram керівника через службовий бот LANKA
     tg.sent.length = 0;
     await connect(c.token, 6501);
     // connecting sends only the bot's own answers, no signal
-    expect(tg.sent.filter((x) => x.text.startsWith('Сигнал'))).toHaveLength(0);
+    expect(tg.sent.filter((x) => x.text.includes('Потрібна увага'))).toHaveLength(0);
     let s = (await http().get('/signals').set(auth(c.token)).expect(200)).body;
     expect(s.telegram).toMatchObject({ serviceBot: true, people: [], group: 'Команда', me: { signals: false } });
 
     await http().patch('/leader-telegram').set(auth(c.token)).send({ signals: true }).expect(200);
     s = (await http().get('/signals').set(auth(c.token))).body;
     expect(s.telegram).toMatchObject({ people: ['Олена Власниця'], group: 'Команда', me: { signals: true } });
+    const isSignal = (x: { text: string }) => x.text.includes('Потрібна увага');
     tg.sent.length = 0;
+    // the deviation was there before anyone chose signals: the first check only records it, nothing accumulated is sent
+    expect(await app.get(InsightsService).evaluate(c.clinicId)).toEqual([]);
+    expect(tg.sent.filter(isSignal)).toHaveLength(0);
+    // it was normal at the previous check, then deviated: one message to each route
+    await prisma.alertRule.updateMany({ where: { clinicId: c.clinicId, kind: 'OVERDUE_TASKS' }, data: { evalState: 'OK', evalValue: 1, evalAt: new Date(Date.now() - 3_600_000) } });
     expect(await app.get(InsightsService).evaluate(c.clinicId)).toContain('OVERDUE_TASKS');
-    const sig = tg.sent.filter((x) => x.text.startsWith('Сигнал'));
+    const sig = tg.sent.filter(isSignal);
     expect(sig.map((x) => [x.token, x.chatId]).sort()).toEqual([[CLINIC_BOT, '-100777'], [SERVICE, '6501']]);
-    // once per day per rule: a second run sends nothing
+    // the deviation stays: a second run sends nothing
     tg.sent.length = 0;
     await app.get(InsightsService).evaluate(c.clinicId);
-    expect(tg.sent.filter((x) => x.text.startsWith('Сигнал'))).toHaveLength(0);
+    expect(tg.sent.filter(isSignal)).toHaveLength(0);
   });
 });

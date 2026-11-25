@@ -8,6 +8,8 @@ import { LeaderTelegramService } from './leader-telegram.service';
 class LeaderTelegramDto {
   @IsOptional() @IsBoolean() digest?: boolean;
   @IsOptional() @IsBoolean() signals?: boolean;
+  @IsOptional() @IsBoolean() weekly?: boolean;
+  @IsOptional() @IsBoolean() monthly?: boolean;
 }
 
 // "Telegram for reports and signals": the signed-in owner or manager connects their OWN Telegram to the shared LANKA service bot for the clinic

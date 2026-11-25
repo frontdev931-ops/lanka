@@ -1,8 +1,9 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
 import { AuthGuard, AuthUser, CurrentUser, Roles } from '../common/auth.guard';
 import { InsightsService, ScheduleInput } from './insights.service';
+import { signalLang } from './signal-text';
 
 class ScheduleDto implements ScheduleInput {
   @IsString() @MaxLength(40) savedReportId: string;
@@ -21,6 +22,13 @@ class SchedulePatchDto {
   @IsOptional() @IsIn(['XLSX', 'PDF']) format?: 'XLSX' | 'PDF';
   @IsOptional() @IsArray() @IsString({ each: true }) recipientIds?: string[];
   @IsOptional() @IsBoolean() enabled?: boolean;
+}
+class LangDto {
+  @IsOptional() @IsIn(['uk', 'ru', 'en']) lang?: 'uk' | 'ru' | 'en';
+}
+class DetailsQuery {
+  // the event of the message the link came from (an id only; another clinic's or another rule's event is ignored)
+  @IsOptional() @IsString() @MaxLength(40) e?: string;
 }
 class AlertDto {
   // the master switch of the rule (off: not measured, nothing delivered on any channel)
@@ -81,6 +89,25 @@ export class InsightsController {
   @Get('signals/summary')
   signalsSummary(@CurrentUser() u: AuthUser) {
     return this.insights.signalsSummary(u.clinicId);
+  }
+
+  // "Current state of signals": a preview of the text, from the same measurements as the section (sends nothing)
+  @Get('signals/overview')
+  overview(@CurrentUser() u: AuthUser, @Query() q: LangDto) {
+    return this.insights.overview(u.clinicId, signalLang(q.lang));
+  }
+
+  // The same text to the signed-in person's own LANKA service-bot chat, only on this explicit request
+  @Post('signals/overview/send')
+  @HttpCode(200)
+  sendOverview(@CurrentUser() u: AuthUser, @Body() dto: LangDto) {
+    return this.insights.sendOverview(u.clinicId, u.userId, signalLang(dto.lang));
+  }
+
+  // One signal opened from a message or the section: the current measurement, the condition and (patient rules) the patients it counted
+  @Get('signals/:kind')
+  details(@CurrentUser() u: AuthUser, @Param('kind') kind: string, @Query() q: DetailsQuery) {
+    return this.insights.details(u.clinicId, kind, q.e);
   }
 
   @Get('alerts')

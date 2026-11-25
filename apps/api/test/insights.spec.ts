@@ -155,6 +155,8 @@ describe('сигнали керівнику', () => {
     create: { clinicId, provider: 'CLINICCARDS', lastSyncAt: new Date(Date.now() - hoursAgo * 3_600_000) },
     update: { lastSyncAt: new Date(Date.now() - hoursAgo * 3_600_000) },
   });
+  // the previous check of every rule of the clinic found it normal (a recorded baseline): the next deviation is a new event
+  const normal = (clinicId: string, kind?: string) => prisma.alertRule.updateMany({ where: { clinicId, ...(kind ? { kind } : {}) }, data: { evalState: 'OK', evalValue: 0, evalAt: new Date(Date.now() - 3_600_000) } });
   async function visits(clinicId: string, n: number, status: string, daysAgo: number) {
     const p = await prisma.patient.create({ data: { clinicId, externalId: `p${rnd()}`, fullName: `Пацієнт ${rnd()}` } });
     await prisma.visit.createMany({ data: Array.from({ length: n }, (_, i) => ({ clinicId, patientId: p.id, externalId: `v${rnd()}${i}`, startsAt: new Date(Date.now() - daysAgo * day - i * 60_000), status })) });
@@ -178,23 +180,29 @@ describe('сигнали керівнику', () => {
     }
   });
 
-  it('частка скасувань і неявок: спрацьовує від порогу, не на малій вибірці, і лише раз на добу; власник отримує лист', async () => {
+  it('частка скасувань і неявок: не на малій вибірці; перша перевірка — вихідний стан; сповіщення при переході з норми; триваюче відхилення не повторюється', async () => {
     const c = await clinic();
     await http().patch('/alerts/CANCEL_RATE').set(auth(c.token)).send({ enabled: true, threshold: 30 }).expect(200);
     await synced(c.clinicId);
     await visits(c.clinicId, 6, 'VISITED', 2);
-    await visits(c.clinicId, 3, 'CANCELLED', 2); // 3 of 9: a small sample
+    await visits(c.clinicId, 1, 'CANCELLED', 2); // 1 of 7: a small sample
     expect(await insights.evaluate(c.clinicId)).toEqual([]);
-    await visits(c.clinicId, 3, 'DID_NOT_COME', 3); // 6 of 12 = 50%
+    expect((await prisma.alertRule.findUniqueOrThrow({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'CANCEL_RATE' } } })).evalState).toBeNull();
+    await visits(c.clinicId, 6, 'VISITED', 3); // 1 of 13 = 7.7%: the baseline, normal
+    expect(await insights.evaluate(c.clinicId)).toEqual([]);
+    await visits(c.clinicId, 5, 'DID_NOT_COME', 3); // 6 of 18 = 33.3%
     const before = mail.outbox.length;
     expect(await insights.evaluate(c.clinicId)).toEqual(['CANCEL_RATE']);
     expect(mail.outbox.length).toBe(before + 1);
     expect(mail.outbox.at(-1)).toMatchObject({ to: c.email });
-    expect(mail.outbox.at(-1)!.text).toContain('50%');
-    expect(await insights.evaluate(c.clinicId)).toEqual([]); // quiet for a day
+    expect(mail.outbox.at(-1)!.text).toContain('33.3%');
+    expect(mail.outbox.at(-1)!.text).toContain('7.7%'); // the previous check
+    expect(await insights.evaluate(c.clinicId)).toEqual([]);
+    // the deviation stays a day later: no second message
     await prisma.alertRule.updateMany({ where: { clinicId: c.clinicId }, data: { lastFiredAt: new Date(Date.now() - 25 * 3_600_000) } });
-    expect(await insights.evaluate(c.clinicId)).toEqual(['CANCEL_RATE']);
-    expect(await prisma.auditLog.count({ where: { clinicId: c.clinicId, action: 'alert.fired' } })).toBe(2);
+    expect(await insights.evaluate(c.clinicId)).toEqual([]);
+    expect(mail.outbox.length).toBe(before + 1);
+    expect(await prisma.auditLog.count({ where: { clinicId: c.clinicId, action: 'alert.fired' } })).toBe(1);
   });
 
   it('падіння завершених візитів проти попереднього періоду і заявки, що чекають довго', async () => {
@@ -206,6 +214,7 @@ describe('сигнали керівнику', () => {
     await visits(c.clinicId, 8, 'VISITED', 2); // this week: down 60%
     for (let i = 0; i < 2; i++) await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: `c${i}`, kind: 'BOOKING', summary: 'x', createdAt: new Date(Date.now() - 6 * 3_600_000) } });
     await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: 'fresh', kind: 'BOOKING', summary: 'x' } });
+    await normal(c.clinicId);
     expect((await insights.evaluate(c.clinicId)).sort()).toEqual(['RETURN_DROP', 'STALE_REQUESTS']);
     expect((await prisma.alertRule.findUniqueOrThrow({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'RETURN_DROP' } } })).lastValue).toBe(60);
   });
@@ -263,6 +272,9 @@ describe('сигнали керівнику', () => {
     expect(Date.parse(drop.prevTo)).toBe(Date.parse(drop.from));
     expect(Date.parse(drop.to) - Date.parse(drop.from)).toBe(14 * day);
     await http().patch('/alerts/RETURN_DROP').set(auth(c.token)).send({ enabled: true }).expect(200);
+    // switching the email on records the state first: the drop that was already there is not sent
+    expect(await insights.evaluate(c.clinicId)).toEqual([]);
+    await normal(c.clinicId, 'RETURN_DROP');
     expect(await insights.evaluate(c.clinicId)).toEqual(['RETURN_DROP']);
   });
 
@@ -378,10 +390,11 @@ describe('сигнали керівнику', () => {
     expect(await summary(start.token)).toEqual({ inPlan: false });
   });
 
-  it('Telegram для кожного сигналу: окремо від пошти й push; відкриття і збереження нічого не шлють; невдала доставка не записується; раз на добу; два прогони не шлють двічі', async () => {
+  it('Telegram для кожного сигналу: окремо від пошти й push; відкриття і збереження нічого не шлють; невдала доставка повторюється лише їй; два прогони не шлють двічі', async () => {
     const { StaffNotifierService } = await import('../src/automations/staff-notifier.service');
     const staff = app.get(StaffNotifierService);
     const deliver = jest.spyOn(staff, 'deliver');
+    const chat = jest.spyOn(staff, 'chat').mockResolvedValue({ id: '-100', title: 'Команда' });
     try {
       const c = await clinic();
       for (let i = 0; i < 3; i++) await prisma.bookingRequest.create({ data: { clinicId: c.clinicId, channel: 'TELEGRAM', chatId: `t${i}`, kind: 'BOOKING', summary: 'x', createdAt: new Date(Date.now() - 6 * 3_600_000) } });
@@ -390,22 +403,26 @@ describe('сигнали керівнику', () => {
       expect(deliver).not.toHaveBeenCalled();
       const rule = () => prisma.alertRule.findUniqueOrThrow({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } } });
       expect(await rule()).toMatchObject({ telegram: true, enabled: false });
-      // a failed delivery is not recorded as sent
+      await normal(c.clinicId, 'STALE_REQUESTS');
+      // a refused delivery is not recorded as sent; the event exists once
       deliver.mockResolvedValueOnce('rejected');
-      expect(await insights.evaluate(c.clinicId)).toEqual([]);
-      expect(await rule()).toMatchObject({ telegramSentAt: null, telegramClaimAt: null });
-      expect(await prisma.auditLog.count({ where: { clinicId: c.clinicId, action: 'alert.telegram_failed' } })).toBe(1);
-      // two runs at once: one message; the text is aggregate only, with the link
+      expect(await insights.evaluate(c.clinicId)).toEqual(['STALE_REQUESTS']);
+      expect(await rule()).toMatchObject({ telegramSentAt: null, evalState: 'FIRED' });
+      expect(await prisma.signalDelivery.findFirstOrThrow({ where: { clinicId: c.clinicId } })).toMatchObject({ channel: 'TG_GROUP', status: 'FAILED', attempts: 1 });
+      expect(await prisma.auditLog.count({ where: { clinicId: c.clinicId, action: 'alert.delivery_failed' } })).toBe(1);
+      // two runs at once: no new event, the refused delivery is tried once more; the text is aggregate only, with the link
       deliver.mockResolvedValue('sent');
       const [x, y] = await Promise.all([insights.evaluate(c.clinicId), insights.evaluate(c.clinicId)]);
-      expect([...x, ...y]).toEqual(['STALE_REQUESTS']);
+      expect([...x, ...y]).toEqual([]);
       expect(deliver).toHaveBeenCalledTimes(2);
-      expect(deliver.mock.calls.at(-1)![1]).toMatch(/заявок.*: 3[\s\S]*\/signals/);
+      expect(deliver.mock.calls.at(-1)![1]).toMatch(/3 заявки чекають понад 4 год\.[\s\S]*\/signals\/STALE_REQUESTS\?c=/);
       expect((await rule()).telegramSentAt).not.toBeNull();
-      expect(await insights.evaluate(c.clinicId)).toEqual([]); // quiet for a day
-      // switched off: no delivery even when due again; email/push stay as they were
-      await prisma.alertRule.update({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } }, data: { telegramSentAt: new Date(Date.now() - 25 * 3_600_000) } });
+      expect(await insights.evaluate(c.clinicId)).toEqual([]);
+      expect(deliver).toHaveBeenCalledTimes(2);
+      // switched off: nothing even after a recovery and a new deviation
       await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ telegram: false }).expect(200);
+      await normal(c.clinicId, 'STALE_REQUESTS');
+      await prisma.alertRule.update({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } }, data: { lastFiredAt: new Date(Date.now() - 25 * 3_600_000) } });
       expect(await insights.evaluate(c.clinicId)).toEqual([]);
       expect(deliver).toHaveBeenCalledTimes(2);
       expect(await rule()).toMatchObject({ enabled: false, telegram: false });
@@ -416,6 +433,7 @@ describe('сигнали керівнику', () => {
       await http().patch('/alerts/STALE_REQUESTS').set(auth(start.token)).send({ telegram: true }).expect(400);
     } finally {
       deliver.mockRestore();
+      chat.mockRestore();
     }
   });
 
@@ -428,6 +446,7 @@ describe('сигнали керівнику', () => {
       const rule = () => prisma.alertRule.findUniqueOrThrow({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } } });
       // email only
       await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ enabled: true }).expect(200);
+      await normal(c.clinicId, 'STALE_REQUESTS');
       let mails = mail.outbox.length;
       expect(await insights.evaluate(c.clinicId)).toEqual(['STALE_REQUESTS']);
       expect(mail.outbox.length).toBe(mails + 1);
@@ -436,6 +455,7 @@ describe('сигнали керівнику', () => {
       // Push only
       await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ enabled: false, push: true }).expect(200);
       await prisma.alertRule.update({ where: { clinicId_kind: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } }, data: { lastFiredAt: new Date(Date.now() - 25 * 3_600_000) } });
+      await normal(c.clinicId, 'STALE_REQUESTS');
       mails = mail.outbox.length;
       expect(await insights.evaluate(c.clinicId)).toEqual(['STALE_REQUESTS']);
       expect(push).toHaveBeenCalledTimes(1);
@@ -455,6 +475,7 @@ describe('сигнали керівнику', () => {
     const { PushService } = await import('../src/push/push.service');
     const { NetworkService } = await import('../src/network/network.service');
     const deliver = jest.spyOn(app.get(StaffNotifierService), 'deliver').mockResolvedValue('sent');
+    const chat = jest.spyOn(app.get(StaffNotifierService), 'chat').mockResolvedValue({ id: '-100', title: 'Команда' });
     const push = jest.spyOn(app.get(PushService), 'notify').mockResolvedValue(undefined as never);
     const network = app.get(NetworkService);
     let access: jest.SpyInstance | undefined;
@@ -483,6 +504,7 @@ describe('сигнали керівнику', () => {
       await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ active: false, push: false }).expect(400);
       expect(await rule()).toMatchObject({ active: false, enabled: true, push: true, telegram: true });
       // switched off between the check and the claim (a run already in progress): still nothing sent
+      await normal(c.clinicId, 'STALE_REQUESTS');
       const realFind = prisma.alertRule.findMany.bind(prisma.alertRule);
       const findSpy = jest.spyOn(prisma.alertRule, 'findMany').mockImplementationOnce((async () => (await realFind({ where: { clinicId: c.clinicId, kind: 'STALE_REQUESTS' } })).map((r) => ({ ...r, active: true }))) as never);
       expect(await insights.evaluate(c.clinicId)).toEqual([]);
@@ -493,6 +515,7 @@ describe('сигнали керівнику', () => {
       await http().patch('/alerts/STALE_REQUESTS').set(auth(c.token)).send({ active: true }).expect(200);
       expect(await sig(c.token, 'STALE_REQUESTS')).toMatchObject({ state: 'fired', active: true, value: 3, emailOn: true, pushOn: true, telegramOn: true });
       expect((await network.signals(c.userId, 'n')).signals.find((x) => x.kind === 'STALE_REQUESTS')).toMatchObject({ fired: true });
+      await normal(c.clinicId, 'STALE_REQUESTS');
       const before = mail.outbox.length;
       expect(await insights.evaluate(c.clinicId)).toEqual(['STALE_REQUESTS']);
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -510,6 +533,7 @@ describe('сигнали керівнику', () => {
       await http().patch('/alerts/STALE_REQUESTS').set(auth(start.token)).send({ active: true }).expect(400);
     } finally {
       deliver.mockRestore();
+      chat.mockRestore();
       push.mockRestore();
       access?.mockRestore();
     }

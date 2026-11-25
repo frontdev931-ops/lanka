@@ -53,7 +53,7 @@ const T: Record<Lang, Record<string, string>> = {
 const langOf = (code?: string): Lang => (code?.startsWith('ru') ? 'ru' : code?.startsWith('en') ? 'en' : 'uk');
 const fill = (s: string, v: Record<string, string>) => s.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '');
 
-export type LeaderKind = 'digest' | 'signals';
+export type LeaderKind = 'digest' | 'signals' | 'weekly' | 'monthly';
 
 @Injectable()
 export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDestroy {
@@ -128,9 +128,11 @@ export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDe
     return {
       available: this.available,
       bot: this.available ? this.username : null,
-      me: me ? { tgName: me.tgName, digest: me.digest, signals: me.signals, blocked: !!me.blockedAt, connectedAt: me.createdAt } : null,
+      me: me ? { tgName: me.tgName, digest: me.digest, signals: me.signals, weekly: me.weekly, monthly: me.monthly, blocked: !!me.blockedAt, connectedAt: me.createdAt } : null,
       digestTo: people.filter((p) => p.digest).map((p) => p.name),
       signalsTo: people.filter((p) => p.signals).map((p) => p.name),
+      weeklyTo: people.filter((p) => p.weekly).map((p) => p.name),
+      monthlyTo: people.filter((p) => p.monthly).map((p) => p.name),
       // still delivered through the clinic's patient bot until each person reconnects (shown as such in the workspace)
       legacy: { digest: legacy, group },
     };
@@ -144,9 +146,21 @@ export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDe
     return { url: `https://t.me/${this.username}?start=l_${token}`, expiresAt };
   }
 
-  async update(clinicId: string, userId: string, d: { digest?: boolean; signals?: boolean }) {
-    const r = await this.prisma.leaderTelegram.updateMany({ where: { clinicId, userId }, data: { ...(d.digest !== undefined ? { digest: d.digest } : {}), ...(d.signals !== undefined ? { signals: d.signals } : {}) } });
-    if (!r.count) throw new NotFoundException('leader_tg_not_connected');
+  // Only the signed-in person's own switches (never another manager's). Switching the weekly or monthly report on records the moment, so a report
+  // that was due before it is never sent to this person.
+  async update(clinicId: string, userId: string, d: { digest?: boolean; signals?: boolean; weekly?: boolean; monthly?: boolean }) {
+    const cur = await this.prisma.leaderTelegram.findUnique({ where: { clinicId_userId: { clinicId, userId } }, select: { weekly: true, monthly: true } });
+    if (!cur) throw new NotFoundException('leader_tg_not_connected');
+    const now = new Date();
+    await this.prisma.leaderTelegram.update({
+      where: { clinicId_userId: { clinicId, userId } },
+      data: {
+        ...(d.digest !== undefined ? { digest: d.digest } : {}),
+        ...(d.signals !== undefined ? { signals: d.signals } : {}),
+        ...(d.weekly !== undefined ? { weekly: d.weekly, ...(d.weekly && !cur.weekly ? { weeklySince: now } : {}) } : {}),
+        ...(d.monthly !== undefined ? { monthly: d.monthly, ...(d.monthly && !cur.monthly ? { monthlySince: now } : {}) } : {}),
+      },
+    });
     await this.prisma.auditLog.create({ data: { clinicId, userId, action: 'leader_tg.settings', details: d } });
     return this.view(clinicId, userId);
   }
@@ -167,7 +181,7 @@ export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDe
       orderBy: { createdAt: 'asc' },
       include: { user: { select: { name: true } } },
     });
-    return rows.map((r) => ({ id: r.id, chatId: r.chatId, lang: r.lang as Lang, name: r.user.name, digest: r.digest, signals: r.signals }));
+    return rows.map((r) => ({ id: r.id, userId: r.userId, chatId: r.chatId, lang: r.lang as Lang, name: r.user.name, digest: r.digest, signals: r.signals, weekly: r.weekly, weeklySince: r.weeklySince, monthly: r.monthly, monthlySince: r.monthlySince }));
   }
 
   // Sends one text to every current recipient of this kind; returns how many Telegram confirmed. A blocked bot marks the connection.
@@ -185,6 +199,28 @@ export class LeaderTelegramService implements OnApplicationBootstrap, OnModuleDe
       }
     }
     return ok;
+  }
+
+  // One message to ONE connection, for a delivery that must know its exact outcome (a signal event, the current state sent to oneself): the
+  // connection must still be a current recipient (not blocked, still the owner or a manager; with `kind`, that kind switched on).
+  // sent; gone (no longer a recipient, or the bot was blocked: 403); rejected (another explicit refusal of Telegram, nothing delivered);
+  // unknown (a network error or a server error: it may have arrived, so it is never repeated).
+  async deliverTo(clinicId: string, leaderId: string, text: (lang: Lang) => string, kind?: LeaderKind): Promise<'sent' | 'gone' | 'rejected' | 'unknown'> {
+    if (!this.token) return 'gone';
+    const r = (await this.recipients(clinicId, kind)).find((x) => x.id === leaderId);
+    if (!r) return 'gone';
+    try {
+      await this.api.sendMessage(this.token, r.chatId, text(r.lang));
+      return 'sent';
+    } catch (e) {
+      const code = e instanceof TelegramError ? e.code : undefined;
+      if (code === 403) {
+        await this.prisma.leaderTelegram.update({ where: { id: r.id }, data: { blockedAt: new Date() } }).catch(() => undefined);
+        return 'gone';
+      }
+      this.log.warn(`Службовий бот: не доставлено (${(e as Error).message})`);
+      return code !== undefined && code >= 400 && code < 500 ? 'rejected' : 'unknown';
+    }
   }
 
   // ---------- the bot ----------

@@ -10,9 +10,11 @@ import { useConfirm } from './ConfirmDialog';
 interface View {
   available: boolean;
   bot: string | null;
-  me: { tgName: string; digest: boolean; signals: boolean; blocked: boolean; connectedAt: string } | null;
+  me: { tgName: string; digest: boolean; signals: boolean; weekly: boolean; monthly: boolean; blocked: boolean; connectedAt: string } | null;
   digestTo: string[];
   signalsTo: string[];
+  weeklyTo: string[];
+  monthlyTo: string[];
   legacy: { digest: { id: string; name: string }[]; group: string | null };
 }
 
@@ -68,6 +70,9 @@ export function LeaderTelegramCard() {
             {v.me.blocked && <Alert tone="warn">{t('ltg.blockedText')}</Alert>}
             <Switch checked={v.me.digest} disabled={busy} onChange={(on) => void patch({ digest: on })} label={t('ltg.digest')} hint={t('ltg.digestHint')} />
             <Switch checked={v.me.signals} disabled={busy} onChange={(on) => void patch({ signals: on })} label={t('ltg.signals')} hint={t('ltg.signalsHint')} />
+            {/* only this person's own subscriptions; the clinic's schedule is in Reports → Scheduled */}
+            <Switch checked={v.me.weekly} disabled={busy} onChange={(on) => void patch({ weekly: on })} label={t('pr.weekly')} hint={t('pr.mySubHint')} />
+            <Switch checked={v.me.monthly} disabled={busy} onChange={(on) => void patch({ monthly: on })} label={t('pr.monthly')} hint={t('pr.mySubHint')} />
             <div className="toolbar">
               <button className="btn btn-sm" disabled={busy} onClick={async () => (await ask(t('ltg.offConfirm'), { danger: true, confirmLabel: t('ltg.disconnect') })) && run(async () => { setV(await api<View>('/leader-telegram', { method: 'DELETE' })); setLink(null); })}>
                 {t('ltg.disconnect')}
@@ -99,6 +104,8 @@ export function LeaderTelegramCard() {
           <ul className="rule" style={{ margin: '6px 0 0', paddingLeft: 20 }}>
             <li>{t('ltg.whoDigest', { names: names(v.digestTo) })}</li>
             <li>{t('ltg.whoSignals', { names: names(v.signalsTo) })}</li>
+            <li>{t('pr.whoWeekly', { names: names(v.weeklyTo ?? []) })}</li>
+            <li>{t('pr.whoMonthly', { names: names(v.monthlyTo ?? []) })}</li>
           </ul>
           {(v.legacy.digest.length > 0 || v.legacy.group) && (
             <>

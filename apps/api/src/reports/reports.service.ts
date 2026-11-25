@@ -9,6 +9,7 @@ import { cellLabel, headLabel } from './report-export';
 import { MIXED, MoneyKind, RowCur, finishCurrency, CurrencyInfo } from './report-currency';
 import { Cur, MoneyTotal, clinicMoneyCurrency, effectiveCurrency, formatTotals, sumByCurrency } from '../common/money';
 import { lankaMoves } from './lanka-moves';
+import { KNOWN_RESULT_STATUSES, MISSED_STATUSES, NO_RESULT_STATUSES } from './visit-outcome';
 
 // Cliniccards statuses: the visit took place / the appointment is no longer valid.
 const DONE = 'VISITED';
@@ -361,6 +362,35 @@ export class ReportsService {
     return [...months.values()]
       .sort((a, b) => b.month.localeCompare(a.month) || String(a.currency ?? '~').localeCompare(String(b.currency ?? '~')))
       .map((m) => ({ month: m.month, invoiced: Math.round(m.invoiced), paid: Math.round(m.paid), paymentsCount: m.paymentsCount, currency: m.currency }));
+  }
+
+  // The figures of one period [since, end) for the weekly and monthly reports to managers and their page in the workspace: ONE calculation, so
+  // the numbers in Telegram and in LANKA are the same for the same dates.
+  // - completed: visits with the status "visited" by their time;
+  // - newPatients: patient cards created in Cliniccards in the period (createdAtExt), removed cards not counted (the digest's and the funnel's
+  //   definition);
+  // - cancelled / noShow out of `scheduled`: the visits with a known result (visit-outcome.ts: visited, in the clinic, in the chair, no-show,
+  //   cancelled, moved), the same lists as the signal "Cancellations and no-shows"; visits with no result mark (planned, confirmed, not
+  //   confirmed, a booking) are NOT in the share and are counted apart (`unclosed`);
+  // - paid: received payments by their payment date, per currency stamp (never one sum across currencies), the "Paid" of the "Revenue" report.
+  async periodSummary(clinicId: string, since: Date, end: Date) {
+    const clinicCur = await clinicMoneyCurrency(this.prisma, clinicId);
+    const [byStatus, newPatients, pay] = await Promise.all([
+      this.prisma.visit.groupBy({ by: ['status'], where: { clinicId, startsAt: { gte: since, lt: end } }, _count: true }),
+      this.prisma.patient.count({ where: { clinicId, removedAt: null, createdAtExt: { gte: since, lt: end } } }),
+      this.prisma.payment.findMany({ where: { clinicId, paidAt: { gte: since, lt: end } }, select: { amount: true, currency: true } }),
+    ]);
+    const c = (...st: string[]) => byStatus.filter((x) => st.includes(x.status)).reduce((n, x) => n + x._count, 0);
+    return {
+      completed: c('VISITED'),
+      cancelled: c(MISSED_STATUSES[0]),
+      noShow: c(MISSED_STATUSES[1]),
+      scheduled: c(...KNOWN_RESULT_STATUSES),
+      unclosed: c(...NO_RESULT_STATUSES),
+      newPatients,
+      paid: sumByCurrency(pay.map((x) => ({ currency: effectiveCurrency(x.currency, clinicCur), amount: x.amount }))).map((x) => ({ currency: x.currency, amount: Math.round(x.amount) })),
+      paymentsCount: pay.length,
+    };
   }
 
   // Free time. If Cliniccards has doctor shifts: the shift minus the doctor's appointments minus the reserved time
