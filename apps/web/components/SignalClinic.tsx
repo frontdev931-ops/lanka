@@ -1,7 +1,7 @@
 'use client';
 
 import { ReactNode, useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import { api, isUnauthorized } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { Alert, Loading } from './ui';
 
@@ -23,12 +23,13 @@ export function SignalClinic({ children }: { children: ReactNode }) {
     if (!want) return;
     Promise.all([api<{ clinicId?: string }>('/auth/me'), api<{ id: string; name: string }[]>('/auth/clinics').catch(() => [])])
       .then(([me, clinics]) => setState({ current: me.clinicId ?? null, clinics }))
-      .catch(() => setState({ current: null, clinics: [] }));
+      // signed out: nothing is shown and nothing opens; the app shell sends the person to the sign-in and back to this address
+      .catch((e) => (isUnauthorized(e) ? undefined : setError((e as Error).message)));
   }, [want]);
 
   if (want === undefined) return <Loading />;
   if (!want) return <>{children}</>;
-  if (!state) return <Loading />;
+  if (!state) return error ? <Alert tone="error">{error}</Alert> : <Loading />;
   if (!state.current || want === state.current) return <>{children}</>;
   const target = state.clinics.find((c) => c.id === want);
   const here = state.clinics.find((c) => c.id === state.current);

@@ -1086,6 +1086,10 @@ model Review {
 }
 
 // Push subscription of one browser or phone (PWA) of a staff member: used to tell them about new requests
+// One device of one person (2026-11-25): the endpoint is unique, so switching on again on the same device never makes a second row, and a device
+// passed to another person stops serving the first. Which clinics a device hears from is NOT stored here: a message of a clinic goes to the
+// devices of people who are members of that clinic with a suitable role at the moment of sending (clinicId only records where it was switched
+// on). enabledAt: when this person switched it on (an event older than that is never delivered to it); lang: the language of the texts.
 model PushSubscription {
   id        String   @id @default(cuid())
   clinicId  String
@@ -1093,6 +1097,8 @@ model PushSubscription {
   endpoint  String   @unique
   p256dh    String
   auth      String
+  lang      String   @default("uk")
+  enabledAt DateTime @default(now())
   createdAt DateTime @default(now())
   clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 

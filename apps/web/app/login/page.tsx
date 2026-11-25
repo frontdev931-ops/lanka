@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import { safeNext } from '../../lib/safe-next';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api } from '../../lib/api';
@@ -18,6 +19,8 @@ interface LoginResult {
 
 export default function LoginPage() {
   const router = useRouter();
+  // back to the page that asked for the sign-in (?next=, a path of this app only)
+  const next = () => safeNext(new URLSearchParams(window.location.search).get('next')) ?? '/dashboard';
   const t = useT();
   const [register, setRegister] = useState(false);
   // A link from the site ("Connect your clinic") opens the registration form
@@ -47,7 +50,7 @@ export default function LoginPage() {
         body: JSON.stringify(register ? { ...f, acceptTerms: f.acceptTerms === 'on' } : f),
       });
       if (res.accessToken) {
-        router.push('/dashboard'); // the server has already set the session cookie
+        router.push(next()); // the server has already set the session cookie
       } else if (res.twoFactorRequired) {
         setCreds({ email: f.email, password: f.password });
         setClinics(res.clinics ?? []);
@@ -68,7 +71,7 @@ export default function LoginPage() {
     if (!creds) return;
     try {
       const res = await api<LoginResult>('/auth/login', { method: 'POST', body: JSON.stringify({ ...creds, clinicId }) });
-      if (res.accessToken) router.push('/dashboard');
+      if (res.accessToken) router.push(next());
     } catch (err) {
       setError((err as Error).message);
     }
@@ -81,7 +84,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       const res = await api<LoginResult>('/auth/login', { method: 'POST', body: JSON.stringify({ ...creds, code: code.trim(), ...(clinics.length > 1 ? { clinicId: pickClinic } : {}) }) });
-      if (res.accessToken) router.push('/dashboard');
+      if (res.accessToken) router.push(next());
     } catch (err) {
       setError((err as Error).message);
     } finally {

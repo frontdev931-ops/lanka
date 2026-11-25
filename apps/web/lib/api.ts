@@ -46,6 +46,9 @@ export async function upload<T>(path: string, file: File): Promise<T> {
 }
 
 export async function logout() {
+  // this device stops receiving Push for the person who signs out (before the session ends, while the server still knows who it is)
+  const { releasePushOnSignOut } = await import('./push-device');
+  await releasePushOnSignOut();
   await send('/auth/logout', { method: 'POST' }).catch(() => undefined);
 }
 

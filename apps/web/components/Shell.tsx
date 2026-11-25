@@ -126,7 +126,8 @@ export default function Shell({ children }: { children: ReactNode }) {
     api<Me>('/auth/me')
       .then(setMe)
       .catch((e) => {
-        if (isUnauthorized(e)) router.replace('/login');
+        // a lapsed session: sign in, then back to this very page (a notification's link keeps working)
+        if (isUnauthorized(e)) router.replace(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
       });
   }, [router]);
 

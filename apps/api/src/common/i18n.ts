@@ -582,6 +582,21 @@ const ERRORS: Record<string, Record<Lang, string>> = {
     ru: 'Telegram не принял сообщение. Попробуйте позже.',
     en: 'Telegram did not accept the message. Try again later.',
   },
+  push_not_configured: {
+    uk: 'Push-сповіщення не налаштовані на сервері.',
+    ru: 'Push-уведомления не настроены на сервере.',
+    en: 'Push notifications are not configured on the server.',
+  },
+  push_not_found: {
+    uk: 'На цьому пристрої сповіщення не ввімкнено.',
+    ru: 'На этом устройстве уведомления не включены.',
+    en: 'Notifications are not on for this device.',
+  },
+  bad_push_endpoint: {
+    uk: 'Недійсна підписка на сповіщення.',
+    ru: 'Недействительная подписка на уведомления.',
+    en: 'Invalid notification subscription.',
+  },
   too_many_saved: {
     uk: 'Забагато збережених звітів (максимум 100)',
     ru: 'Слишком много сохранённых отчётов (максимум 100)',

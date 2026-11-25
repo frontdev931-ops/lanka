@@ -6,7 +6,8 @@ import { decrypt } from '../common/crypto';
 import { normalizePhone } from '../common/phone';
 import { matchInquiries } from '../inquiries/match';
 import { PrismaService } from '../prisma/prisma.service';
-import { PushService } from '../push/push.service';
+import { PUSH_ROLES, PushService } from '../push/push.service';
+import { leadPush } from '../push/push-text';
 import { accessBlocked, billingEnforced } from '../service/plans';
 import { InboundService } from './inbound.service';
 import { FacebookApi, MetaApiError, MetaLead } from './meta-graph.api';
@@ -330,7 +331,7 @@ export class LeadsService {
     const where = [lead.utmSource, lead.utmCampaign].filter(Boolean).join(' / ');
     await this.staff.notify(clinicId, `Нове звернення (${channel}${where ? `, ${where}` : ''}): ${lead.name ?? 'без імені'}${phone ? `, ${phone}` : lead.email ? `, ${lead.email}` : ''}${lead.message ? `\n«${lead.message.slice(0, 200)}»` : ''}\n\nВідкрити: ${(process.env.WEB_ORIGIN ?? '').replace(/\/$/, '')}/inquiries`).catch(() => undefined);
     // the phone notification carries no names or numbers
-    await this.push.notify(clinicId, { title: 'Нове звернення', body: 'З сайту або реклами', url: '/inquiries', tag: `lead-${row.id}` }).catch(() => undefined);
+    await this.push.notify(clinicId, leadPush(), { url: '/inquiries', tag: `lead-${row.id}`, roles: PUSH_ROLES.requests, ttl: 2 * 3600 }).catch(() => undefined);
     return { id: row.id, duplicate: false };
   }
 

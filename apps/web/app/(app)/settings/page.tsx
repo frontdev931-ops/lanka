@@ -16,6 +16,7 @@ import { ClinicContacts } from '../../../components/ClinicContacts';
 import { ChannelSettings } from '../../../components/ChannelSettings';
 import { BillingSettings } from '../../../components/BillingSettings';
 import { SendingSettings } from '../../../components/SendingSettings';
+import { PushDeviceCard } from '../../../components/PushCard';
 import { AiGeneralSettings, AiLimitCard } from '../../../components/AiGeneralSettings';
 
 interface Me {
@@ -125,6 +126,8 @@ export default function SettingsPage() {
       {canAudit && <SendingSettings />}
       {/* the manager's own Telegram for reports and signals (the LANKA service bot, not the clinic's patient bot) */}
       {canAudit && <LeaderTelegramCard />}
+      {/* Push on THIS device (owner, manager, administrator: the roles Push events go to) */}
+      {(canAudit || role === 'ADMIN') && <PushDeviceCard />}
       {/* the clinic's own AI allowance field: only for a clinic without the Payment tab (the demo) */}
       {canAudit && !canPay && <AiLimitCard />}
       {canAudit && <AiGeneralSettings />}

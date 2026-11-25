@@ -8,7 +8,7 @@ import { fmtDateTime } from '../../../lib/ui';
 import { Alert, Loading, PageHeader } from '../../../components/ui';
 import { Kind, rich, Signal, signalText, State } from '../../../components/signalText';
 import { ProHint } from '../../../components/ProHint';
-import { usePushDevice } from '../../../components/PushCard';
+import { usePushDevice } from '../../../lib/push-device';
 import { SignalClinic } from '../../../components/SignalClinic';
 
 interface View {
@@ -46,13 +46,13 @@ export default function SignalsPage() {
 }
 
 function Signals() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [overview, setOverview] = useState(false);
   const [v, setV] = useState<View | null>(null);
   const [error, setError] = useState('');
   const [order, setOrder] = useState<Kind[] | null>(null);
   // Push on this device: only in the installed app; a browser tab shows no Push controls (the saved preferences stay)
-  const device = usePushDevice();
+  const device = usePushDevice(locale);
   const load = useCallback(() => {
     setError('');
     return api<View>('/signals')
@@ -124,15 +124,15 @@ function Signals() {
           <Link href="/settings#leader-telegram">{v.telegram.me ? t('sig.mySettings') : t('ltg.connect')}</Link>
         </p>
       </section>
-      {device.state === 'ask' && (
+      {/* Push of this device is set up in Settings → General → Push (the permission is asked only there, on a click) */}
+      {(device.state === 'off' || device.state === 'granted_no_server') && (
         <Alert tone="info">
-          {t('sig.pushAsk')} <button className="btn btn-sm" disabled={device.busy} onClick={() => void device.enable()}>{t('sig.pushEnable')}</button>
+          {t('sig.pushAsk')} <Link href="/settings#push">{t('sig.pushEnable')}</Link>
         </Alert>
       )}
-      {device.state === 'denied' && <Alert tone="warn">{t('sig.pushDenied')}</Alert>}
-      {device.error && <Alert tone="error">{device.error}</Alert>}
+      {device.state === 'denied' && <Alert tone="warn">{t('sig.pushDenied')} <Link href="/settings#push">{t('pushd.title')}</Link></Alert>}
       <div className="signal-list">
-        {list.map((s) => <SignalCard key={s.kind} s={s} reach={reach} pushHere={device.state === 'active'} onSaved={load} />)}
+        {list.map((s) => <SignalCard key={s.kind} s={s} reach={reach} pushHere={device.state === 'on'} onSaved={load} />)}
       </div>
       <p className="sig-foot">{t('sig.checkedAt', { date: fmtDateTime(v.checkedAt) })}</p>
       {overview && <OverviewDialog me={v.telegram.me} onClose={() => setOverview(false)} />}

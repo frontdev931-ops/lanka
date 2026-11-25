@@ -7,7 +7,8 @@ import { startOfClinicDay } from '../common/clinic-time';
 import { clinicMoneyCurrency, effectiveCurrency } from '../common/money';
 import { Lang } from '../common/i18n';
 import { PrismaService } from '../prisma/prisma.service';
-import { PushService } from '../push/push.service';
+import { PUSH_ROLES, PushService } from '../push/push.service';
+import { signalPush } from '../push/push-text';
 import { ROW_LIMIT_MAX, ReportBuilderService, ReportSpec } from '../report-builder/report-builder.service';
 import { ReportsService } from '../reports/reports.service';
 import { toPdf, toXlsx } from '../reports/report-export';
@@ -573,8 +574,9 @@ export class InsightsService implements OnApplicationBootstrap, OnModuleDestroy 
           }
         }
       } else {
-        // the Push notification carries no numbers or names
-        await this.push.notify(clinicId, { title: pushTitle(d.event.kind), body: 'Є відхилення в роботі клініки', url: `/signals/${d.event.kind}?c=${clinicId}&e=${d.event.id}`, tag: `alert-${d.event.kind}` }).catch(() => undefined);
+        // the Push notification carries no numbers or names; only the owner's and the managers' devices (the Signals roles), on a plan with
+        // signals, and only devices switched on before the event (nothing accumulated); the event's own tag, so a repeat replaces, never adds
+        await this.push.notify(clinicId, signalPush((lang) => pushTitle(d.event.kind, lang)), { url: `/signals/${d.event.kind}?c=${clinicId}&e=${d.event.id}`, tag: `signal-${d.event.id}`, roles: PUSH_ROLES.signals, ttl: 6 * 3600, notBefore: d.event.createdAt, feature: 'advanced_analytics' }).catch(() => undefined);
         outcome = 'sent';
       }
       const status = { sent: 'SENT', failed: 'FAILED', unknown: 'UNKNOWN', dropped: 'DROPPED' }[outcome];

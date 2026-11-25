@@ -1,137 +1,114 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import { useEffect, useRef } from 'react';
 import { useI18n } from '../lib/i18n';
+import { Platform, PushState, usePushDevice } from '../lib/push-device';
 import { Alert, Badge, Card } from './ui';
+import { Switch } from './Switch';
 
-interface Status {
-  available: boolean;
-  publicKey: string | null;
-  devices: number;
-}
-
-const toKey = (b64: string) => {
-  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
-  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
-  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+const INSTALL: Record<Platform, string> = {
+  ios: 'pushd.installIos',
+  android: 'pushd.installAndroid',
+  desktop_chromium: 'pushd.installChromium',
+  desktop_safari: 'pushd.installSafari',
+  desktop_firefox: 'pushd.installFirefox',
+  other: 'pushd.installOther',
+};
+const DENIED: Record<Platform, string> = {
+  ios: 'pushd.deniedIos',
+  android: 'pushd.deniedAndroid',
+  desktop_chromium: 'pushd.deniedDesktop',
+  desktop_safari: 'pushd.deniedDesktop',
+  desktop_firefox: 'pushd.deniedDesktop',
+  other: 'pushd.deniedDesktop',
+};
+const BADGE: Record<PushState, { tone: 'green' | 'gray' | 'amber'; key: string }> = {
+  loading: { tone: 'gray', key: 'pushd.badgeOff' },
+  server_off: { tone: 'gray', key: 'pushd.badgeOff' },
+  browser: { tone: 'gray', key: 'pushd.badgeBrowser' },
+  unsupported: { tone: 'gray', key: 'pushd.badgeOff' },
+  off: { tone: 'gray', key: 'pushd.badgeOff' },
+  denied: { tone: 'amber', key: 'pushd.badgeDenied' },
+  granted_no_server: { tone: 'amber', key: 'pushd.badgeOff' },
+  on: { tone: 'green', key: 'pushd.badgeOn' },
+  error: { tone: 'amber', key: 'pushd.badgeError' },
 };
 
-// Phone notifications about new requests from chats. They work in the installed app (and in desktop browsers); on iPhone only after "Add to Home Screen".
-export function PushCard() {
-  const { t } = useI18n();
-  const [st, setSt] = useState<Status | null>(null);
-  const [here, setHere] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [info, setInfo] = useState('');
-
-  const supported = typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-
-  const load = useCallback(async () => {
-    setSt(await api<Status>('/push'));
-    if (supported) {
-      const reg = await navigator.serviceWorker.getRegistration();
-      setHere(!!(await reg?.pushManager.getSubscription()));
-    }
-  }, [supported]);
+// Settings → General → "Push notifications" (#push): the switch of THIS device only (another phone or computer is not changed), with every state
+// told apart. The list says exactly which events send Push today.
+export function PushDeviceCard() {
+  const { t, locale } = useI18n();
+  const d = usePushDevice(locale);
+  const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    load().catch((e) => setError((e as Error).message));
-  }, [load]);
-
-  const toggle = async () => {
-    if (!st?.publicKey) return;
-    setBusy(true);
-    setError('');
-    setInfo('');
-    try {
-      const reg = await navigator.serviceWorker.ready;
-      const existing = await reg.pushManager.getSubscription();
-      if (existing) {
-        await api('/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint: existing.endpoint }) });
-        await existing.unsubscribe();
-      } else {
-        if ((await Notification.requestPermission()) !== 'granted') throw new Error(t('push.denied'));
-        const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: toKey(st.publicKey) });
-        const j = s.toJSON() as { endpoint: string; keys: { p256dh: string; auth: string } };
-        await api('/push/subscribe', { method: 'POST', body: JSON.stringify({ endpoint: j.endpoint, keys: j.keys }) });
-        setInfo(t('push.on'));
-      }
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!st) return error ? <Alert tone="error">{error}</Alert> : null;
+    if (d.state !== 'loading' && window.location.hash === '#push') ref.current?.scrollIntoView({ block: 'start' });
+  }, [d.state]);
+  const tk = t as (k: string, v?: Record<string, string | number>) => string;
+  const on = d.state === 'on';
+  // the switch can act in these states; elsewhere the state's own explanation says what to do
+  const actionable = d.state === 'on' || d.state === 'off' || d.state === 'granted_no_server' || d.state === 'error';
   return (
-    <Card title={t('push.title')} actions={<Badge tone={here ? 'green' : 'gray'}>{here ? t('push.thisOn') : t('push.thisOff')}</Badge>}>
-      {error && <Alert tone="error">{error}</Alert>}
-      {info && <Alert tone="success">{info}</Alert>}
-      <p className="rule" style={{ marginTop: 0 }}>{t('push.intro')}</p>
-      {!st.available ? (
-        <Alert tone="warn">{t('push.notConfigured')}</Alert>
-      ) : !supported ? (
-        <Alert tone="info">{t('push.unsupported')}</Alert>
-      ) : (
-        <div className="toolbar">
-          <button className={here ? 'btn' : 'btn btn-primary'} disabled={busy} onClick={toggle}>{here ? t('push.turnOff') : t('push.turnOn')}</button>
-          {here && <button className="btn" disabled={busy} onClick={() => api<{ sent: number }>('/push/test', { method: 'POST' }).then((r) => setInfo(r.sent ? t('push.testSent') : t('push.testFail'))).catch((e) => setError((e as Error).message))}>{t('push.test')}</button>}
+    <div id="push" ref={ref} style={{ scrollMarginTop: 80 }}>
+      <Card title={t('pushd.title')} actions={<Badge tone={BADGE[d.state].tone}>{tk(BADGE[d.state].key)}</Badge>}>
+        <p className="rule" style={{ marginTop: 0 }}>{t('pushd.intro')}</p>
+        {d.state === 'loading' && <p className="muted">…</p>}
+        {d.state === 'server_off' && <Alert tone="info">{t('pushd.serverOff')}</Alert>}
+        {d.state === 'browser' && (
+          <Alert tone="info">
+            <b>{t('pushd.browser')}</b>
+            <br />
+            {tk(INSTALL[d.platform])}
+          </Alert>
+        )}
+        {d.state === 'unsupported' && <Alert tone="warn">{d.platform === 'ios' ? t('pushd.unsupportedIos') : t('pushd.unsupported')}</Alert>}
+        {d.state === 'denied' && (
+          <Alert tone="warn">
+            <b>{t('pushd.denied')}</b>
+            <br />
+            {tk(DENIED[d.platform])}
+          </Alert>
+        )}
+        {d.state === 'granted_no_server' && <Alert tone="info">{d.reconfirm ? t('pushd.reconfirm') : t('pushd.grantedNoServer')}</Alert>}
+        {d.state === 'error' && (
+          <Alert tone="error">
+            {t('pushd.error')} {d.error && <span className="muted">({d.error})</span>}{' '}
+            <button className="btn btn-sm" disabled={d.busy} onClick={() => void d.retry()}>{t('sig.retry')}</button>
+          </Alert>
+        )}
+        {actionable && (
+          <Switch
+            checked={on}
+            disabled={d.busy}
+            onChange={(v) => void (v ? d.enable() : d.disable())}
+            label={t('pushd.switch')}
+            hint={t('pushd.switchHint')}
+          />
+        )}
+        {d.state === 'on' && d.note === 'off_failed' && (
+          <Alert tone="error">
+            {t('pushd.offFailed')} <button className="btn btn-sm" disabled={d.busy} onClick={() => void d.disable()}>{t('sig.retry')}</button>
+          </Alert>
+        )}
+        {d.state === 'on' && d.error && d.note !== 'off_failed' && <Alert tone="error">{d.error}</Alert>}
+        {d.note === 'off_ok' && <Alert tone="success">{t('pushd.offOk')}</Alert>}
+        {d.note === 'browser_kept' && <Alert tone="success">{t('pushd.offOkBrowserKept')}</Alert>}
+        {d.note === 'test_sent' && <Alert tone="success">{t('pushd.testSent')}</Alert>}
+        {d.note === 'test_failed' && <Alert tone="warn">{t('pushd.testFailed')}</Alert>}
+        {on && (
+          <div className="toolbar" style={{ marginTop: 8 }}>
+            <button className="btn btn-sm" disabled={d.busy} onClick={() => void d.test()}>{t('pushd.test')}</button>
+          </div>
+        )}
+        <div className="rule-card" style={{ marginTop: 12 }}>
+          <b style={{ fontSize: 14 }}>{t('pushd.whatTitle')}</b>
+          <ul className="rule" style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+            <li>{t('pushd.whatRequests')}</li>
+            <li>{t('pushd.whatLeads')}</li>
+            <li>{t('pushd.whatSignals')}</li>
+          </ul>
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: 13 }}>{t('pushd.privacy')}</p>
         </div>
-      )}
-    </Card>
+      </Card>
+    </div>
   );
-}
-
-// Push on THIS device, for screens that offer Push per item (Signals). Shown only in the installed app (standalone, also iOS "Add to Home
-// Screen") with Push support and the server's keys; a regular browser tab hides it (saved preferences and other devices are untouched).
-//   ask:    installed, but no permission asked yet or no subscription here -> an explicit "enable" button (permission is asked only on click)
-//   denied: the person blocked notifications -> how to allow them in the device or browser settings
-//   active: permission granted AND a subscription on this device -> the per-item Push switch
-export type PushDeviceState = 'hidden' | 'ask' | 'denied' | 'active';
-export const isStandaloneApp = () =>
-  typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true);
-
-export function usePushDevice() {
-  const [state, setState] = useState<PushDeviceState>('hidden');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [key, setKey] = useState<string | null>(null);
-
-  const check = useCallback(async () => {
-    const supported = typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-    if (!isStandaloneApp() || !supported) return setState('hidden');
-    const srv = await api<Status>('/push').catch(() => null);
-    if (!srv?.available || !srv.publicKey) return setState('hidden');
-    setKey(srv.publicKey);
-    if (Notification.permission === 'denied') return setState('denied');
-    const sub = await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription();
-    setState(Notification.permission === 'granted' && sub ? 'active' : 'ask');
-  }, []);
-  useEffect(() => {
-    void check();
-  }, [check]);
-
-  // only on the person's click: ask for permission, subscribe this device and register it
-  const enable = async () => {
-    if (!key) return;
-    setBusy(true);
-    setError('');
-    try {
-      const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
-      if (permission !== 'granted') return await check();
-      const reg = await navigator.serviceWorker.ready;
-      const s = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: toKey(key) }));
-      const j = s.toJSON() as { endpoint: string; keys: { p256dh: string; auth: string } };
-      await api('/push/subscribe', { method: 'POST', body: JSON.stringify({ endpoint: j.endpoint, keys: j.keys }) });
-      await check();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return { state, busy, error, enable };
 }

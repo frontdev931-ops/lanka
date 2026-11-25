@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestPatch } from '../booking/doctor-choice.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { PushService } from '../push/push.service';
+import { PUSH_ROLES, PushService } from '../push/push.service';
+import { requestPush } from '../push/push-text';
 import { StaffNotifierService } from './staff-notifier.service';
 
 export type RequestKind = 'BOOKING' | 'RESCHEDULE' | 'CANCEL' | 'HANDOFF' | 'REVIEW';
@@ -49,7 +50,7 @@ export class RequestsService {
     const kind = { BOOKING: 'Запис', RESCHEDULE: 'Перенесення', CANCEL: 'Скасування', HANDOFF: 'Потрібна відповідь людини', REVIEW: 'Низька оцінка візиту' }[r.kind] ?? r.kind;
     const link = `${(process.env.WEB_ORIGIN ?? '').replace(/\/$/, '')}/inbox`;
     // The phone notification carries no names: only the kind of request
-    await this.push.notify(clinicId, { title: created ? 'Нова заявка' : 'Оновлення заявки', body: kind, url: '/inbox', tag: `request-${r.id}` }).catch(() => undefined);
+    await this.push.notify(clinicId, requestPush(r.kind, created), { url: '/inbox?tab=requests', tag: `request-${r.id}`, roles: PUSH_ROLES.requests, ttl: 2 * 3600 }).catch(() => undefined);
     await this.staff.notify(clinicId, `${created ? 'Нова заявка' : 'Оновлення заявки'}: ${kind}\n${who}\n${r.summary}\n\nВідкрити: ${link}`);
   }
 

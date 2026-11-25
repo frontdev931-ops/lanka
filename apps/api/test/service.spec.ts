@@ -242,10 +242,12 @@ describe('push-уведомления сотрудникам', () => {
     const admin = await invite(o.token, 'ADMIN');
     const doctor = await invite(o.token, 'DOCTOR');
     const so = sub('owner'), sa = sub('admin'), sd = sub('doctor');
-    expect((await http().get('/push').set(auth(o.token)).expect(200)).body).toMatchObject({ available: true, devices: 0 });
+    const device = async (token: string, endpoint?: string) => (await http().post('/push/device').set(auth(token)).send(endpoint ? { endpoint } : {}).expect(200)).body;
+    expect(await device(o.token, so.endpoint)).toMatchObject({ available: true, device: 'none' });
     for (const [token, s] of [[o.token, so], [admin.token, sa], [doctor.token, sd]] as const) await http().post('/push/subscribe').set(auth(token)).send(s).expect(200);
     await http().post('/push/subscribe').set(auth(o.token)).send({ endpoint: 'x' }).expect(400);
-    expect((await http().get('/push').set(auth(o.token))).body.devices).toBe(1);
+    expect((await device(o.token, so.endpoint)).device).toBe('mine');
+    expect((await device(doctor.token, so.endpoint)).device).toBe('other');
     await http().post('/push/unsubscribe').set(auth(doctor.token)).send({ endpoint: so.endpoint }).expect(200); // someone else's address is not deleted
     expect(await prisma.pushSubscription.count({ where: { endpoint: so.endpoint } })).toBe(1);
 
@@ -255,7 +257,7 @@ describe('push-уведомления сотрудникам', () => {
     const to = pushFake.sent.map((x) => x.endpoint).sort();
     expect(to).toEqual([so.endpoint, sa.endpoint].sort()); // does not go to the doctor
     expect(JSON.stringify(pushFake.sent)).not.toContain('Секретне');
-    expect(pushFake.sent[0].payload).toMatchObject({ title: 'Нова заявка', url: '/inbox' });
+    expect(pushFake.sent[0].payload).toMatchObject({ title: expect.stringMatching(/ · Нова заявка$/), body: 'Пацієнт просить запис. Відкрийте заявки.', url: `/open?c=${o.clinicId}&to=%2Finbox%3Ftab%3Drequests` });
 
     // the browser reported that the subscription is invalid (410): it is deleted
     pushFake.gone.add(sa.endpoint);
@@ -265,13 +267,15 @@ describe('push-уведомления сотрудникам', () => {
     expect(pushFake.sent.map((x) => x.endpoint)).toEqual([so.endpoint]);
 
     // a test to the own device; without keys the service stays silent
-    expect((await http().post('/push/test').set(auth(o.token)).expect(200)).body.sent).toBe(1);
+    pushFake.sent.length = 0;
+    expect((await http().post('/push/test').set(auth(o.token)).send({ endpoint: so.endpoint }).expect(200)).body.sent).toBe(1);
+    expect(pushFake.sent.map((x) => x.endpoint)).toEqual([so.endpoint]);
     pushFake.configured = false;
-    expect((await http().post('/push/test').set(auth(o.token)).expect(200)).body.sent).toBe(0);
-    expect((await http().get('/push').set(auth(o.token))).body.available).toBe(false);
+    expect((await http().post('/push/test').set(auth(o.token)).send({ endpoint: so.endpoint }).expect(200)).body.sent).toBe(0);
+    expect((await device(o.token)).available).toBe(false);
     pushFake.configured = true;
     await http().post('/push/unsubscribe').set(auth(o.token)).send({ endpoint: so.endpoint }).expect(200);
-    expect((await http().get('/push').set(auth(o.token))).body.devices).toBe(0);
+    expect((await device(o.token, so.endpoint)).device).toBe('none');
   });
 });
 
